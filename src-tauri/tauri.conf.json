@@ -10,19 +10,7 @@
     "beforeBuildCommand": "pnpm build"
   },
   "app": {
-    "windows": [
-      {
-        "title": "RTLauncher",
-        "width": 1200,
-        "height": 800,
-        "resizable": true,
-        "fullscreen": false,
-        "decorations": false,
-        "transparent": true,
-        "shadow": true,
-        "center": true
-      }
-    ],
+    "macOSPrivateApi": true,
     "security": {
       "csp": null
     }
