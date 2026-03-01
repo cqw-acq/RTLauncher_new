@@ -49,3 +49,32 @@ export type InstanceInfo = {
   lastPlayed?: string;
   playTime?: string;
 };
+
+/**
+ * Minecraft 版本类型
+ */
+export type MinecraftVersionType = "release" | "snapshot" | "old_beta" | "old_alpha";
+
+/**
+ * 加载器类型
+ */
+export type LoaderType = "vanilla" | "forge" | "fabric" | "quilt" | "neoforge";
+
+/**
+ * Minecraft 版本数据
+ */
+export type MinecraftVersion = {
+  id: string;
+  type: MinecraftVersionType;
+  releaseDate: string;
+  isLatest?: boolean;
+};
+
+/**
+ * 加载器选项
+ */
+export type LoaderOption = {
+  id: LoaderType;
+  name: string;
+  description: string;
+};

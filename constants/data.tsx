@@ -1,4 +1,4 @@
-import type { Announcement, InstanceCard } from "@/types";
+import type { Announcement, InstanceCard, LoaderOption, MinecraftVersion } from "@/types";
 
 /**
  * 公告数据
@@ -133,4 +133,69 @@ export const INSTANCE_CARDS: InstanceCard[] = [
       />
     ),
   },
+];
+
+/**
+ * 加载器选项数据
+ */
+export const LOADER_OPTIONS: LoaderOption[] = [
+  {
+    id: "vanilla",
+    name: "Vanilla",
+    description: "原版 Minecraft，无需额外加载器",
+  },
+  {
+    id: "forge",
+    name: "Forge",
+    description: "最流行的模组加载器，拥有庞大的模组生态",
+  },
+  {
+    id: "fabric",
+    name: "Fabric",
+    description: "轻量级模组加载器，更新快速",
+  },
+  {
+    id: "quilt",
+    name: "Quilt",
+    description: "Fabric 分支，注重包容性社区",
+  },
+  {
+    id: "neoforge",
+    name: "NeoForge",
+    description: "新一代 Forge 分支，更现代化的架构",
+  },
+];
+
+/**
+ * Minecraft 版本 Mock 数据
+ */
+export const MINECRAFT_VERSIONS: MinecraftVersion[] = [
+  { id: "1.21.4", type: "release", releaseDate: "2024-12-03", isLatest: true },
+  { id: "25w07a", type: "snapshot", releaseDate: "2025-02-12" },
+  { id: "25w06a", type: "snapshot", releaseDate: "2025-02-05" },
+  { id: "1.21.3", type: "release", releaseDate: "2024-10-23" },
+  { id: "1.21.2", type: "release", releaseDate: "2024-09-18" },
+  { id: "24w37a", type: "snapshot", releaseDate: "2024-09-11" },
+  { id: "24w36a", type: "snapshot", releaseDate: "2024-09-04" },
+  { id: "1.21.1", type: "release", releaseDate: "2024-08-08" },
+  { id: "1.21", type: "release", releaseDate: "2024-06-13" },
+  { id: "24w21a", type: "snapshot", releaseDate: "2024-05-22" },
+  { id: "24w20a", type: "snapshot", releaseDate: "2024-05-15" },
+  { id: "1.20.6", type: "release", releaseDate: "2024-04-29" },
+  { id: "1.20.5", type: "release", releaseDate: "2024-04-23" },
+  { id: "1.20.4", type: "release", releaseDate: "2023-12-07" },
+  { id: "1.20.3", type: "release", releaseDate: "2023-12-05" },
+  { id: "1.20.2", type: "release", releaseDate: "2023-09-21" },
+  { id: "1.20.1", type: "release", releaseDate: "2023-06-12" },
+  { id: "1.20", type: "release", releaseDate: "2023-06-07" },
+  { id: "1.19.4", type: "release", releaseDate: "2023-03-14" },
+  { id: "1.19.3", type: "release", releaseDate: "2022-12-07" },
+  { id: "1.19.2", type: "release", releaseDate: "2022-08-05" },
+  { id: "1.19.1", type: "release", releaseDate: "2022-07-27" },
+  { id: "1.19", type: "release", releaseDate: "2022-06-07" },
+  { id: "1.18.2", type: "release", releaseDate: "2022-02-28" },
+  { id: "1.18.1", type: "release", releaseDate: "2021-12-10" },
+  { id: "1.18", type: "release", releaseDate: "2021-11-30" },
+  { id: "1.17.1", type: "release", releaseDate: "2021-07-06" },
+  { id: "1.16.5", type: "release", releaseDate: "2021-01-15" },
 ];
