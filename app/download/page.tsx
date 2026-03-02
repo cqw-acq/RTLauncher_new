@@ -2,35 +2,50 @@
 
 import { useState, useMemo } from "react";
 import { Download } from "lucide-react";
-import { LoaderSelector } from "@/components/download/loader-selector";
 import {
   VersionFilterBar,
   type VersionFilter,
 } from "@/components/download/version-filter-bar";
 import { VersionList } from "@/components/download/version-list";
+import { VersionDetail } from "@/components/download/version-detail";
 import { MINECRAFT_VERSIONS } from "@/constants/data";
-import type { LoaderType } from "@/types";
+import type { MinecraftVersion } from "@/types";
 
 /**
  * 下载页面
- * 选择加载器类型，筛选并浏览 Minecraft 版本
+ * 版本列表视图 → 点击版本进入详情选择加载器
  */
 export default function DownloadPage() {
-  const [selectedLoader, setSelectedLoader] = useState<LoaderType>("vanilla");
-  const [versionFilter, setVersionFilter] = useState<VersionFilter>("all");
+  const [versionFilter, setVersionFilter] = useState<VersionFilter>("release");
   const [searchQuery, setSearchQuery] = useState("");
+  const [selectedVersion, setSelectedVersion] =
+    useState<MinecraftVersion | null>(null);
 
   const filteredVersions = useMemo(() => {
     return MINECRAFT_VERSIONS.filter((v) => {
-      // 版本类型筛选
       if (versionFilter !== "all" && v.type !== versionFilter) return false;
-      // 搜索过滤
-      if (searchQuery && !v.id.toLowerCase().includes(searchQuery.toLowerCase()))
+      if (
+        searchQuery &&
+        !v.id.toLowerCase().includes(searchQuery.toLowerCase())
+      )
         return false;
       return true;
     });
   }, [versionFilter, searchQuery]);
 
+  // 版本详情视图
+  if (selectedVersion) {
+    return (
+      <div className="flex h-full flex-col p-4">
+        <VersionDetail
+          version={selectedVersion}
+          onBack={() => setSelectedVersion(null)}
+        />
+      </div>
+    );
+  }
+
+  // 版本列表视图
   return (
     <div className="flex h-full flex-col gap-4 p-4">
       {/* 页面标题 */}
@@ -41,17 +56,9 @@ export default function DownloadPage() {
         <div>
           <h1 className="text-lg font-semibold leading-none">版本下载</h1>
           <p className="mt-1 text-xs text-muted-foreground">
-            选择加载器和版本，开始你的 Minecraft 之旅
+            选择版本，开始你的 Minecraft 之旅
           </p>
         </div>
-      </div>
-
-      {/* 加载器选择 */}
-      <div className="shrink-0">
-        <LoaderSelector
-          selectedLoader={selectedLoader}
-          onSelect={setSelectedLoader}
-        />
       </div>
 
       {/* 筛选栏 */}
@@ -65,7 +72,10 @@ export default function DownloadPage() {
       </div>
 
       {/* 版本列表 */}
-      <VersionList versions={filteredVersions} />
+      <VersionList
+        versions={filteredVersions}
+        onSelectVersion={setSelectedVersion}
+      />
     </div>
   );
 }

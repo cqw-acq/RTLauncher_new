@@ -58,7 +58,7 @@ export type MinecraftVersionType = "release" | "snapshot" | "old_beta" | "old_al
 /**
  * 加载器类型
  */
-export type LoaderType = "vanilla" | "forge" | "fabric" | "quilt" | "neoforge";
+export type LoaderType = "vanilla" | "forge" | "fabric" | "quilt" | "neoforge" | "liteloader" | "optifine";
 
 /**
  * Minecraft 版本数据

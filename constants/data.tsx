@@ -164,6 +164,16 @@ export const LOADER_OPTIONS: LoaderOption[] = [
     name: "NeoForge",
     description: "新一代 Forge 分支，更现代化的架构",
   },
+  {
+    id: "liteloader",
+    name: "LiteLoader",
+    description: "轻量级模组加载器，专注于客户端模组",
+  },
+  {
+    id: "optifine",
+    name: "OptiFine",
+    description: "优化模组，提升性能并支持光影",
+  },
 ];
 
 /**

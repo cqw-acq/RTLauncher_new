@@ -1,17 +1,21 @@
 "use client";
 
-import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Download } from "lucide-react";
+import { ChevronRight } from "lucide-react";
 import type { MinecraftVersion } from "@/types";
 
 interface VersionListItemProps {
   version: MinecraftVersion;
+  onSelect: (version: MinecraftVersion) => void;
 }
 
-export function VersionListItem({ version }: VersionListItemProps) {
+export function VersionListItem({ version, onSelect }: VersionListItemProps) {
   return (
-    <div className="group flex items-center justify-between px-4 py-3 hover:bg-accent/50 transition-colors duration-200 border-b border-border last:border-b-0">
+    <button
+      type="button"
+      onClick={() => onSelect(version)}
+      className="group flex w-full items-center justify-between px-4 py-3 hover:bg-accent/50 transition-colors duration-200 border-b border-border last:border-b-0 text-left"
+    >
       {/* 左侧：版本号 + 发布日期 */}
       <div className="flex items-center gap-4 min-w-0">
         <div className="flex flex-col gap-0.5">
@@ -39,15 +43,8 @@ export function VersionListItem({ version }: VersionListItemProps) {
         </Badge>
       </div>
 
-      {/* 右侧：下载按钮 */}
-      <Button
-        variant="ghost"
-        size="icon-sm"
-        className="opacity-0 group-hover:opacity-100 transition-opacity duration-200"
-        aria-label={`下载 ${version.id}`}
-      >
-        <Download className="size-4" />
-      </Button>
-    </div>
+      {/* 右侧：箭头指示 */}
+      <ChevronRight className="size-4 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity duration-200" />
+    </button>
   );
 }

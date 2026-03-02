@@ -6,9 +6,10 @@ import type { MinecraftVersion } from "@/types";
 
 interface VersionListProps {
   versions: MinecraftVersion[];
+  onSelectVersion: (version: MinecraftVersion) => void;
 }
 
-export function VersionList({ versions }: VersionListProps) {
+export function VersionList({ versions, onSelectVersion }: VersionListProps) {
   if (versions.length === 0) {
     return (
       <div className="flex flex-1 flex-col items-center justify-center gap-3 text-muted-foreground py-16">
@@ -21,7 +22,11 @@ export function VersionList({ versions }: VersionListProps) {
   return (
     <div className="flex-1 min-h-0 overflow-y-auto rounded-xl border border-border bg-card">
       {versions.map((version) => (
-        <VersionListItem key={version.id} version={version} />
+        <VersionListItem
+          key={version.id}
+          version={version}
+          onSelect={onSelectVersion}
+        />
       ))}
     </div>
   );
