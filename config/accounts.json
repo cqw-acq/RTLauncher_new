@@ -1,0 +1,27 @@
+[
+  {
+    "id": 1,
+    "name": "MocoStars",
+    "status": "正版验证"
+  },
+  {
+    "id": 2,
+    "name": "Esuny",
+    "status": "离线登录"
+  },
+  {
+    "id": 3,
+    "name": "Elanda",
+    "status": "离线登录"
+  },
+  {
+    "id": 4,
+    "name": "EasyCaomou",
+    "status": "离线登录"
+  },
+  {
+    "id": 5,
+    "name": "Genshin",
+    "status": "皮肤站登录"
+  }
+]

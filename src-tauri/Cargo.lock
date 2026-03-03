@@ -93,6 +93,8 @@ dependencies = [
  "anyhow",
  "futures",
  "log",
+ "objc2",
+ "objc2-app-kit",
  "os_info",
  "regex",
  "reqwest 0.11.27",

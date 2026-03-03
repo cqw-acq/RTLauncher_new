@@ -5,6 +5,7 @@ import { TitleBar } from "@/components/title-bar";
 import { Sidebar } from "@/components/sidebar";
 import { ThemeProvider } from "@/components/theme-provider";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { AccountProvider } from "@/components/accounts/account-provider";
 
 const figtree = Figtree({ subsets: ["latin"], variable: "--font-sans" });
 
@@ -39,14 +40,16 @@ export default function RootLayout({
           enableSystem
           disableTransitionOnChange
         >
-          <TooltipProvider>
-            <TitleBar />
+          <AccountProvider>
+            <TooltipProvider>
+              <TitleBar />
 
-            <div className="flex flex-1 overflow-hidden">
-              <Sidebar />
-              <main className="flex-1 overflow-auto">{children}</main>
-            </div>
-          </TooltipProvider>
+              <div className="flex flex-1 overflow-hidden">
+                <Sidebar />
+                <main className="flex-1 overflow-hidden">{children}</main>
+              </div>
+            </TooltipProvider>
+          </AccountProvider>
         </ThemeProvider>
       </body>
     </html>
