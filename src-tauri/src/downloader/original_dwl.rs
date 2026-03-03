@@ -194,26 +194,16 @@ pub async fn download_task(
         used_urls.push(url.clone());
 
         match result {
-            Ok(_) => {
-                // 用 match 而非 ? 避免短路跳过进度计数
-                match File::open(&task.target_path).await {
-                    Ok(mut file) => {
-                        match check_sha1(&mut file, &task.sha1).await {
-                            Ok(true) => {
-                                if let Some(p) = &progress {
-                                    p.done.fetch_add(1, Ordering::SeqCst);
-                                }
-                                return Ok(());
-                            }
-                            _ => {
-                                let _ = fs::remove_file(&task.target_path);
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        eprintln!("校验文件打开失败 [{}]: {}", task.target_path.display(), e);
-                    }
+            Ok(true) => {
+                // SHA1 匹配，下载成功
+                if let Some(p) = &progress {
+                    p.done.fetch_add(1, Ordering::SeqCst);
                 }
+                return Ok(());
+            }
+            Ok(false) => {
+                // SHA1 不匹配，删除重试
+                let _ = fs::remove_file(&task.target_path);
             }
             Err(e) => {
                 eprintln!("下载失败 [{}]: {}", url, e);
@@ -241,7 +231,7 @@ async fn download_with_url(
     url: &str,
     task: &DownloadTask,
     client: &reqwest::Client,
-) -> Result<(), Box<dyn Error + Send + Sync>> {
+) -> Result<bool, Box<dyn Error + Send + Sync>> {
     let response = client.get(url)
         .send()
         .await?
@@ -254,15 +244,19 @@ async fn download_with_url(
 
     let mut file = tokio::fs::File::create(&task.target_path).await?;
     let mut stream = response.bytes_stream();
+    let mut hasher = Sha1::new();
 
     while let Some(chunk) = stream.next().await {
         let chunk = chunk?;
+        hasher.update(&chunk);
         file.write_all(&chunk).await?;
     }
 
     file.sync_all().await?;
 
-    Ok(())
+    // 边下载边计算 SHA1，无需重新打开文件校验
+    let computed = format!("{:x}", hasher.finalize());
+    Ok(computed == task.sha1)
 }
 
 
