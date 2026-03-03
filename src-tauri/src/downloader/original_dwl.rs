@@ -3,7 +3,7 @@ use std::env;
 use std::error::Error;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use futures::stream::{self, StreamExt};
@@ -145,8 +145,18 @@ pub async fn download_task(
     client: Arc<reqwest::Client>,
     semaphore: Arc<Semaphore>,
     progress: Option<Arc<DownloadProgress>>,
+    cancel: Arc<AtomicBool>,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     let _permit = semaphore.acquire().await?;
+
+    // 取消检查
+    if cancel.load(Ordering::SeqCst) {
+        if let Some(p) = &progress {
+            p.done.fetch_add(1, Ordering::SeqCst);
+        }
+        return Err("已取消".into());
+    }
+
     const MAX_RETRIES: u8 = 5;
     let mut retry_count = 0;
     let mut used_urls: Vec<String> = Vec::new();
@@ -173,6 +183,9 @@ pub async fn download_task(
 
     // 尝试所有URL（官方源优先，失败后自动回退到镜像源）
     for url in &task.urls {
+        if cancel.load(Ordering::SeqCst) {
+            break;
+        }
         if used_urls.contains(url) {
             continue;
         }
@@ -275,6 +288,7 @@ pub async fn process_version(
     version: &str,
     minecraft_path: &Path,
     progress_tx: mpsc::Sender<f64>,
+    cancel: Arc<AtomicBool>,
 ) -> Result<Vec<String>, Box<dyn Error + Send + Sync>> {
     let version_dir = minecraft_path.join("versions").join(version);
     fs::create_dir_all(&version_dir)?;
@@ -425,7 +439,8 @@ pub async fn process_version(
         let semaphore = semaphore.clone();
         let progress = progress.clone();
         let client = client.clone();
-        futures.push(download_task(task, client, semaphore, Some(progress)));
+        let cancel = cancel.clone();
+        futures.push(download_task(task, client, semaphore, Some(progress), cancel));
     }
 
     let results = stream::iter(futures)

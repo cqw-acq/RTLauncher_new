@@ -15,7 +15,8 @@ export type DownloadTaskStatus =
   | "downloading"
   | "success"
   | "warning"
-  | "error";
+  | "error"
+  | "cancelled";
 
 export interface DownloadTask {
   taskId: number;
@@ -34,6 +35,8 @@ interface DownloadContextValue {
   tasks: DownloadTask[];
   /** 启动一个下载任务，返回 taskId */
   startDownload: (label: string, mcVersion: string) => Promise<number>;
+  /** 取消下载任务（后端会清理已下载文件） */
+  cancelDownload: (taskId: number) => Promise<void>;
   /** 清除已完成/失败的任务 */
   clearFinished: () => void;
   /** 清除指定任务 */
@@ -85,6 +88,8 @@ export function DownloadProvider({ children }: { children: React.ReactNode }) {
         setTasks((prev) =>
           prev.map((t) => {
             if (t.taskId !== task_id) return t;
+            // 已取消的任务忽略后端事件
+            if (t.status === "cancelled") return t;
             // 部分成功：success=true 但有文件失败
             const isWarning = success && failed_count > 0;
             return {
@@ -129,6 +134,22 @@ export function DownloadProvider({ children }: { children: React.ReactNode }) {
     []
   );
 
+  const cancelDownload = useCallback(async (taskId: number) => {
+    // 立即更新前端状态
+    setTasks((prev) =>
+      prev.map((t) =>
+        t.taskId === taskId && t.status === "downloading"
+          ? { ...t, status: "cancelled" as const, error: "已取消" }
+          : t
+      )
+    );
+    try {
+      await invoke("cancel_download", { taskId });
+    } catch (e) {
+      console.error("取消下载失败:", e);
+    }
+  }, []);
+
   const clearFinished = useCallback(() => {
     setTasks((prev) => prev.filter((t) => t.status === "downloading"));
   }, []);
@@ -139,7 +160,7 @@ export function DownloadProvider({ children }: { children: React.ReactNode }) {
 
   return (
     <DownloadContext.Provider
-      value={{ tasks, startDownload, clearFinished, removeTask }}
+      value={{ tasks, startDownload, cancelDownload, clearFinished, removeTask }}
     >
       {children}
     </DownloadContext.Provider>

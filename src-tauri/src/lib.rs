@@ -1,7 +1,7 @@
 mod handler;
 mod downloader;
 use handler::launcher::build_jvm_arguments;
-use downloader::dwPatch::download_patcher;
+use downloader::dwPatch::{download_patcher, cancel_download};
 use downloader::version_fetcher::classify_minecraft_versions;
 use downloader::decompression::extract_library_paths;
 
@@ -24,7 +24,7 @@ const NS_WINDOW_STYLE_MASK_FULL_SIZE_CONTENT_VIEW: u64 = 1 << 15;
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![build_jvm_arguments,download_patcher,classify_minecraft_versions,extract_library_paths])
+        .invoke_handler(tauri::generate_handler![build_jvm_arguments,download_patcher,cancel_download,classify_minecraft_versions,extract_library_paths])
         .setup(|app| {
             if cfg!(debug_assertions) {
                 app.handle().plugin(

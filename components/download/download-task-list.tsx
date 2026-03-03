@@ -11,6 +11,7 @@ import {
   CheckCircle2,
   AlertCircle,
   XCircle,
+  Ban,
   X,
   Trash2,
   ChevronDown,
@@ -18,7 +19,7 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 
-function TaskRow({ task, onRemove }: { task: DownloadTask; onRemove: () => void }) {
+function TaskRow({ task, onRemove, onCancel }: { task: DownloadTask; onRemove: () => void; onCancel: () => void }) {
   return (
     <div className="flex flex-col gap-1.5 px-3 py-2 border-b border-border last:border-b-0">
       <div className="flex items-center gap-2 min-w-0">
@@ -35,15 +36,29 @@ function TaskRow({ task, onRemove }: { task: DownloadTask; onRemove: () => void 
         {task.status === "error" && (
           <XCircle className="size-3.5 text-destructive shrink-0" />
         )}
+        {task.status === "cancelled" && (
+          <Ban className="size-3.5 text-muted-foreground shrink-0" />
+        )}
 
         {/* 标签 */}
         <span className="flex-1 text-xs truncate">{task.label}</span>
 
-        {/* 百分比 / 删除 */}
+        {/* 百分比+取消 / 删除 */}
         {task.status === "downloading" ? (
-          <span className="text-[11px] text-muted-foreground tabular-nums shrink-0">
-            {task.progress.toFixed(1)}%
-          </span>
+          <div className="flex items-center gap-1 shrink-0">
+            <span className="text-[11px] text-muted-foreground tabular-nums">
+              {task.progress.toFixed(1)}%
+            </span>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              className="size-5"
+              onClick={onCancel}
+              title="取消下载"
+            >
+              <X className="size-3" />
+            </Button>
+          </div>
         ) : (
           <Button
             variant="ghost"
@@ -59,6 +74,11 @@ function TaskRow({ task, onRemove }: { task: DownloadTask; onRemove: () => void 
       {/* 进度条 */}
       {task.status === "downloading" && (
         <Progress value={task.progress} className="h-1" />
+      )}
+
+      {/* 已取消 */}
+      {task.status === "cancelled" && (
+        <p className="text-[11px] text-muted-foreground truncate">已取消，文件已清理</p>
       )}
 
       {/* 部分成功警告 */}
@@ -77,7 +97,7 @@ function TaskRow({ task, onRemove }: { task: DownloadTask; onRemove: () => void 
 }
 
 export function DownloadTaskList() {
-  const { tasks, clearFinished, removeTask } = useDownloadManager();
+  const { tasks, clearFinished, removeTask, cancelDownload } = useDownloadManager();
   const [collapsed, setCollapsed] = useState(false);
 
   if (tasks.length === 0) return null;
@@ -132,6 +152,7 @@ export function DownloadTaskList() {
               key={task.taskId}
               task={task}
               onRemove={() => removeTask(task.taskId)}
+              onCancel={() => cancelDownload(task.taskId)}
             />
           ))}
         </div>
