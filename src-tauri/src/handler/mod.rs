@@ -1,1 +1,1 @@
-pub mod launcher.rs
+pub mod launcher;
