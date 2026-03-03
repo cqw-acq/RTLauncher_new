@@ -133,7 +133,7 @@ pub fn run_command(args: Vec<String>, javaPath: PathBuf, MCPath: PathBuf) -> Res
         }
     }
 }
-
+#[tauri::command]
 pub fn build_jvm_arguments(
     config: &LauncherConfig,
     version_name: &str,
@@ -690,3 +690,4 @@ pub fn build_jvm_arguments(
     run_command(args, config.java_path.clone(), config.minecraft_path.clone());
     Ok(arg)
 }
+
