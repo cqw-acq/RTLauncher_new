@@ -20,6 +20,7 @@ import {
   Zap,
   Sun,
   Download,
+  ChevronRight,
 } from "lucide-react";
 
 const loaderIcons: Record<LoaderType, React.ReactNode> = {
@@ -44,13 +45,15 @@ const loaderColors: Record<LoaderType, { bg: string; text: string; border: strin
 
 interface LoaderSelectorProps {
   versionId: string;
+  onSelectLoader: (loaderId: LoaderType) => void;
 }
 
-export function LoaderSelector({ versionId }: LoaderSelectorProps) {
+export function LoaderSelector({ versionId, onSelectLoader }: LoaderSelectorProps) {
   return (
     <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
       {LOADER_OPTIONS.map((loader) => {
         const colors = loaderColors[loader.id];
+        const isVanilla = loader.id === "vanilla";
         return (
           <Card
             key={loader.id}
@@ -58,6 +61,7 @@ export function LoaderSelector({ versionId }: LoaderSelectorProps) {
               "group cursor-pointer transition-all duration-200 hover:shadow-md",
               colors.border
             )}
+            onClick={() => onSelectLoader(loader.id)}
           >
             <CardHeader className="p-4 pb-2">
               <div className="flex items-center justify-between">
@@ -69,14 +73,22 @@ export function LoaderSelector({ versionId }: LoaderSelectorProps) {
                 >
                   <span className={colors.text}>{loaderIcons[loader.id]}</span>
                 </div>
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  className="opacity-0 group-hover:opacity-100 transition-opacity duration-200"
-                  aria-label={`使用 ${loader.name} 安装 ${versionId}`}
-                >
-                  <Download className="size-4" />
-                </Button>
+                {isVanilla ? (
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    className="opacity-0 group-hover:opacity-100 transition-opacity duration-200"
+                    aria-label={`使用 ${loader.name} 安装 ${versionId}`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onSelectLoader(loader.id);
+                    }}
+                  >
+                    <Download className="size-4" />
+                  </Button>
+                ) : (
+                  <ChevronRight className="size-4 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity duration-200" />
+                )}
               </div>
               <CardTitle className="text-sm mt-2">{loader.name}</CardTitle>
             </CardHeader>

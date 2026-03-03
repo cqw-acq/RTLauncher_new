@@ -1,4 +1,5 @@
-import type { Announcement, InstanceCard, LoaderOption, MinecraftVersion } from "@/types";
+import type { Announcement, InstanceCard, LoaderOption, LoaderVersion, MinecraftVersion } from "@/types";
+import type { LoaderType } from "@/types";
 
 /**
  * 公告数据
@@ -209,3 +210,54 @@ export const MINECRAFT_VERSIONS: MinecraftVersion[] = [
   { id: "1.17.1", type: "release", releaseDate: "2021-07-06" },
   { id: "1.16.5", type: "release", releaseDate: "2021-01-15" },
 ];
+
+/**
+ * 加载器版本 Mock 数据
+ * 键为加载器类型，值为该加载器的版本列表
+ */
+export const LOADER_VERSIONS: Record<LoaderType, LoaderVersion[]> = {
+  vanilla: [],
+  forge: [
+    { id: "forge-47.3.0", version: "47.3.0", releaseDate: "2024-11-20", isRecommended: true },
+    { id: "forge-47.2.32", version: "47.2.32", releaseDate: "2024-10-15" },
+    { id: "forge-47.2.30", version: "47.2.30", releaseDate: "2024-09-28" },
+    { id: "forge-47.2.20", version: "47.2.20", releaseDate: "2024-08-10" },
+    { id: "forge-47.2.17", version: "47.2.17", releaseDate: "2024-07-05" },
+    { id: "forge-47.2.0", version: "47.2.0", releaseDate: "2024-04-22" },
+    { id: "forge-47.1.0", version: "47.1.0", releaseDate: "2024-01-15" },
+  ],
+  fabric: [
+    { id: "fabric-0.16.9", version: "0.16.9", releaseDate: "2024-12-01", isRecommended: true },
+    { id: "fabric-0.16.7", version: "0.16.7", releaseDate: "2024-11-10" },
+    { id: "fabric-0.16.5", version: "0.16.5", releaseDate: "2024-10-05" },
+    { id: "fabric-0.16.3", version: "0.16.3", releaseDate: "2024-09-01" },
+    { id: "fabric-0.16.0", version: "0.16.0", releaseDate: "2024-07-20" },
+    { id: "fabric-0.15.11", version: "0.15.11", releaseDate: "2024-06-01" },
+  ],
+  quilt: [
+    { id: "quilt-0.26.4", version: "0.26.4", releaseDate: "2024-11-15", isRecommended: true },
+    { id: "quilt-0.26.3", version: "0.26.3", releaseDate: "2024-10-20" },
+    { id: "quilt-0.26.1", version: "0.26.1", releaseDate: "2024-09-05" },
+    { id: "quilt-0.25.0", version: "0.25.0", releaseDate: "2024-07-10" },
+  ],
+  neoforge: [
+    { id: "neoforge-21.4.50", version: "21.4.50-beta", releaseDate: "2024-12-02", isRecommended: true },
+    { id: "neoforge-21.4.38", version: "21.4.38-beta", releaseDate: "2024-11-05" },
+    { id: "neoforge-21.3.60", version: "21.3.60", releaseDate: "2024-10-22" },
+    { id: "neoforge-21.3.40", version: "21.3.40", releaseDate: "2024-09-15" },
+    { id: "neoforge-21.1.77", version: "21.1.77", releaseDate: "2024-08-01" },
+  ],
+  liteloader: [
+    { id: "liteloader-1.12.2", version: "1.12.2-SNAPSHOT", releaseDate: "2020-03-10", isRecommended: true },
+    { id: "liteloader-1.12.1", version: "1.12.1-SNAPSHOT", releaseDate: "2019-08-15" },
+    { id: "liteloader-1.11.2", version: "1.11.2-SNAPSHOT", releaseDate: "2018-05-20" },
+    { id: "liteloader-1.10.2", version: "1.10.2-SNAPSHOT", releaseDate: "2017-12-01" },
+  ],
+  optifine: [
+    { id: "optifine-HD_U_I7", version: "HD U I7", releaseDate: "2024-11-28", isRecommended: true },
+    { id: "optifine-HD_U_I6", version: "HD U I6", releaseDate: "2024-09-20" },
+    { id: "optifine-HD_U_I5", version: "HD U I5", releaseDate: "2024-06-15" },
+    { id: "optifine-HD_U_I4", version: "HD U I4", releaseDate: "2024-03-10" },
+    { id: "optifine-HD_U_I3", version: "HD U I3", releaseDate: "2023-12-05" },
+  ],
+};

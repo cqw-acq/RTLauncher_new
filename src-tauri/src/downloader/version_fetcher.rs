@@ -1,4 +1,4 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Deserialize)]
 struct VersionManifest {
@@ -13,8 +13,17 @@ struct VersionEntry {
     #[serde(rename = "releaseTime")]
     time: String,
 }
+
+/// 返回给前端的版本信息
+#[derive(Debug, Serialize)]
+pub struct VersionInfo {
+    pub id: String,
+    #[serde(rename = "releaseTime")]
+    pub release_time: String,
+}
+
 #[tauri::command]
-pub async fn classify_minecraft_versions() -> Result<[Vec<String>; 4], String> {
+pub async fn classify_minecraft_versions() -> Result<[Vec<VersionInfo>; 4], String> {
     // 获取版本清单数据（自动处理HTTP错误）
     let response = reqwest::get("https://piston-meta.mojang.com/mc/game/version_manifest.json")
         .await
@@ -33,22 +42,27 @@ pub async fn classify_minecraft_versions() -> Result<[Vec<String>; 4], String> {
 
     // 分类处理
     for entry in manifest.versions {
+        let info = VersionInfo {
+            id: entry.id.clone(),
+            release_time: entry.time.clone(),
+        };
+
         // 处理远古版（优先级最高）
         if matches!(entry.version_type.as_str(), "old_alpha" | "old_beta") {
-            old_versions.push(entry.id);
+            old_versions.push(info);
             continue;
         }
         
         // 处理愚人节版本（次高优先级）
         if entry.time.contains("-04-01") {
-            april_fools.push(entry.id);
+            april_fools.push(info);
             continue;
         }
 
         // 处理正式版和快照版
         match entry.version_type.as_str() {
-            "release" => releases.push(entry.id),
-            "snapshot" => snapshots.push(entry.id),
+            "release" => releases.push(info),
+            "snapshot" => snapshots.push(info),
             _ => {} // 忽略其他类型
         }
     }

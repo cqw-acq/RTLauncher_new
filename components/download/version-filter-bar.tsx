@@ -19,6 +19,8 @@ const filterOptions: { label: string; value: VersionFilter }[] = [
   { label: "全部", value: "all" },
   { label: "正式版", value: "release" },
   { label: "快照", value: "snapshot" },
+  { label: "愚人节", value: "april_fools" },
+  { label: "远古版", value: "old_version" },
 ];
 
 export function VersionFilterBar({

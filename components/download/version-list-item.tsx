@@ -4,6 +4,13 @@ import { Badge } from "@/components/ui/badge";
 import { ChevronRight } from "lucide-react";
 import type { MinecraftVersion } from "@/types";
 
+const versionTypeLabels: Record<string, string> = {
+  release: "正式版",
+  snapshot: "快照",
+  april_fools: "愚人节",
+  old_version: "远古版",
+};
+
 interface VersionListItemProps {
   version: MinecraftVersion;
   onSelect: (version: MinecraftVersion) => void;
@@ -39,7 +46,7 @@ export function VersionListItem({ version, onSelect }: VersionListItemProps) {
           variant={version.type === "release" ? "secondary" : "outline"}
           className="text-[10px] px-1.5 py-0"
         >
-          {version.type === "release" ? "正式版" : "快照"}
+          {versionTypeLabels[version.type] ?? version.type}
         </Badge>
       </div>
 

@@ -53,15 +53,45 @@ export type InstanceInfo = {
 /**
  * Minecraft 版本类型
  */
-export type MinecraftVersionType = "release" | "snapshot" | "old_beta" | "old_alpha";
+export type MinecraftVersionType =
+  | "release"
+  | "snapshot"
+  | "april_fools"
+  | "old_version";
 
 /**
  * 加载器类型
  */
-export type LoaderType = "vanilla" | "forge" | "fabric" | "quilt" | "neoforge" | "liteloader" | "optifine";
+export type LoaderType =
+  | "vanilla"
+  | "forge"
+  | "fabric"
+  | "quilt"
+  | "neoforge"
+  | "liteloader"
+  | "optifine";
 
 /**
- * Minecraft 版本数据
+ * 后端返回的版本信息
+ */
+export type VersionInfo = {
+  id: string;
+  releaseTime: string;
+};
+
+/**
+ * 后端返回的分类版本数据
+ * [releases, snapshots, april_fools, old_versions]
+ */
+export type ClassifiedVersions = [
+  VersionInfo[],
+  VersionInfo[],
+  VersionInfo[],
+  VersionInfo[],
+];
+
+/**
+ * 前端展示用的 Minecraft 版本数据
  */
 export type MinecraftVersion = {
   id: string;
@@ -77,4 +107,14 @@ export type LoaderOption = {
   id: LoaderType;
   name: string;
   description: string;
+};
+
+/**
+ * 加载器版本数据
+ */
+export type LoaderVersion = {
+  id: string;
+  version: string;
+  releaseDate: string;
+  isRecommended?: boolean;
 };
