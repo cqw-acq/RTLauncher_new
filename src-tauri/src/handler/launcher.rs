@@ -135,7 +135,10 @@ pub fn run_command(args: Vec<String>, javaPath: PathBuf, MCPath: PathBuf) -> Res
 }
 #[tauri::command]
 pub fn build_jvm_arguments(
-    config: &LauncherConfig,
+    minecraft_path: &str,
+    java_path: &str,
+    wrapper_path: &str,
+    max_memory: &str,
     version_name: &str,
     player_name: &str,
     auth_token: &str,
@@ -146,7 +149,8 @@ pub fn build_jvm_arguments(
     loadType: &str,
     loadName: &str
 ) -> Result<String> {
-    let version_path = config.minecraft_path
+    let minecraft_path_buf = PathBuf::from(minecraft_path);
+    let version_path = minecraft_path_buf
         .join("versions")
         .join(version_name)
         .join(format!("{}.json", version_name));
@@ -158,7 +162,7 @@ pub fn build_jvm_arguments(
     let normalize = |p: &PathBuf| p.to_string_lossy().replace('\\', "/");
     
     if loadType != "0" {
-        let load_path = config.minecraft_path
+        let load_path = minecraft_path_buf
             .join("versions")
             .join(loadName);
             
@@ -227,7 +231,7 @@ pub fn build_jvm_arguments(
                                 if let Some(downloads) = lib.get("downloads") {
                                     if let Some(artifact) = downloads.get("artifact") {
                                         if let Some(path_str) = artifact.get("path").and_then(|p| p.as_str()) {
-                                            let abs = config.minecraft_path.join("libraries").join(path_str);
+                                            let abs = minecraft_path_buf.join("libraries").join(path_str);
                                             let norm = normalize(&abs);
                                             println!("library artifact path: {}", abs.display());
                                             load_library_paths.push(norm.clone());
@@ -253,7 +257,7 @@ pub fn build_jvm_arguments(
                                     if let Some(classifiers) = downloads.get("classifiers").and_then(|v| v.as_object()) {
                                         for art in classifiers.values() {
                                             if let Some(path_str) = art.get("path").and_then(|p| p.as_str()) {
-                                                let abs = config.minecraft_path.join("libraries").join(path_str);
+                                                let abs = minecraft_path_buf.join("libraries").join(path_str);
                                                 let norm = normalize(&abs);
                                                 println!("library classifier path: {}", abs.display());
                                                 load_library_paths.push(norm);
@@ -266,7 +270,7 @@ pub fn build_jvm_arguments(
                                         lib.get("url").and_then(|u| u.as_str()),
                                     ) {
                                         let mpath = name_val.replace(':', "/") + ".jar";
-                                        let abs = config.minecraft_path.join("libraries").join(&mpath);
+                                        let abs = minecraft_path_buf.join("libraries").join(&mpath);
                                         let norm = normalize(&abs);
                                         println!("library artifact path: {}", abs.display());
                                         load_library_paths.push(norm);
@@ -305,7 +309,7 @@ pub fn build_jvm_arguments(
     ).context("Failed to parse version json")?;
     
     if let Some(parent) = &version_json.parent_version {
-        let parent_path = config.minecraft_path
+        let parent_path = minecraft_path_buf
             .join("versions")
             .join(parent)
             .join(format!("{}.json", parent));
@@ -371,18 +375,18 @@ pub fn build_jvm_arguments(
          .replace("${auth_uuid}", uuid)
          .replace("${version_name}", version_name)
          .replace("${natives_directory}", &format_path(
-             config.minecraft_path
+             minecraft_path_buf
                  .join("versions")
                  .join(version_name)
                  .join(format!("{}-natives", version_name))
          ))
          .replace("${game_directory}", &format_path(
-             config.minecraft_path
+             minecraft_path_buf
                  .join("instance")
                  .join(version_name)
          ))
          .replace("${assets_root}", &format_path(
-             config.minecraft_path.join("assets")
+             minecraft_path_buf.join("assets")
          ))
          .replace("${assets_index_name}", 
              &version_json.asset_index.as_ref().map(|a| a.id.trim()).unwrap_or(&String::new()))
@@ -408,10 +412,10 @@ pub fn build_jvm_arguments(
                     _ => return None,
                 }).and_then(|s| s.strip_prefix("natives-"));
                 lib.downloads.classifiers.get(classifier?)
-                    .map(|a| config.minecraft_path.join("libraries").join(&a.path))
+                    .map(|a| minecraft_path_buf.join("libraries").join(&a.path))
             } else {
                 lib.downloads.artifact.as_ref()
-                    .map(|a| config.minecraft_path.join("libraries").join(&a.path))
+                    .map(|a| minecraft_path_buf.join("libraries").join(&a.path))
             };
             artifact_path.map(|p| format_path(p))
         })
@@ -426,7 +430,7 @@ pub fn build_jvm_arguments(
     }
     
     let vanilla_jar = format_path(
-        config.minecraft_path
+        minecraft_path_buf
             .join("versions")
             .join(version_name)
             .join(format!("{}.jar", version_name))
@@ -435,7 +439,7 @@ pub fn build_jvm_arguments(
     
     let mut args: Vec<String> = vec![
         "-Xmn768m".to_string(),
-        format!("-Xmx{}m", config.max_memory),
+        format!("-Xmx{}m", max_memory),
     ];
     
     let extra_before_cp: Vec<String> = if load_jvm_params.len() > 1 {
@@ -470,7 +474,7 @@ pub fn build_jvm_arguments(
     if let Some(logging) = &version_json.logging {
         if let Some(client) = &logging.client {
             let log_path = format_path(
-                config.minecraft_path
+                minecraft_path_buf
                     .join("versions")
                     .join(version_name)
                     .join(&client.file.id)
@@ -482,11 +486,11 @@ pub fn build_jvm_arguments(
     let fixed_params = vec![
         format!("-Dos.name={}", os_info.os_type()),
         format!("-Dos.version={}", os_info.version()),
-        format!("-Djava.library.path={}", format_path(config.minecraft_path
+        format!("-Djava.library.path={}", format_path(minecraft_path_buf
                  .join("versions")
                  .join(version_name)
                  .join(format!("{}-natives", version_name)))),
-        format!("-DlibraryDirectory={}", format_path(config.minecraft_path.join("libraries"))),
+        format!("-DlibraryDirectory={}", format_path(minecraft_path_buf.join("libraries"))),
     ];
     
     let existing_params: HashSet<String> = version_json.arguments
@@ -647,7 +651,7 @@ pub fn build_jvm_arguments(
     wrapper_app_args.extend(filtered_game_args.iter().cloned());
     
     // 处理option.txt文件
-    let instance_dir = config.minecraft_path
+    let instance_dir = minecraft_path_buf
         .join("instance")
         .join(version_name);
     let option_file_path = instance_dir.join("options.txt");
@@ -682,12 +686,11 @@ pub fn build_jvm_arguments(
     }
 
     args.push("-jar".to_string());
-    args.push(format_path(config.wrapper_path.clone()));
+    args.push(format_path(PathBuf::from(wrapper_path)));
     args.extend(wrapper_app_args);
     
     let arg = args.join(" ");
     println!("{}", arg);
-    run_command(args, config.java_path.clone(), config.minecraft_path.clone());
+    run_command(args, PathBuf::from(java_path), minecraft_path_buf.clone());
     Ok(arg)
 }
-
