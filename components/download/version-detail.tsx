@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { LoaderSelector } from "@/components/download/loader-selector";
 import { LoaderVersionList } from "@/components/download/loader-version-list";
+import { useDownloadManager } from "@/components/download/download-provider";
 import { ArrowLeft } from "lucide-react";
 import type { MinecraftVersion, LoaderType, LoaderVersion } from "@/types";
 import { LOADER_OPTIONS, LOADER_VERSIONS } from "@/constants/data";
@@ -23,19 +24,23 @@ interface VersionDetailProps {
 
 export function VersionDetail({ version, onBack }: VersionDetailProps) {
   const [selectedLoader, setSelectedLoader] = useState<LoaderType | null>(null);
+  const { startDownload } = useDownloadManager();
 
   const handleSelectLoader = (loaderId: LoaderType) => {
     if (loaderId === "vanilla") {
-      // 原版直接安装，不需要选具体版本
-      console.log(`安装原版 Minecraft ${version.id}`);
+      startDownload(`Minecraft ${version.id}`, version.id);
       return;
     }
     setSelectedLoader(loaderId);
   };
 
   const handleInstallLoaderVersion = (loaderVersion: LoaderVersion) => {
-    console.log(
-      `安装 Minecraft ${version.id} + ${selectedLoader} ${loaderVersion.version}`
+    const loaderName =
+      LOADER_OPTIONS.find((l) => l.id === selectedLoader)?.name ??
+      selectedLoader;
+    startDownload(
+      `${version.id} + ${loaderName} ${loaderVersion.version}`,
+      version.id
     );
   };
 

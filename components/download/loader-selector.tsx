@@ -10,6 +10,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { LOADER_OPTIONS } from "@/constants/data";
+import { isLoaderCompatible } from "@/lib/utils";
 import type { LoaderType } from "@/types";
 import {
   Box,
@@ -49,9 +50,13 @@ interface LoaderSelectorProps {
 }
 
 export function LoaderSelector({ versionId, onSelectLoader }: LoaderSelectorProps) {
+  const compatibleLoaders = LOADER_OPTIONS.filter((loader) =>
+    isLoaderCompatible(versionId, loader.id)
+  );
+
   return (
     <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
-      {LOADER_OPTIONS.map((loader) => {
+      {compatibleLoaders.map((loader) => {
         const colors = loaderColors[loader.id];
         const isVanilla = loader.id === "vanilla";
         return (

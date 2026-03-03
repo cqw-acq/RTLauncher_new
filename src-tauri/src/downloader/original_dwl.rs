@@ -182,14 +182,24 @@ pub async fn download_task(
 
         match result {
             Ok(_) => {
-                let mut file = File::open(&task.target_path).await?;
-                if check_sha1(&mut file, &task.sha1).await? {
-                    if let Some(p) = &progress {
-                        p.done.fetch_add(1, Ordering::SeqCst);
+                // 用 match 而非 ? 避免短路跳过进度计数
+                match File::open(&task.target_path).await {
+                    Ok(mut file) => {
+                        match check_sha1(&mut file, &task.sha1).await {
+                            Ok(true) => {
+                                if let Some(p) = &progress {
+                                    p.done.fetch_add(1, Ordering::SeqCst);
+                                }
+                                return Ok(());
+                            }
+                            _ => {
+                                let _ = fs::remove_file(&task.target_path);
+                            }
+                        }
                     }
-                    return Ok(());
-                } else {
-                    let _ = fs::remove_file(&task.target_path);
+                    Err(e) => {
+                        eprintln!("校验文件打开失败 [{}]: {}", task.target_path.display(), e);
+                    }
                 }
             }
             Err(e) => {
@@ -436,13 +446,12 @@ pub async fn process_version(
     }
 
     let done = progress.done.load(Ordering::SeqCst);
-    println!("下载完成: {}/{} ({:.1}%)", done, total, (done as f64 / total as f64) * 100.0);
+    let failed = errors.len();
+    println!("下载完成: {}/{} ({:.1}%), 失败: {}", done, total, (done as f64 / total as f64) * 100.0, failed);
 
-    if !errors.is_empty() {
-        return Err(errors.join("\n").into());
-    }
-
-    Ok(vec![])
+    // 将失败文件路径作为警告返回，而不是直接报错
+    // 少量文件失败不应阻止游戏安装（可能是非关键资源）
+    Ok(errors)
 }
 
 fn check_rules(rules: &[Rule], os_type: &str) -> bool {

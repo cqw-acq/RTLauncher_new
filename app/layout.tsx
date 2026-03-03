@@ -6,6 +6,8 @@ import { Sidebar } from "@/components/sidebar";
 import { ThemeProvider } from "@/components/theme-provider";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { AccountProvider } from "@/components/accounts/account-provider";
+import { DownloadProvider } from "@/components/download/download-provider";
+import { DownloadTaskList } from "@/components/download/download-task-list";
 
 const figtree = Figtree({ subsets: ["latin"], variable: "--font-sans" });
 
@@ -41,14 +43,18 @@ export default function RootLayout({
           disableTransitionOnChange
         >
           <AccountProvider>
-            <TooltipProvider>
-              <TitleBar />
+            <DownloadProvider>
+              <TooltipProvider>
+                <TitleBar />
 
-              <div className="flex flex-1 overflow-hidden">
-                <Sidebar />
-                <main className="flex-1 overflow-hidden">{children}</main>
-              </div>
-            </TooltipProvider>
+                <div className="flex flex-1 overflow-hidden">
+                  <Sidebar />
+                  <main className="flex-1 overflow-hidden">{children}</main>
+                </div>
+
+                <DownloadTaskList />
+              </TooltipProvider>
+            </DownloadProvider>
           </AccountProvider>
         </ThemeProvider>
       </body>
