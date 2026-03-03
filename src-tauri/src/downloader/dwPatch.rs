@@ -1,5 +1,4 @@
-mod original_dwl;
-use original_dwl::process_version;
+use crate::downloader::original_dwl;
 use std::error::Error;
 
 #[tauri::command]
