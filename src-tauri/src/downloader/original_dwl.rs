@@ -140,7 +140,6 @@ struct OsRule {
     name: Option<String>,
 }
 
-#[tauri::command]
 pub async fn download_task(
     task: DownloadTask,
     client: Arc<reqwest::Client>,
