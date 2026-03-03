@@ -23,3 +23,11 @@ serde = { version = "1.0", features = ["derive"] }
 log = "0.4"
 tauri = { version = "2.10.0", features = [] }
 tauri-plugin-log = "2"
+regex = "1.5"
+os_info = "3.0.0"
+anyhow = "1.0"
+sha1 = "0.10"
+futures = "0.3"
+zip = "0.6"
+tokio = { version = "1.0", features = ["full"] }
+reqwest = { version = "0.11", features = ["json", "stream","blocking"] }
