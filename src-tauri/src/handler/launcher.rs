@@ -5,7 +5,7 @@ use std::{
 };
 use std::env::consts::OS;
 use os_info::Type;
-use anyhow::{Context, Result};
+use anyhow::Context;
 use regex::Regex;
 use std::{
     process::Command,
@@ -148,7 +148,29 @@ pub fn build_jvm_arguments(
     prefetched_data: &str,
     loadType: &str,
     loadName: &str
-) -> Result<String> {
+) -> Result<String, String> {
+    build_jvm_arguments_inner(
+        minecraft_path, java_path, wrapper_path, max_memory, version_name,
+        player_name, auth_token, uuid, authlib_injector_path, yggdrasil_api,
+        prefetched_data, loadType, loadName,
+    ).map_err(|e| e.to_string())
+}
+
+fn build_jvm_arguments_inner(
+    minecraft_path: &str,
+    java_path: &str,
+    wrapper_path: &str,
+    max_memory: &str,
+    version_name: &str,
+    player_name: &str,
+    auth_token: &str,
+    uuid: &str,
+    authlib_injector_path: &str,
+    yggdrasil_api: &str,
+    prefetched_data: &str,
+    loadType: &str,
+    loadName: &str
+) -> anyhow::Result<String> {
     let minecraft_path_buf = PathBuf::from(minecraft_path);
     let version_path = minecraft_path_buf
         .join("versions")

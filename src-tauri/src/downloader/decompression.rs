@@ -83,6 +83,13 @@ fn extract_arch_info(path: &str) -> (Option<String>, bool) {
 }
 #[tauri::command]
 pub async fn extract_library_paths(
+    minecraft_path: String,
+    version: String
+) -> Result<Vec<String>, String> {
+    extract_library_paths_inner(&minecraft_path, &version).map_err(|e| e.to_string())
+}
+
+fn extract_library_paths_inner(
     minecraft_path: &str,
     version: &str
 ) -> Result<Vec<String>, Box<dyn Error>> {

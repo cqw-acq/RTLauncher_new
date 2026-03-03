@@ -1,4 +1,3 @@
-use reqwest::Error as ReqwestError;
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
@@ -15,14 +14,16 @@ struct VersionEntry {
     time: String,
 }
 #[tauri::command]
-pub async fn classify_minecraft_versions() -> Result<[Vec<String>; 4], ReqwestError> {
+pub async fn classify_minecraft_versions() -> Result<[Vec<String>; 4], String> {
     // 获取版本清单数据（自动处理HTTP错误）
     let response = reqwest::get("https://piston-meta.mojang.com/mc/game/version_manifest.json")
-        .await?
-        .error_for_status()?;  // 自动转换非2xx响应为错误
+        .await
+        .map_err(|e| e.to_string())?
+        .error_for_status()
+        .map_err(|e| e.to_string())?;
 
     // 解析JSON数据
-    let manifest: VersionManifest = response.json().await?;
+    let manifest: VersionManifest = response.json().await.map_err(|e| e.to_string())?;
 
     // 初始化分类容器
     let mut releases = Vec::new();     // 正式版

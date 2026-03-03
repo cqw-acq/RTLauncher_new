@@ -1,9 +1,8 @@
-use crate::downloader::original_dwl;
-use std::error::Error;
+use crate::downloader::original_dwl::process_version;
 
 #[tauri::command]
-pub async fn download_patcher(mc_version:String) -> Result<(), Box<dyn Error + Send + Sync>> {  // 修改返回类型
-    let minecraft_path = std::env::current_dir()?;
+pub async fn download_patcher(mc_version: String) -> Result<(), String> {
+    let minecraft_path = std::env::current_dir().map_err(|e| e.to_string())?;
     let (tx, mut rx) = tokio::sync::mpsc::channel::<f64>(64);
 
     // 接收并打印百分比
@@ -13,6 +12,6 @@ pub async fn download_patcher(mc_version:String) -> Result<(), Box<dyn Error + S
         }
     });
 
-    process_version(mc_version, &minecraft_path, tx).await?;
+    process_version(&mc_version, &minecraft_path, tx).await.map_err(|e| e.to_string())?;
     Ok(())
 }
