@@ -81,7 +81,7 @@ fn extract_arch_info(path: &str) -> (Option<String>, bool) {
         !has_arch
     )
 }
-
+#[tauri::command]
 pub async fn extract_library_paths(
     minecraft_path: &str,
     version: &str
@@ -245,3 +245,4 @@ fn process_jar_file(jar_path: &str, target_dir: &Path) -> Result<(), Box<dyn Err
 
     Ok(())
 }
+
