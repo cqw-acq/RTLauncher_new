@@ -14,7 +14,7 @@ struct VersionEntry {
     #[serde(rename = "releaseTime")]
     time: String,
 }
-
+#[tauri::command]
 pub async fn classify_minecraft_versions() -> Result<[Vec<String>; 4], ReqwestError> {
     // 获取版本清单数据（自动处理HTTP错误）
     let response = reqwest::get("https://piston-meta.mojang.com/mc/game/version_manifest.json")
@@ -54,3 +54,4 @@ pub async fn classify_minecraft_versions() -> Result<[Vec<String>; 4], ReqwestEr
 
     Ok([releases, snapshots, april_fools, old_versions])
 }
+
