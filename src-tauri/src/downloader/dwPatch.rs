@@ -3,7 +3,7 @@ use original_dwl::process_version;
 use std::error::Error;
 
 #[tauri::command]
-async fn download_patcher(mc_version:String) -> Result<(), Box<dyn Error + Send + Sync>> {  // 修改返回类型
+pub async fn download_patcher(mc_version:String) -> Result<(), Box<dyn Error + Send + Sync>> {  // 修改返回类型
     let minecraft_path = std::env::current_dir()?;
     let (tx, mut rx) = tokio::sync::mpsc::channel::<f64>(64);
 
