@@ -141,7 +141,7 @@ struct OsRule {
 }
 
 #[tauri::command]
-async fn download_task(
+pub async fn download_task(
     task: DownloadTask,
     client: Arc<reqwest::Client>,
     semaphore: Arc<Semaphore>,
