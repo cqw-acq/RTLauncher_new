@@ -75,7 +75,7 @@ pub fn run() {
                 let style_mask: u64 = msg_send![ns_window_ptr, styleMask];
                 let style_mask = style_mask | NS_WINDOW_STYLE_MASK_FULL_SIZE_CONTENT_VIEW;
                 let () = msg_send![ns_window_ptr, setStyleMask: style_mask];
-                let () = msg_send![ns_window_ptr, setMovableByWindowBackground: true];
+                let () = msg_send![ns_window_ptr, setMovableByWindowBackground: false];
 
                 let bg_color = NSColor::colorWithSRGBRed_green_blue_alpha(0.0, 0.0, 0.0, 0.0);
                 ns_window.setBackgroundColor(Some(&bg_color));

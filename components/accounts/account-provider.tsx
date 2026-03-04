@@ -69,17 +69,23 @@ function loadSelectedId(): string | null {
 }
 
 export function AccountProvider({ children }: { children: React.ReactNode }) {
-  const [profiles, setProfiles] = useState<Account[]>(() => loadProfiles());
-  const [selectedProfile, setSelectedProfile] = useState<Account | null>(() => {
-    const all = loadProfiles();
-    const id = loadSelectedId();
-    return all.find((p) => p.id === id) ?? all[0] ?? null;
-  });
+  const [profiles, setProfiles] = useState<Account[]>([]);
+  const [selectedProfile, setSelectedProfile] = useState<Account | null>(null);
   const [loginState, setLoginState] = useState<LoginState>("idle");
   const [loginError, setLoginError] = useState<string | null>(null);
 
+  // 客户端挂载后从 localStorage 恢复数据，避免 SSR hydration 不匹配
+  useEffect(() => {
+    const all = loadProfiles();
+    const id = loadSelectedId();
+    const selected = all.find((p) => p.id === id) ?? all[0] ?? null;
+    setProfiles(all);
+    setSelectedProfile(selected);
+  }, []);
+
   // 持久化
   useEffect(() => {
+    if (profiles.length === 0) return;
     try {
       localStorage.setItem(STORAGE_KEY_PROFILES, JSON.stringify(profiles));
     } catch {}
