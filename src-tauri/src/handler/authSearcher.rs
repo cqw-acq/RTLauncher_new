@@ -36,7 +36,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 */
-fn get_all_accounts(connection: &Connection) -> Result<Vec<Account>, Box<dyn Error>> {
+pub fn get_all_accounts(connection: &Connection) -> Result<Vec<Account>, Box<dyn Error>> {
     let query = "SELECT username, uuid FROM accounts";
     let mut statement = connection.prepare(query)?;
     let mut accounts = Vec::new();
@@ -51,7 +51,7 @@ fn get_all_accounts(connection: &Connection) -> Result<Vec<Account>, Box<dyn Err
     Ok(accounts)
 }
 
-fn get_all_littleskin_users(connection: &Connection) -> Result<Vec<LittleSkinUser>, Box<dyn Error>> {
+pub fn get_all_littleskin_users(connection: &Connection) -> Result<Vec<LittleSkinUser>, Box<dyn Error>> {
     let query = "SELECT name, tid_skin, uuid FROM littleskinuser";
     let mut statement = connection.prepare(query)?;
     let mut users = Vec::new();

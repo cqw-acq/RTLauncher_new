@@ -295,7 +295,7 @@
         }
     }
     #[tauri::command]
-    pub fn useMethod() -> Result<(), Box<dyn std::error::Error>>{    // 创建 LittleSkinClient 实例
+    pub fn useMethod() -> Result<(), String>{    // 创建 LittleSkinClient 实例
         let mut client = LittleSkinClient::new();
 
         // 调用 authenticate 方法进行登录

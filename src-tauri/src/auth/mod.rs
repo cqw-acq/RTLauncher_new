@@ -1,3 +1,3 @@
 pub mod littleskinLoader;
-pub mod yggdrasil;
+pub mod yissadrail;
 pub mod official;

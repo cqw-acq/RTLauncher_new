@@ -166,6 +166,7 @@ pub fn downloadInjecter() {
     }
 }
 
+#[tauri::command]
 pub fn thirdPartyLogin(url: String) -> String {
     // 发送get请求
     let response = reqwest::blocking::get(url);

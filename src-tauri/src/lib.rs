@@ -2,16 +2,11 @@ mod auth;
 mod handler;
 mod downloader;
 use handler::launcher::build_jvm_arguments;
-use handler::authSearcher::get_all_accounts;
-use handler::authSearcher::get_all_littleskin_users;
 use downloader::dwPatch::{download_patcher, cancel_download};
 use downloader::version_fetcher::classify_minecraft_versions;
 use downloader::decompression::extract_library_paths;
-use auth::official::add_new_account;
-use auth::official::check_account_time;
-use auth::official::download_player_skin;
-use auth::littleskin::useMethod;
-use auth::yggdrasil::thirdPartyLogin;
+use auth::littleskinLoader::useMethod;
+use auth::yissadrail::thirdPartyLogin;
 
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 
@@ -32,7 +27,7 @@ const NS_WINDOW_STYLE_MASK_FULL_SIZE_CONTENT_VIEW: u64 = 1 << 15;
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![build_jvm_arguments,download_patcher,cancel_download,classify_minecraft_versions,extract_library_paths,add_new_account,check_account_time,download_player_skin,useMethod,thirdPartyLogin,get_all_accounts,get_all_littleskin_users])
+        .invoke_handler(tauri::generate_handler![build_jvm_arguments,download_patcher,cancel_download,classify_minecraft_versions,extract_library_paths,useMethod,thirdPartyLogin])
         .setup(|app| {
             if cfg!(debug_assertions) {
                 app.handle().plugin(
