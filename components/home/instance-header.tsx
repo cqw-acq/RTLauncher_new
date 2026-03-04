@@ -6,7 +6,9 @@ import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import type { Account } from "@/types";
 import { cn } from "@/lib/utils";
-import { Play, Settings } from "lucide-react";
+import { Play, Settings, Loader2 } from "lucide-react";
+import { useLaunchContext } from "@/components/launch/launch-provider";
+import Link from "next/link";
 
 interface InstanceHeaderProps {
   instanceName: string;
@@ -75,15 +77,47 @@ export function InstanceHeader({
           </span>
         </button>
 
-        <Button variant="ghost" size="icon">
-          <Settings className="size-4" />
+        <Button variant="ghost" size="icon" asChild>
+          <Link href="/launch">
+            <Settings className="size-4" />
+          </Link>
         </Button>
 
-        <Button size="default" className="gap-1.5">
-          <Play className="size-4" />
-          启动
-        </Button>
+        <LaunchButton />
       </div>
     </Card>
+  );
+}
+
+function LaunchButton() {
+  const { status, launchGame } = useLaunchContext();
+  const isLaunching = status === "preparing" || status === "launching";
+  const isRunning = status === "running";
+  const canLaunch = !isLaunching && !isRunning;
+
+  return (
+    <Button
+      size="default"
+      className="gap-1.5"
+      disabled={!canLaunch}
+      onClick={() => launchGame()}
+    >
+      {isLaunching ? (
+        <>
+          <Loader2 className="size-4 animate-spin" />
+          启动中
+        </>
+      ) : isRunning ? (
+        <>
+          <Play className="size-4" />
+          运行中
+        </>
+      ) : (
+        <>
+          <Play className="size-4" />
+          启动
+        </>
+      )}
+    </Button>
   );
 }

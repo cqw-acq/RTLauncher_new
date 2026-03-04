@@ -9,7 +9,41 @@ use anyhow::Context;
 use regex::Regex;
 use std::{
     process::Command,
+    thread,
 };
+
+/// 为离线玩家生成稳定的 UUID v3（基于玩家名称）
+fn offline_uuid(player_name: &str) -> String {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    // 使用 "OfflinePlayer:" + name 的 MD5 风格哈希生成确定性 UUID
+    // 简化版：用两次哈希生成 128bit
+    let input = format!("OfflinePlayer:{}", player_name);
+    let mut h1 = DefaultHasher::new();
+    input.hash(&mut h1);
+    let hi = h1.finish();
+    let mut h2 = DefaultHasher::new();
+    format!("{}:salt", input).hash(&mut h2);
+    let lo = h2.finish();
+    // 设置版本位 (version 3) 和 variant 位
+    let hi = (hi & 0xFFFFFFFF_FFFF0FFF) | 0x00000000_00003000; // version 3
+    let lo = (lo & 0x3FFFFFFF_FFFFFFFF) | 0x80000000_00000000; // variant 10
+    format!(
+        "{:08x}-{:04x}-{:04x}-{:04x}-{:012x}",
+        (hi >> 32) as u32,
+        (hi >> 16) as u16 & 0xFFFF,
+        hi as u16 & 0xFFFF,
+        (lo >> 48) as u16 & 0xFFFF,
+        lo & 0x0000FFFFFFFFFFFF
+    )
+}
+
+/// 检查是否是合法 UUID 格式
+fn is_valid_uuid(s: &str) -> bool {
+    // 支持 xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx 或无连字符 32位 hex
+    let trimmed = s.replace('-', "");
+    trimmed.len() == 32 && trimmed.chars().all(|c| c.is_ascii_hexdigit())
+}
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -106,30 +140,72 @@ pub struct LauncherConfig {
 }
 
 pub fn run_command(args: Vec<String>, javaPath: PathBuf, MCPath: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+    // 检查 Java 路径是否存在
+    if !javaPath.exists() {
+        return Err(format!("Java 路径不存在: {}", javaPath.display()).into());
+    }
+
+    // 校验 java_path 不是一个 .jar 文件
+    if let Some(ext) = javaPath.extension() {
+        if ext.eq_ignore_ascii_case("jar") {
+            return Err(format!(
+                "Java 路径指向了一个 .jar 文件而非 Java 可执行文件: {}\n请设置为 java 或 javaw 可执行文件的路径，例如 /usr/bin/java",
+                javaPath.display()
+            ).into());
+        }
+    }
+
+    // 在 Unix 系统上检查并修复执行权限
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let metadata = std::fs::metadata(&javaPath)
+            .map_err(|e| format!("无法读取 Java 文件信息: {}", e))?;
+        let permissions = metadata.permissions();
+        if permissions.mode() & 0o111 == 0 {
+            println!("Java 缺少执行权限，正在修复: {}", javaPath.display());
+            let mut new_perms = permissions.clone();
+            new_perms.set_mode(permissions.mode() | 0o755);
+            std::fs::set_permissions(&javaPath, new_perms)
+                .map_err(|e| format!("无法设置 Java 执行权限: {}", e))?;
+        }
+    }
+
+    // 确保工作目录存在
+    if !MCPath.exists() {
+        std::fs::create_dir_all(&MCPath)
+            .map_err(|e| format!("无法创建游戏目录 {}: {}", MCPath.display(), e))?;
+    }
+
     let mut command = match OS {
-        "windows" | "linux" | "macos" => Command::new(javaPath),
+        "windows" | "linux" | "macos" => Command::new(&javaPath),
         _ => return Err("不支持的操作系统".to_string().into()),
     };
-    command.current_dir(MCPath);
+    command.current_dir(&MCPath);
     command.args(&args);
-    
+
     match command.spawn() {
-        Ok(mut child) => {
-            println!("游戏启动成功，进程ID: {:?}", child.id());
-            match child.wait() {
-                Ok(status) => {
-                    println!("游戏进程已结束，退出状态: {}", status);
-                    Ok(())
+        Ok(child) => {
+            let pid = child.id();
+            println!("游戏启动成功，进程ID: {}", pid);
+            // 在后台线程中等待进程结束，不阻塞前端
+            thread::spawn(move || {
+                let mut child = child;
+                match child.wait() {
+                    Ok(status) => println!("游戏进程 {} 已结束，退出状态: {}", pid, status),
+                    Err(e) => println!("等待游戏进程 {} 时出错: {}", pid, e),
                 }
-                Err(e) => {
-                    println!("等待游戏进程时出错: {}", e);
-                    Err(e.to_string().into())
-                }
-            }
+            });
+            Ok(())
         }
         Err(e) => {
-            println!("游戏启动失败: {}", e);
-            Err(e.to_string().into())
+            let msg = format!(
+                "游戏启动失败 (Java: {}): {}",
+                javaPath.display(),
+                e
+            );
+            println!("{}", msg);
+            Err(msg.into())
         }
     }
 }
@@ -147,12 +223,14 @@ pub fn build_jvm_arguments(
     yggdrasil_api: &str,
     prefetched_data: &str,
     loadType: &str,
-    loadName: &str
+    loadName: &str,
+    window_width: &str,
+    window_height: &str
 ) -> Result<String, String> {
     build_jvm_arguments_inner(
         minecraft_path, java_path, wrapper_path, max_memory, version_name,
         player_name, auth_token, uuid, authlib_injector_path, yggdrasil_api,
-        prefetched_data, loadType, loadName,
+        prefetched_data, loadType, loadName, window_width, window_height,
     ).map_err(|e| e.to_string())
 }
 
@@ -169,9 +247,22 @@ fn build_jvm_arguments_inner(
     yggdrasil_api: &str,
     prefetched_data: &str,
     loadType: &str,
-    loadName: &str
+    loadName: &str,
+    window_width: &str,
+    window_height: &str
 ) -> anyhow::Result<String> {
     let minecraft_path_buf = PathBuf::from(minecraft_path);
+
+    // 如果 uuid 为空或不合法，根据玩家名生成离线 UUID
+    let uuid = if uuid.is_empty() || !is_valid_uuid(uuid) {
+        let generated = offline_uuid(player_name);
+        println!("[启动器] UUID 无效 (\"{}\"), 已根据玩家名生成: {}", uuid, generated);
+        generated
+    } else {
+        uuid.to_string()
+    };
+    let uuid = uuid.as_str();
+
     let version_path = minecraft_path_buf
         .join("versions")
         .join(version_name)
@@ -506,7 +597,13 @@ fn build_jvm_arguments_inner(
     }
     
     let fixed_params = vec![
-        format!("-Dos.name={}", os_info.os_type()),
+        // 新版 macOS 的 os.name 返回 "Mac OS" 而非 "Mac OS X"，旧版 LWJGL 不识别
+        // 强制设为 "Mac OS X" 以确保 LWJGL 正确识别平台
+        if OS == "macos" {
+            "-Dos.name=Mac OS X".to_string()
+        } else {
+            format!("-Dos.name={}", os_info.os_type())
+        },
         format!("-Dos.version={}", os_info.version()),
         format!("-Djava.library.path={}", format_path(minecraft_path_buf
                  .join("versions")
@@ -539,6 +636,14 @@ fn build_jvm_arguments_inner(
         args.push(format!("-Dauthlibinjector.yggdrasil.prefetched={}", prefetched_data));
     }
     
+    // 将 Wrapper JAR 也加入 classpath（不能用 -jar，否则 Java 会忽略 -cp）
+    if !wrapper_path.is_empty() {
+        let wrapper_abs = format_path(PathBuf::from(wrapper_path));
+        if !class_path_entries.contains(&wrapper_abs) {
+            class_path_entries.push(wrapper_abs);
+        }
+    }
+
     let sep = if is_windows { ";" } else { ":" };
     let class_path = class_path_entries.join(sep);
     args.push("-cp".to_string());
@@ -587,9 +692,9 @@ fn build_jvm_arguments_inner(
     
     game_args_vec.extend(vec![
         "--width".to_string(),
-        "873".to_string(),
+        (if window_width.is_empty() { "873" } else { window_width }).to_string(),
         "--height".to_string(),
-        "486".to_string(),
+        (if window_height.is_empty() { "486" } else { window_height }).to_string(),
     ]);
     
     // 修复点2: 优化参数去重逻辑，保留关键参数
@@ -667,10 +772,10 @@ fn build_jvm_arguments_inner(
         i += 1;
     }
     
-    let mut wrapper_app_args: Vec<String> = Vec::new();
-    wrapper_app_args.push(version_json.main_class.clone());
-    wrapper_app_args.extend(forwarded_args.iter().cloned());
-    wrapper_app_args.extend(filtered_game_args.iter().cloned());
+    // game args = forwarded_args + filtered_game_args
+    let mut game_app_args: Vec<String> = Vec::new();
+    game_app_args.extend(forwarded_args.iter().cloned());
+    game_app_args.extend(filtered_game_args.iter().cloned());
     
     // 处理option.txt文件
     let instance_dir = minecraft_path_buf
@@ -707,12 +812,25 @@ fn build_jvm_arguments_inner(
         std::fs::write(&option_file_path, new_content).ok();
     }
 
-    args.push("-jar".to_string());
-    args.push(format_path(PathBuf::from(wrapper_path)));
-    args.extend(wrapper_app_args);
+    // 如果有 Wrapper 则用 Wrapper 主类包裹原始主类，否则直接使用原始主类
+    if !wrapper_path.is_empty() {
+        args.push("oolloo.jlw.Wrapper".to_string());
+        args.push(version_json.main_class.clone());
+    } else {
+        args.push(version_json.main_class.clone());
+    }
+    args.extend(game_app_args);
+    
+    // 调试: 分条打印参数，便于排查
+    println!("=== 启动参数列表 ({} 项) ===", args.len());
+    for (i, a) in args.iter().enumerate() {
+        println!("  [{}] {}", i, a);
+    }
+    println!("=== 参数列表结束 ===");
     
     let arg = args.join(" ");
     println!("{}", arg);
-    run_command(args, PathBuf::from(java_path), minecraft_path_buf.clone());
+    run_command(args, PathBuf::from(java_path), minecraft_path_buf.clone())
+        .map_err(|e| anyhow::anyhow!("{}", e))?;
     Ok(arg)
 }

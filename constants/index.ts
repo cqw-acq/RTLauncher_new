@@ -27,6 +27,7 @@ export const LAYOUT = {
  */
 export const ROUTES = {
   HOME: "/",
+  LAUNCH: "/launch",
   DOWNLOAD: "/download",
   TOOLS: "/tools",
   SETTINGS: "/settings",

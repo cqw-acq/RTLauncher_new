@@ -8,6 +8,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { AccountProvider } from "@/components/accounts/account-provider";
 import { DownloadProvider } from "@/components/download/download-provider";
 import { DownloadTaskList } from "@/components/download/download-task-list";
+import { LaunchProvider } from "@/components/launch/launch-provider";
 
 const figtree = Figtree({ subsets: ["latin"], variable: "--font-sans" });
 
@@ -43,6 +44,7 @@ export default function RootLayout({
           disableTransitionOnChange
         >
           <AccountProvider>
+            <LaunchProvider>
             <DownloadProvider>
               <TooltipProvider>
                 <TitleBar />
@@ -55,6 +57,7 @@ export default function RootLayout({
                 <DownloadTaskList />
               </TooltipProvider>
             </DownloadProvider>
+            </LaunchProvider>
           </AccountProvider>
         </ThemeProvider>
       </body>

@@ -4,6 +4,7 @@
 import {
   Home,
   Download,
+  Rocket,
   Wrench,
   Settings,
 } from "lucide-react"
@@ -36,6 +37,7 @@ interface NavItem {
 // 顶部导航项
 const topNavItems: NavItem[] = [
   { icon: <Home className="size-4" />, label: "首页", href: "/" },
+  { icon: <Rocket className="size-4" />, label: "启动", href: "/launch" },
   { icon: <Download className="size-4" />, label: "下载", href: "/download" },
   { icon: <Wrench className="size-4" />, label: "工具", href: "/tools" },
 ]

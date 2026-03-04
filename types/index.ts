@@ -118,3 +118,54 @@ export type LoaderVersion = {
   releaseDate: string;
   isRecommended?: boolean;
 };
+
+/**
+ * 游戏启动状态
+ */
+export type LaunchStatus = "idle" | "preparing" | "launching" | "running" | "stopped" | "error";
+
+/**
+ * 游戏启动配置
+ */
+export type LaunchConfig = {
+  /** Minecraft 游戏目录 */
+  minecraftPath: string;
+  /** Java 可执行文件路径 */
+  javaPath: string;
+  /** Wrapper 路径 */
+  wrapperPath: string;
+  /** 最大内存 (MB) */
+  maxMemory: string;
+  /** 游戏版本名 */
+  versionName: string;
+  /** 加载器类型: "0"=原版, "1"=Forge/Fabric等 */
+  loadType: string;
+  /** 加载器名称 */
+  loadName: string;
+  /** 玩家名称（留空则使用账户名） */
+  playerName: string;
+  /** 认证令牌 (accessToken) */
+  authToken: string;
+  /** 玩家 UUID */
+  uuid: string;
+  /** 游戏窗口宽度 */
+  windowWidth: string;
+  /** 游戏窗口高度 */
+  windowHeight: string;
+  /** Authlib Injector 路径 (第三方验证) */
+  authlibInjectorPath: string;
+  /** Yggdrasil API 地址 (第三方验证) */
+  yggdrasilApi: string;
+  /** 预取数据 */
+  prefetchedData: string;
+};
+
+/**
+ * 启动日志条目
+ */
+export type LaunchLogEntry = {
+  id: number;
+  timestamp: string;
+  level: "info" | "warn" | "error";
+  message: string;
+};
