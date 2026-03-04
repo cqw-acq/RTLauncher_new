@@ -9,6 +9,7 @@ import { AccountProvider } from "@/components/accounts/account-provider";
 import { DownloadProvider } from "@/components/download/download-provider";
 import { DownloadTaskList } from "@/components/download/download-task-list";
 import { LaunchProvider } from "@/components/launch/launch-provider";
+import { MultiplayerProvider } from "@/components/multiplayer/multiplayer-provider";
 
 const figtree = Figtree({ subsets: ["latin"], variable: "--font-sans" });
 
@@ -45,6 +46,7 @@ export default function RootLayout({
         >
           <AccountProvider>
             <LaunchProvider>
+            <MultiplayerProvider>
             <DownloadProvider>
               <TooltipProvider>
                 <TitleBar />
@@ -57,6 +59,7 @@ export default function RootLayout({
                 <DownloadTaskList />
               </TooltipProvider>
             </DownloadProvider>
+            </MultiplayerProvider>
             </LaunchProvider>
           </AccountProvider>
         </ThemeProvider>

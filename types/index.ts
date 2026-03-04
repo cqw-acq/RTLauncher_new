@@ -184,3 +184,8 @@ export type LaunchLogEntry = {
   level: "info" | "warn" | "error";
   message: string;
 };
+
+/**
+ * 多人联机模式
+ */
+export type MultiplayerMode = "host" | "join";

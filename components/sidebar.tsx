@@ -7,6 +7,7 @@ import {
   Rocket,
   Wrench,
   Settings,
+  Globe,
 } from "lucide-react"
 import Link from "next/link"
 import { usePathname } from "next/navigation"
@@ -39,6 +40,7 @@ const topNavItems: NavItem[] = [
   { icon: <Home className="size-4" />, label: "首页", href: "/" },
   { icon: <Rocket className="size-4" />, label: "启动", href: "/launch" },
   { icon: <Download className="size-4" />, label: "下载", href: "/download" },
+  { icon: <Globe className="size-4" />, label: "联机", href: "/multiplayer" },
   { icon: <Wrench className="size-4" />, label: "工具", href: "/tools" },
 ]
 
