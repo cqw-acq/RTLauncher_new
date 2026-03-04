@@ -1,290 +1,609 @@
-use reqwest::blocking::Client;
-use sqlite::{Connection, State};
-use std::collections::HashMap;
-use std::net::{TcpListener, TcpStream};
-use std::io::{Read, Write};
-use std::thread;
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
-use url::Url;
+use reqwest::Client;
+use sqlite::State;
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
-use webbrowser;
+use sqlite::Connection;
+use std::time::Duration;
+use tokio::time::sleep;
+use std::fs;
+use std::path::Path;
+use base64::decode;
+use tokio::time::Instant;
 
-#[derive(Debug, Serialize, Deserialize)]
+use super::AccountInfo;
+
+const CLIENT_ID: &str = "1662e9cb-e526-4bea-8237-11526075b7f3";
+
+/// 设备代码信息，返回给前端展示
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeviceCodeInfo {
+    pub user_code: String,
+    pub verification_uri: String,
+    pub device_code: String,
+    pub interval: u64,
+    pub expires_in: u64,
+}
+
+
+#[derive(Serialize, Deserialize, Debug)]
+struct DeviceCodeResponse {
+    device_code: String,
+    user_code: String,
+    verification_uri: String,
+    expires_in: u64,
+    interval: u64,
+    message: String,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
 struct TokenResponse {
+    token_type: String,
     access_token: String,
     refresh_token: String,
     expires_in: u64,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+struct XboxLiveTokenResponse {
+    Token: String,
+    DisplayClaims: DisplayClaims,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+struct DisplayClaims {
+    xui: Vec<Xui>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+struct Xui {
+    uhs: String,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+struct MinecraftLoginResponse {
+    username: String,
+    access_token: String,
     token_type: String,
+    expires_in: u64,
 }
 
-struct LittleSkinClient {
-    client: Client,
-    redirect_uri: String,
-    client_id: String,
-    client_secret: String,
-    code: Arc<Mutex<Option<String>>>,
+#[derive(Serialize, Deserialize, Debug)]
+struct MinecraftProfileResponse {
+    id: String,
+    name: String,
 }
+/*
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // 初始化 SQLite 数据库
+    let connection = setup_database()?;
+    let client = Client::new();
+    let client_id = "1662e9cb-e526-4bea-8237-11526075b7f3";
 
-impl LittleSkinClient {
-    pub fn new() -> Self {
-        Self {
-            client: Client::new(),
-            redirect_uri: "http://localhost:40323".to_string(),
-            client_id: "1340".to_string(),
-            client_secret: "vF9bybNWzp3AzSrICE6pZMrMzZgEKJtdf8HTz9Ep".to_string(),
-            code: Arc::new(Mutex::new(None)),
-        }
-    }
-
-    pub fn authenticate(&mut self) -> String {
-        let authorize_url = format!(
-            "https://littleskin.cn/oauth/authorize?client_id={}&redirect_uri={}&response_type=code&scope=Player.ReadWrite",
-            self.client_id, self.redirect_uri
-        );
-
-        if let Err(e) = webbrowser::open(&authorize_url) {
-            return format!("无法打开浏览器: {}", e);
-        }
-
-        println!("正在打开浏览器进行授权...");
-        println!("等待授权回调中...");
-
-        let bind_address = self.redirect_uri.replace("http://", "");
-        let listener = TcpListener::bind(&bind_address).expect("无法绑定到地址");
-        println!("正在监听重定向 URL: {}", self.redirect_uri);
-
-        let code_clone = Arc::clone(&self.code);
-        let start_time = Instant::now();
-
-        let handle = thread::spawn(move || {
-            for stream in listener.incoming() {
-                if let Ok(mut stream) = stream {
-                    let mut buffer = [0; 1024];
-                    stream.read(&mut buffer).unwrap();
-
-                    if let Ok(request) = String::from_utf8(buffer.to_vec()) {
-                        let lines: Vec<&str> = request.split('\r').collect();
-                        let request_line = lines[0].trim();
-                        if let Some(url) = request_line.split_whitespace().nth(1) {
-                            if let Ok(parsed_url) = Url::parse(&format!("http://localhost{}", url)) {
-                                if let Some(query) = parsed_url.query() {
-                                    let query_pairs: HashMap<_, _> = parsed_url.query_pairs().into_owned().collect();
-                                    if let Some(code) = query_pairs.get("code") {
-                                        *code_clone.lock().unwrap() = Some(code.clone());
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-
-                        let response = "HTTP/1.1 200 OK\r
-Content-Type: text/html\r
-\r
-<html><body><h1>授权成功！请关闭此页面</h1></body></html>";
-                        stream.write(response.as_bytes()).unwrap();
-                        stream.flush().unwrap();
-                    }
-                }
-            }
-        });
-
-        for _ in 0..360 {
-            if let Some(code) = self.code.lock().unwrap().take() {
-                handle.join().unwrap();
-                match self.request_token(&code) {
-                    Ok(token_response) => {
-                        let player_info = self.get_player_info(&token_response.access_token);
-                        
-                        let player_data: Value = serde_json::from_str(&player_info)
-                            .unwrap_or(Value::Null);
-
-                        if let Err(e) = self.handle_database(&token_response, &player_data) {
-                            return format!("数据库操作失败: {}", e);
-                        }
-
-                        let display_info = self.extract_display_info(&player_data);
-                        
-                        return format!("登录成功！
-{}", display_info);
-                    }
-                    Err(error) => {
-                        return format!("登录失败: {:?}", error);
-                    }
-                }
-            }
-            thread::sleep(Duration::from_secs(1));
-            if start_time.elapsed() >= Duration::from_secs(360) {
-                handle.join().unwrap();
-                return "登录超时，请重新登录".to_string();
-            }
-        }
-
-        handle.join().unwrap();
-        "未获取到授权码".to_string()
-    }
-
-    fn handle_database(&self, token_response: &TokenResponse, player_data: &Value) -> Result<(), String> {
-    // Open or create database
-    let connection = match Connection::open("LaunchAccount.db") {
-        Ok(conn) => conn,
-        Err(e) => return Err(format!("无法打开数据库: {}", e)),
-    };
-
-    // 创建表（如果不存在）
-    let queries = vec![
-        "CREATE TABLE IF NOT EXISTS littleskin (
-            refresh_token TEXT NOT NULL,
-            access_token TEXT NOT NULL
-        )",
-        "CREATE TABLE IF NOT EXISTS littleskinuser (
-            name TEXT NOT NULL,
-            tid_skin INTEGER NOT NULL,
-            uuid TEXT PRIMARY KEY
-        )"
+    // 从上到下分别是：添加新账户，检查刷新过期账户，手动下载账号皮肤
+    add_new_account(&client, &connection, client_id,).await?;
+    check_account_time(&client, &connection, client_id,"Elanda_seaweeds").await?;
+    download_player_skin(&client, "6e75722406c4461fb917cf32ace6790c").await?;
+    Ok(())
+}
+*/
+async fn get_device_code(client: &Client, client_id: &str) -> Result<DeviceCodeResponse, Box<dyn std::error::Error>> {
+    let params = [
+        ("client_id", client_id),
+        ("scope", "XboxLive.signin offline_access"),
     ];
+    let response = client
+        .post("https://login.microsoftonline.com/consumers/oauth2/v2.0/devicecode")
+        .form(&params)
+        .send()
+        .await?
+        .json::<DeviceCodeResponse>()
+        .await?;
+    Ok(response)
+}
 
-    for query in queries {
-        if let Err(e) = connection.execute(query) {
-            return Err(format!("无法创建表: {} - {}", query, e));
+async fn poll_for_token(
+    client: &Client,
+    client_id: &str,
+    device_code: &str,
+    interval: u64,
+) -> Result<TokenResponse, Box<dyn std::error::Error>> {
+    loop {
+        let params = [
+            ("grant_type", "urn:ietf:params:oauth:grant-type:device_code"),
+            ("client_id", client_id),
+            ("device_code", device_code),
+        ];
+        let response = client
+            .post("https://login.microsoftonline.com/consumers/oauth2/v2.0/token")
+            .form(&params)
+            .send()
+            .await?;
+        if response.status().is_success() {
+            return Ok(response.json::<TokenResponse>().await?);
+        }
+        sleep(Duration::from_secs(interval)).await;
+    }
+}
+
+async fn authenticate_with_xbox_live(
+    client: &Client,
+    access_token: &str,
+) -> Result<XboxLiveTokenResponse, Box<dyn std::error::Error>> {
+    let body = serde_json::json!({
+        "Properties": {
+            "AuthMethod": "RPS",
+            "SiteName": "user.auth.xboxlive.com",
+            "RpsTicket": format!("d={}", access_token)
+        },
+        "RelyingParty": "http://auth.xboxlive.com",
+        "TokenType": "JWT"
+    });
+    let response = client
+        .post("https://user.auth.xboxlive.com/user/authenticate")
+        .json(&body)
+        .send()
+        .await?
+        .json::<XboxLiveTokenResponse>()
+        .await?;
+    Ok(response)
+}
+
+async fn get_xsts_token(
+    client: &Client,
+    xbox_token: &str,
+) -> Result<XboxLiveTokenResponse, Box<dyn std::error::Error>> {
+    let body = serde_json::json!({
+        "Properties": {
+            "SandboxId": "RETAIL",
+            "UserTokens": [xbox_token]
+        },
+        "RelyingParty": "rp://api.minecraftservices.com/",
+        "TokenType": "JWT"
+    });
+    let response = client
+        .post("https://xsts.auth.xboxlive.com/xsts/authorize")
+        .json(&body)
+        .send()
+        .await?
+        .json::<XboxLiveTokenResponse>()
+        .await?;
+    Ok(response)
+}
+
+async fn authenticate_with_minecraft(
+    client: &Client,
+    user_hash: &str,
+    xsts_token: &str,
+) -> Result<MinecraftLoginResponse, Box<dyn std::error::Error>> {
+    let body = serde_json::json!({
+        "identityToken": format!("XBL3.0 x={};{}", user_hash, xsts_token)
+    });
+    let response = client
+        .post("https://api.minecraftservices.com/authentication/login_with_xbox")
+        .json(&body)
+        .send()
+        .await?
+        .json::<MinecraftLoginResponse>()
+        .await?;
+    Ok(response)
+}
+
+async fn check_mc_purchase(client: &Client, access_token: &str) -> Result<String, Box<dyn std::error::Error>> {
+    let response = client
+        .get("https://api.minecraftservices.com/entitlements/mcstore")
+        .bearer_auth(access_token)
+        .send()
+        .await?;
+    if response.status().is_success() {
+        let json: serde_json::Value = response.json().await?;
+        let items = json.get("items").and_then(|v| v.as_array());
+        if items.is_none() || items.unwrap().is_empty() {
+            return Ok("您还没有购买mc，请购买后再登录游玩".to_string());
         }
     }
+    Ok("您已购买Minecraft".to_string())
+}
 
-    // 删除旧的 access_token 和 refresh_token
-    connection.execute("DELETE FROM littleskin").map_err(|e| e.to_string())?;
+async fn get_minecraft_profile(
+    client: &Client,
+    access_token: &str,
+) -> Result<MinecraftProfileResponse, Box<dyn std::error::Error>> {
+    let response = client
+        .get("https://api.minecraftservices.com/minecraft/profile")
+        .bearer_auth(access_token)
+        .send()
+        .await?
+        .json::<MinecraftProfileResponse>()
+        .await?;
+    Ok(response)
+}
 
-    // 插入新的 access_token 和 refresh_token
-    let insert_token_query = "INSERT INTO littleskin (refresh_token, access_token) VALUES (?, ?)";
-    let mut statement = connection.prepare(insert_token_query).map_err(|e| e.to_string())?;
-    statement.bind((1, &token_response.refresh_token as &str)).map_err(|e| e.to_string())?;
-    statement.bind((2, &token_response.access_token as &str)).map_err(|e| e.to_string())?;
-    statement.next().map_err(|e| e.to_string())?;
+async fn refresh_access_token(
+    client: &Client,
+    client_id: &str,
+    refresh_token: &str,
+) -> Result<TokenResponse, Box<dyn std::error::Error>> {
+    let params = [
+        ("grant_type", "refresh_token"),
+        ("client_id", client_id),
+        ("refresh_token", refresh_token),
+    ];
+    let response = client
+        .post("https://login.microsoftonline.com/consumers/oauth2/v2.0/token")
+        .form(&params)
+        .send()
+        .await?
+        .json::<TokenResponse>()
+        .await?;
+    Ok(response)
+}
 
-    // 删除旧的玩家信息
-    connection.execute("DELETE FROM littleskinuser").map_err(|e| e.to_string())?;
+// 初始化数据库
+fn setup_database() -> Result<Connection, Box<dyn std::error::Error>> {
+    let connection = sqlite::open(super::db_path())?;
+    connection.execute(
+        "CREATE TABLE IF NOT EXISTS accounts (
+            uuid TEXT PRIMARY KEY,
+            username TEXT,
+            refresh_token TEXT,
+            access_token TEXT,
+            time INTEGER
+        )",
+    )?;
+    Ok(connection)
+}
 
-    // 插入新的玩家信息
-    if let Some(players) = player_data.as_array() {
-        for player in players {
-            if let (Some(uuid), Some(name), Some(tid_skin)) = (
-                player.get("uuid").and_then(|u| u.as_str()),
-                player.get("name").and_then(|n| n.as_str()),
-                player.get("tid_skin").and_then(|t| t.as_i64()),
-            ) {
-                let query = "
-                    INSERT INTO littleskinuser 
-                    (uuid, name, tid_skin) 
-                    VALUES (?, ?, ?)";
-                
-                let mut statement = match connection.prepare(query) {
-                    Ok(stmt) => stmt,
-                    Err(e) => return Err(format!("无法准备插入语句: {}", e)),
-                };
-                
-                if let Err(e) = statement.bind((1, uuid)) {
-                    return Err(format!("无法绑定uuid: {}", e));
-                }
-                if let Err(e) = statement.bind((2, name)) {
-                    return Err(format!("无法绑定name: {}", e));
-                }
-                if let Err(e) = statement.bind((3, tid_skin)) {
-                    return Err(format!("无法绑定tid_skin: {}", e));
-                }
-                
-                if let Err(e) = statement.next() {
-                    return Err(format!("无法执行插入: {}", e));
-                }
-            }
+// 将账户信息保存到数据库
+fn save_account_info(
+    connection: &Connection,
+    username: &str,
+    uuid: &str,
+    refresh_token: &str,
+    access_token: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let current_time = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)?
+        .as_secs();
+    connection.execute(format!(
+        "INSERT OR REPLACE INTO accounts (uuid, username, refresh_token, access_token, time) VALUES ('{}', '{}', '{}', '{}', '{}')",
+        uuid, username, refresh_token, access_token, current_time
+    ))?;
+    Ok(())
+}
+async fn check_account_time(
+    client: &Client,
+    connection: &Connection,
+    client_id: &str,
+    username: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let query = format!("SELECT uuid, refresh_token, access_token, time FROM accounts WHERE username = '{}'", username);
+    let mut stmt = connection.prepare(query)?;
+
+    if let State::Row = stmt.next()? {
+        let uuid: String = stmt.read::<String, _>(0)?;
+        let refresh_token: String = stmt.read::<String, _>(1)?;
+        let access_token: String = stmt.read::<String, _>(2)?;
+        let last_login_time: i64 = stmt.read::<i64, _>(3)?;
+
+        let current_time = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_secs();
+
+        if current_time - last_login_time as u64 > 29 * 24 * 3600 {
+            // Token is older than 29 days, re-login using device code flow
+            println!("Token is older than 29 days, initiating device code flow...");
+
+            let device_code_response = get_device_code(client, client_id).await?;
+            println!(
+                "Please visit {} and enter code: {}",
+                device_code_response.verification_uri, device_code_response.user_code
+            );
+
+            let token_response = poll_for_token(
+                client,
+                client_id,
+                &device_code_response.device_code,
+                device_code_response.interval,
+            )
+            .await?;
+
+            let xbox_token_response = authenticate_with_xbox_live(client, &token_response.access_token).await?;
+            let xsts_token_response = get_xsts_token(client, &xbox_token_response.Token).await?;
+            let minecraft_login_response = authenticate_with_minecraft(
+                client,
+                &xbox_token_response.DisplayClaims.xui[0].uhs,
+                &xsts_token_response.Token,
+            )
+            .await?;
+
+            save_account_info(
+                connection,
+                username,
+                &uuid,
+                &token_response.refresh_token,
+                &minecraft_login_response.access_token,
+            )?;
+
+            println!("Device code flow completed. Tokens updated.");
+        } else if current_time - last_login_time as u64 > 11 * 3600 {
+            // Token is older than 11 hours, refresh it
+            println!("Token is older than 11 hours, refreshing access token...");
+
+            let refreshed_token_response = refresh_access_token(client, client_id, &refresh_token).await?;
+
+            save_account_info(
+                connection,
+                username,
+                &uuid,
+                &refreshed_token_response.refresh_token,
+                &refreshed_token_response.access_token,
+            )?;
+
+            println!("Access token refreshed.");
+        } else {
+            println!("Token is still valid.");
         }
+    } else {
+        println!("No account found with username: {}", username);
     }
 
     Ok(())
 }
-    fn extract_display_info(&self, player_data: &Value) -> String {
-        let mut result = String::new();
-        
-        if let Some(players) = player_data.as_array() {
-            if let Some(first_player) = players.first() {
-                if let (Some(name), Some(tid_skin), Some(uuid)) = (
-                    first_player.get("name").and_then(|n| n.as_str()),
-                    first_player.get("tid_skin").and_then(|t| t.as_i64()),
-                    first_player.get("uuid").and_then(|u| u.as_str()),
-                ) {
-                    result.push_str(&format!("角色名: {}
-皮肤ID: {}
-UUID: {}", name, tid_skin, uuid));
-                }
-            }
-        }
-        
-        if result.is_empty() {
-            "未找到有效的玩家信息".to_string()
-        } else {
-            result
-        }
+async fn download_player_skin(client: &Client, uuid: &str) -> Result<(), Box<dyn std::error::Error>> {
+    // 皮肤存到配置目录下的 skins 子目录
+    let profile_dir = format!("{}/skins", super::config_dir());
+    fs::create_dir_all(&profile_dir)?;
+
+    // Get player profile to check if skin exists
+    let profile_response = client
+        .get(&format!("https://sessionserver.mojang.com/session/minecraft/profile/{}", uuid))
+        .send()
+        .await?;
+
+    if !profile_response.status().is_success() {
+        return Err("Failed to fetch player profile".into());
     }
 
-    fn request_token(&self, code: &str) -> Result<TokenResponse, String> {
-        let mut params = HashMap::new();
-        params.insert("grant_type".to_string(), "authorization_code".to_string());
-        params.insert("client_id".to_string(), self.client_id.clone());
-        params.insert("client_secret".to_string(), self.client_secret.clone());
-        params.insert("redirect_uri".to_string(), self.redirect_uri.clone());
-        params.insert("code".to_string(), code.to_string());
+    let profile_json: serde_json::Value = profile_response.json().await?;
+    let properties = profile_json["properties"].as_array()
+        .ok_or("No properties found in profile")?;
 
-        let response = self.client
-            .post("https://littleskin.cn/oauth/token")
+    // Find the textures property
+    let textures_property = properties.iter()
+        .find(|p| p["name"].as_str() == Some("textures"))
+        .ok_or("No textures property found")?;
+
+    // Decode the base64 textures value
+    let textures_base64 = textures_property["value"].as_str()
+        .ok_or("Textures value is not a string")?;
+    let decoded = base64::decode(textures_base64)?;
+    let textures_json: serde_json::Value = serde_json::from_slice(&decoded)?;
+
+    // Get the skin URL
+    let skin_url = textures_json["textures"]["SKIN"]["url"].as_str()
+        .ok_or("No skin URL found in textures")?;
+
+    // Download the skin image
+    let skin_response = client.get(skin_url).send().await?;
+    if !skin_response.status().is_success() {
+        return Err("Failed to download skin".into());
+    }
+
+    // Save the skin to file
+    let skin_bytes = skin_response.bytes().await?;
+    let skin_path = format!("{}/{}.png", profile_dir, uuid);
+    fs::write(skin_path, skin_bytes)?;
+
+    Ok(())
+}
+async fn add_new_account(
+    client: &Client,
+    connection: &Connection,
+    client_id: &str,
+) -> Result<(String, String), Box<dyn std::error::Error>> {
+    println!("开始新账户登录流程...");
+
+    // 1. 获取设备代码
+    let device_code_response = get_device_code(client, client_id).await?;
+    println!(
+        "请访问 {} 并输入代码: {}",
+        device_code_response.verification_uri, device_code_response.user_code
+    );
+
+    // 记录开始时间
+    let start_time = Instant::now();
+    let timeout = Duration::from_secs(300); // 5 分钟超时
+
+    loop {
+        // 检查是否超时
+        if start_time.elapsed() >= timeout {
+            return Err("登录超时".into());
+        }
+
+        // 2. 轮询获取token
+        let token_response = poll_for_token(
+            client,
+            client_id,
+            &device_code_response.device_code,
+            device_code_response.interval,
+        )
+        .await;
+
+        match token_response {
+            Ok(token) => {
+                // 3. Xbox Live认证
+                let xbox_token_response = authenticate_with_xbox_live(client, &token.access_token).await?;
+
+                // 4. 获取XSTS token
+                let xsts_token_response = get_xsts_token(client, &xbox_token_response.Token).await?;
+
+                // 5. Minecraft认证
+                let minecraft_login_response = authenticate_with_minecraft(
+                    client,
+                    &xbox_token_response.DisplayClaims.xui[0].uhs,
+                    &xsts_token_response.Token,
+                )
+                .await?;
+
+                // 6. 检查是否拥有Minecraft
+                let purchase_status = check_mc_purchase(client, &minecraft_login_response.access_token).await?;
+                if purchase_status.contains("还没有购买") {
+                    return Err(purchase_status.into());
+                }
+
+                // 7. 获取Minecraft个人资料
+                let profile = get_minecraft_profile(client, &minecraft_login_response.access_token).await?;
+
+                // 8. 下载玩家皮肤
+                download_player_skin(client, &profile.id).await?;
+
+                // 9. 保存账户信息到数据库
+                save_account_info(
+                    connection,
+                    &profile.name,
+                    &profile.id,
+                    &token.refresh_token,
+                    &minecraft_login_response.access_token,
+                )?;
+
+                // 返回用户名和UUID
+                return Ok((profile.name, profile.id));
+            }
+            Err(_) => {
+                // 如果未成功获取token，继续等待
+                sleep(Duration::from_secs(device_code_response.interval)).await;
+            }
+        }
+    }
+}
+
+// ======================== Tauri Commands ========================
+
+/// 第一步：请求设备代码，前端展示 user_code 和 verification_uri
+#[tauri::command]
+pub async fn ms_request_device_code() -> Result<DeviceCodeInfo, String> {
+    let client = Client::new();
+    let resp = get_device_code(&client, CLIENT_ID)
+        .await
+        .map_err(|e| e.to_string())?;
+    // 自动打开浏览器让用户授权
+    let _ = webbrowser::open(&resp.verification_uri);
+    Ok(DeviceCodeInfo {
+        user_code: resp.user_code,
+        verification_uri: resp.verification_uri,
+        device_code: resp.device_code,
+        interval: resp.interval,
+        expires_in: resp.expires_in,
+    })
+}
+
+/// 第二步：轮询等待用户授权，完成后走完整认证链并返回 AccountInfo
+#[tauri::command]
+pub async fn ms_poll_and_login(device_code: String, interval: u64) -> Result<AccountInfo, String> {
+    let client = Client::new();
+    let start_time = Instant::now();
+    let timeout = Duration::from_secs(300); // 5 分钟超时
+
+    loop {
+        if start_time.elapsed() >= timeout {
+            return Err("登录超时，请重试".to_string());
+        }
+
+        sleep(Duration::from_secs(interval)).await;
+
+        // 单次轮询尝试
+        let params = [
+            ("grant_type", "urn:ietf:params:oauth:grant-type:device_code"),
+            ("client_id", CLIENT_ID),
+            ("device_code", device_code.as_str()),
+        ];
+        let response = client
+            .post("https://login.microsoftonline.com/consumers/oauth2/v2.0/token")
             .form(&params)
             .send()
+            .await
+            .map_err(|e| format!("轮询请求失败: {}", e))?;
+
+        if !response.status().is_success() {
+            continue; // 用户尚未授权，继续轮询
+        }
+
+        let token: TokenResponse = response.json().await
+            .map_err(|e| format!("解析 Token 失败: {}", e))?;
+
+        // Xbox Live 认证
+        let xbox = authenticate_with_xbox_live(&client, &token.access_token)
+            .await
+            .map_err(|e| format!("Xbox Live 认证失败: {}", e))?;
+
+        // XSTS Token
+        let xsts = get_xsts_token(&client, &xbox.Token)
+            .await
+            .map_err(|e| format!("XSTS 认证失败: {}", e))?;
+
+        // Minecraft 认证
+        let uhs = xbox.DisplayClaims.xui.first()
+            .map(|x| x.uhs.clone())
+            .ok_or_else(|| "Xbox Live 认证返回的 xui 为空".to_string())?;
+        let mc_login = authenticate_with_minecraft(
+            &client,
+            &uhs,
+            &xsts.Token,
+        )
+        .await
+        .map_err(|e| format!("Minecraft 认证失败: {}", e))?;
+
+        // 检查是否拥有 Minecraft
+        let purchase = check_mc_purchase(&client, &mc_login.access_token)
+            .await
+            .map_err(|e| format!("检查购买状态失败: {}", e))?;
+        if purchase.contains("还没有购买") {
+            return Err(purchase);
+        }
+
+        // 获取 Minecraft 个人资料
+        let profile = get_minecraft_profile(&client, &mc_login.access_token)
+            .await
+            .map_err(|e| format!("获取 Minecraft 资料失败: {}", e))?;
+
+        // 构造返回值（先于数据库/皮肤操作，确保即使后续失败也能返回）
+        let account_info = AccountInfo {
+            name: profile.name.clone(),
+            uuid: profile.id.clone(),
+            auth_type: "microsoft".to_string(),
+            access_token: mc_login.access_token.clone(),
+            skin_url: None,
+        };
+
+        // 保存到数据库（非致命，通过 spawn_blocking 隔离 sqlite 线程安全问题）
+        let db_name = profile.name.clone();
+        let db_id = profile.id.clone();
+        let db_refresh = token.refresh_token.clone();
+        let db_access = mc_login.access_token.clone();
+        let db_result = tokio::task::spawn_blocking(move || -> Result<(), String> {
+            let connection = setup_database().map_err(|e| e.to_string())?;
+            save_account_info(
+                &connection,
+                &db_name,
+                &db_id,
+                &db_refresh,
+                &db_access,
+            )
             .map_err(|e| e.to_string())?;
-
-        if response.status().is_success() {
-            let response_text = response.text().map_err(|e| e.to_string())?;
-            println!("成功获取令牌的响应: {}", response_text);
-
-            let token_response: TokenResponse = serde_json::from_str(&response_text)
-                .map_err(|e| e.to_string())?;
-
-            Ok(token_response)
-        } else {
-            let error_text = response.text().map_err(|e| e.to_string())?;
-            println!("登录失败的响应: {}", error_text);
-            Err(error_text)
+            Ok(())
+        }).await;
+        match db_result {
+            Ok(Ok(())) => {},
+            Ok(Err(e)) => eprintln!("[MS登录] 数据库保存失败(非致命): {}", e),
+            Err(e) => eprintln!("[MS登录] 数据库任务崩溃(非致命): {}", e),
         }
-    }
 
-    fn get_player_info(&self, access_token: &str) -> String {
-        let response = self.client
-            .get("https://littleskin.cn/api/players")
-            .header("Authorization", format!("Bearer {}", access_token))
-            .send();
-
-        match response {
-            Ok(resp) => {
-                let status = resp.status();
-                let response_text = resp.text().map_err(|e| e.to_string());
-
-                match response_text {
-                    Ok(text) => {
-                        if status.is_success() {
-                            println!("成功获取玩家信息");
-                            text
-                        } else {
-                            println!("获取玩家信息失败");
-                            text
-                        }
-                    }
-                    Err(e) => {
-                        println!("无法读取玩家信息响应: {}", e);
-                        format!("无法读取玩家信息响应: {}", e)
-                    }
-                }
-            }
-            Err(e) => {
-                println!("无法发送玩家信息请求: {}", e);
-                format!("无法发送玩家信息请求: {}", e)
-            }
+        // 下载皮肤（非致命）
+        match download_player_skin(&client, &profile.id).await {
+            Ok(()) => {},
+            Err(e) => eprintln!("[MS登录] 皮肤下载失败(非致命): {}", e),
         }
+
+        return Ok(account_info);
     }
 }

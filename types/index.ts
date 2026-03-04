@@ -1,10 +1,25 @@
 /**
+ * 登录类型
+ */
+export type AuthType = "littleskin" | "third_party" | "offline" | "microsoft";
+
+/**
  * 账户相关类型定义
  */
 export type Account = {
-  id: number;
+  id: string;
   name: string;
+  uuid: string;
+  /** 登录类型 */
+  authType: AuthType;
+  /** 显示用的状态文本 */
   status: string;
+  /** access_token */
+  accessToken?: string;
+  /** 第三方认证服务器地址 */
+  yggdrasilUrl?: string;
+  /** 皮肤 URL */
+  skinUrl?: string | null;
 };
 
 /**

@@ -3,7 +3,7 @@
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import type { Account } from "@/types";
 import { cn } from "@/lib/utils";
 import { Play, Settings, Loader2 } from "lucide-react";
@@ -68,6 +68,9 @@ export function InstanceHeader({
           onClick={onOpenProfileSelector}
         >
           <Avatar size="sm">
+            {selectedProfile?.skinUrl && (
+              <AvatarImage src={selectedProfile.skinUrl} alt={selectedProfile.name} />
+            )}
             <AvatarFallback>
               {(selectedProfile?.name ?? "U").charAt(0).toUpperCase()}
             </AvatarFallback>

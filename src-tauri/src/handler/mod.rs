@@ -1,2 +1,2 @@
 pub mod launcher;
-pub mod authSearcher;
+pub mod skinloader;

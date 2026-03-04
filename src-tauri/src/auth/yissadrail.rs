@@ -204,7 +204,8 @@ pub fn thirdPartyLogin(url: String) -> String {
 }
 
 // 返回一个字符串和两个字符串数组
-pub fn getAccountList(url: String, user: String, pwd: String) -> (String, Vec<String>, Vec<String>) {
+#[tauri::command]
+pub fn getAccountList(url: String, user: String, pwd: String) -> Result<super::ThirdPartyAccountList, String> {
     // 初始化
     let fullUrl = format!("{}/{}", url, "authserver/authenticate");
     let client = reqwest::blocking::Client::new();
@@ -218,63 +219,46 @@ pub fn getAccountList(url: String, user: String, pwd: String) -> (String, Vec<St
     let response = client.post(fullUrl)
         .header("Content-Type", "application/json")
         .body(requestBody)
-        .send();
-        
-    if response.is_err() {
-        error!("发送POST请求失败: {}", response.err().unwrap());
-        return (String::new(), Vec::new(), Vec::new());
-    }
+        .send()
+        .map_err(|e| format!("发送POST请求失败: {}", e))?;
 
-    // 获取响应体
-    let body = response.unwrap().text();
-    if body.is_err() {
-        error!("获取响应体失败: {}", body.err().unwrap());
-        return (String::new(), Vec::new(), Vec::new());
-    }
-    let bodyText = body.unwrap();
+    let bodyText = response.text().map_err(|e| format!("获取响应体失败: {}", e))?;
 
-    // 解析JSON
-    let jsonResult = serde_json::from_str::<serde_json::Value>(&bodyText);
-    if jsonResult.is_err() {
-        error!("JSON解析失败: {}", jsonResult.err().unwrap());
-        return (String::new(), Vec::new(), Vec::new());
-    }
-    let json = jsonResult.unwrap();
-    println!("{}",json);
-    // 取accessToken
-    let accessToken = json.get("accessToken");
-    if accessToken.is_none() {
-        error!("JSON中没有accessToken");
-        return (String::new(), Vec::new(), Vec::new());
-    }
-    let accessToken = accessToken.unwrap().to_string();
+    let json: serde_json::Value = serde_json::from_str(&bodyText)
+        .map_err(|e| format!("JSON解析失败: {}", e))?;
 
-    // 遍历json中的availableProfiles列表
-    let availableProfiles = json.get("availableProfiles");
-    if availableProfiles.is_none() {
-        error!("JSON中没有availableProfiles");
-        return (String::new(), Vec::new(), Vec::new());
-    }
+    let accessToken = json.get("accessToken")
+        .and_then(|v| v.as_str())
+        .ok_or("JSON中没有accessToken".to_string())?
+        .to_string();
 
-    let mut idList: Vec<String> = Vec::new();
-    let mut nameList: Vec<String> = Vec::new();
-    
-    for profile in availableProfiles.unwrap().as_array().unwrap() {
-        if let (Some(id), Some(name)) = (profile.get("id"), profile.get("name")) {
-            idList.push(id.to_string());
-            nameList.push(name.to_string());
-        } else {
-            warn!("json中缺少id或name字段");
+    let availableProfiles = json.get("availableProfiles")
+        .and_then(|v| v.as_array())
+        .ok_or("JSON中没有availableProfiles".to_string())?;
+
+    let mut profiles = Vec::new();
+    for profile in availableProfiles {
+        if let (Some(id), Some(name)) = (
+            profile.get("id").and_then(|v| v.as_str()),
+            profile.get("name").and_then(|v| v.as_str()),
+        ) {
+            profiles.push(super::ThirdPartyProfile {
+                id: id.to_string(),
+                name: name.to_string(),
+            });
         }
     }
 
     info!("accessToken: {}", accessToken);
-    info!("idList: {:?}", idList);
-    info!("nameList: {:?}", nameList);
-    
-    (accessToken, idList, nameList)
+    info!("profiles: {:?}", profiles);
+
+    Ok(super::ThirdPartyAccountList {
+        access_token: accessToken,
+        profiles,
+    })
 }
 
+#[tauri::command]
 pub fn getPlayerSkin(url: String, uuid: String) -> String {
     info!("开始获取玩家皮肤...");
     
@@ -355,13 +339,14 @@ pub fn getPlayerSkin(url: String, uuid: String) -> String {
     }
 
     // 创建 skins 目录
-    if let Err(err) = fs::create_dir_all("./skins") {
+    let skins_dir = format!("{}/skins", super::config_dir());
+    if let Err(err) = fs::create_dir_all(&skins_dir) {
         error!("创建皮肤目录失败: {}", err);
         return String::new();
     }
 
     // 保存皮肤
-    let skinPath = format!("./skins/{}.png", uuid);
+    let skinPath = format!("{}/{}.png", skins_dir, uuid);
     let mut file = match File::create(&skinPath) {
         Ok(file) => file,
         Err(err) => {

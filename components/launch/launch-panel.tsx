@@ -3,7 +3,7 @@
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { useLaunchContext } from "@/components/launch/launch-provider";
 import { useAccountContext } from "@/components/accounts/account-provider";
 import { LaunchStatusBadge } from "@/components/launch/launch-status-badge";
@@ -54,6 +54,9 @@ export function LaunchPanel() {
           {selectedProfile && (
             <div className="flex items-center gap-2">
               <Avatar size="sm">
+                {selectedProfile.skinUrl && (
+                  <AvatarImage src={selectedProfile.skinUrl} alt={selectedProfile.name} />
+                )}
                 <AvatarFallback>
                   {selectedProfile.name.charAt(0).toUpperCase()}
                 </AvatarFallback>

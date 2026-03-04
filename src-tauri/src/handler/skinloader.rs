@@ -2,6 +2,7 @@
 use anyhow::{Context, Result};
 use image::{imageops, DynamicImage, GenericImageView, ImageBuffer, Rgba, RgbaImage};
 use std::path::Path;
+use base64::{Engine as _, engine::general_purpose};
 
 pub struct AvatarGenerator;
 
@@ -110,4 +111,46 @@ fn get_slim_operations() -> Vec<((u32, u32, u32, u32), f32, (i64, i64), bool)> {
         ((16, 16, 32, 32), 26.875, (287, 131), false),
         ((80, 16, 96, 32), 30.8125, (254, 107), false),
     ]
+}
+
+/// 获取玩家头像，返回 base64 编码的 data URI。
+/// 皮肤需已保存到 config_dir/skins/{uuid}.png。
+/// 头像会被缓存到 config_dir/avatars/{uuid}.png。
+#[tauri::command]
+pub async fn get_avatar_base64(uuid: String) -> Result<String, String> {
+    tokio::task::spawn_blocking(move || {
+        let config_dir = crate::auth::config_dir();
+        let skin_path = format!("{}/skins/{}.png", config_dir, uuid);
+        let avatar_dir = format!("{}/avatars", config_dir);
+        let avatar_path = format!("{}/{}.png", avatar_dir, uuid);
+
+        if !Path::new(&skin_path).exists() {
+            return Err(format!("皮肤文件不存在: {}", skin_path));
+        }
+
+        std::fs::create_dir_all(&avatar_dir)
+            .map_err(|e| format!("无法创建头像目录: {}", e))?;
+
+        // 如果头像已缓存且比皮肤新，直接使用缓存
+        let skin_mtime = std::fs::metadata(&skin_path).ok()
+            .and_then(|m| m.modified().ok());
+        let avatar_mtime = std::fs::metadata(&avatar_path).ok()
+            .and_then(|m| m.modified().ok());
+        let needs_regen = match (skin_mtime, avatar_mtime) {
+            (Some(s), Some(a)) => s > a,
+            _ => true,
+        };
+
+        if needs_regen {
+            AvatarGenerator::generate_avatar(&skin_path, &avatar_path)
+                .map_err(|e| format!("生成头像失败: {}", e))?;
+        }
+
+        let bytes = std::fs::read(&avatar_path)
+            .map_err(|e| format!("读取头像文件失败: {}", e))?;
+        let b64 = general_purpose::STANDARD.encode(&bytes);
+        Ok(format!("data:image/png;base64,{}", b64))
+    })
+    .await
+    .map_err(|e| format!("任务执行失败: {}", e))?
 }

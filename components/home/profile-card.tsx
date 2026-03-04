@@ -2,7 +2,7 @@
 
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import type { Account } from "@/types";
 
 type ProfileCardProps = {
@@ -40,6 +40,9 @@ export function ProfileCard({
           onClick={onOpenProfileSelector}
         >
           <Avatar>
+            {selectedProfile?.skinUrl && (
+              <AvatarImage src={selectedProfile.skinUrl} alt={selectedProfile.name} />
+            )}
             <AvatarFallback>
               {(selectedProfile?.name ?? "RTL User").charAt(0).toUpperCase()}
             </AvatarFallback>

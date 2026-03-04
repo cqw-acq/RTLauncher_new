@@ -125,9 +125,84 @@
             "未获取到授权码".to_string()
         }
 
+        /// 认证并返回结构化账户信息
+        pub fn authenticate_and_return(&mut self) -> Result<super::AccountInfo, String> {
+            let authorize_url = format!(
+                "https://littleskin.cn/oauth/authorize?client_id={}&redirect_uri={}&response_type=code&scope=Player.ReadWrite",
+                self.client_id, self.redirect_uri
+            );
+
+            if let Err(e) = webbrowser::open(&authorize_url) {
+                return Err(format!("无法打开浏览器: {}", e));
+            }
+
+            let bind_address = self.redirect_uri.replace("http://", "");
+            let listener = TcpListener::bind(&bind_address).map_err(|e| format!("无法绑定到地址: {}", e))?;
+
+            let code_clone = Arc::clone(&self.code);
+            let start_time = Instant::now();
+
+            let handle = thread::spawn(move || {
+                for stream in listener.incoming() {
+                    if let Ok(mut stream) = stream {
+                        let mut buffer = [0; 1024];
+                        let _ = stream.read(&mut buffer);
+                        if let Ok(request) = String::from_utf8(buffer.to_vec()) {
+                            let lines: Vec<&str> = request.split('\r').collect();
+                            let request_line = lines[0].trim();
+                            if let Some(url) = request_line.split_whitespace().nth(1) {
+                                if let Ok(parsed_url) = Url::parse(&format!("http://localhost{}", url)) {
+                                    let query_pairs: HashMap<_, _> = parsed_url.query_pairs().into_owned().collect();
+                                    if let Some(code) = query_pairs.get("code") {
+                                        *code_clone.lock().unwrap() = Some(code.clone());
+                                    }
+                                }
+                            }
+                            let response = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n<html><body><h1>授权成功！请关闭此页面</h1></body></html>";
+                            let _ = stream.write(response.as_bytes());
+                            let _ = stream.flush();
+                        }
+                        break;
+                    }
+                }
+            });
+
+            loop {
+                if let Some(code) = self.code.lock().unwrap().take() {
+                    let _ = handle.join();
+                    let token_response = self.request_token(&code)?;
+                    let player_info = self.get_player_info(&token_response.access_token);
+                    let player_data: Value = serde_json::from_str(&player_info).unwrap_or(Value::Null);
+                    let _ = self.handle_database(&token_response, &player_data);
+
+                    // 提取第一个玩家信息
+                    if let Some(players) = player_data.as_array() {
+                        if let Some(first) = players.first() {
+                            let name = first.get("name").and_then(|n| n.as_str()).unwrap_or("Unknown").to_string();
+                            let uuid = first.get("uuid").and_then(|u| u.as_str()).unwrap_or("").to_string();
+                            let avatar_url = format!("https://littleskin.cn/avatar/player/{}", name);
+                            return Ok(super::AccountInfo {
+                                name,
+                                uuid,
+                                auth_type: "littleskin".to_string(),
+                                access_token: token_response.access_token,
+                                skin_url: Some(avatar_url),
+                            });
+                        }
+                    }
+                    return Err("未找到有效的玩家信息".to_string());
+                }
+                thread::sleep(Duration::from_secs(1));
+                if start_time.elapsed() >= Duration::from_secs(360) {
+                    let _ = handle.join();
+                    return Err("登录超时，请重新登录".to_string());
+                }
+            }
+        }
+
         fn handle_database(&self, token_response: &TokenResponse, player_data: &Value) -> Result<(), String> {
         // Open or create database
-        let connection = match Connection::open("LaunchAccount.db") {
+        let connection = match Connection::open(super::db_path()) {
             Ok(conn) => conn,
             Err(e) => return Err(format!("无法打开数据库: {}", e)),
         };
@@ -295,14 +370,8 @@
         }
     }
     #[tauri::command]
-    pub fn useMethod() -> Result<(), String>{    // 创建 LittleSkinClient 实例
+    pub fn useMethod() -> Result<super::AccountInfo, String> {
         let mut client = LittleSkinClient::new();
-
-        // 调用 authenticate 方法进行登录
-        let result = client.authenticate();
-
-        // 打印登录结果
-        println!("{}", result);
-        Ok(())
+        client.authenticate_and_return()
     }
 
