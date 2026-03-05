@@ -9,6 +9,7 @@ import React, {
   useState,
 } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { useAccountContext } from "@/components/accounts/account-provider";
 import type { LaunchConfig, LaunchLogEntry, LaunchStatus } from "@/types";
 
@@ -48,6 +49,8 @@ interface LaunchContextValue {
   clearLogs: () => void;
   /** 最后一次启动的完整命令参数（调试用） */
   lastCommandArgs: string | null;
+  /** 上次启动时间 */
+  lastLaunchTime: string | null;
 }
 
 const LaunchContext = createContext<LaunchContextValue | null>(null);
@@ -63,13 +66,15 @@ export function useLaunchContext() {
 export function LaunchProvider({ children }: { children: React.ReactNode }) {
   const [config, setConfig] = useState<LaunchConfig>(DEFAULT_LAUNCH_CONFIG);
 
-  // 在客户端挂载后从 localStorage 恢复配置，避免 SSR hydration 不匹配
+  // 客户端挂载后从 localStorage 恢复配置，避免 SSR hydration 不匹配
   useEffect(() => {
     try {
       const saved = localStorage.getItem("rtl-launch-config");
       if (saved) {
         setConfig((prev) => ({ ...prev, ...JSON.parse(saved) }));
       }
+      const savedTime = localStorage.getItem("rtl-last-launch-time");
+      if (savedTime) setLastLaunchTime(savedTime);
     } catch {
       // ignore
     }
@@ -79,6 +84,7 @@ export function LaunchProvider({ children }: { children: React.ReactNode }) {
   const [logs, setLogs] = useState<LaunchLogEntry[]>([]);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [lastCommandArgs, setLastCommandArgs] = useState<string | null>(null);
+  const [lastLaunchTime, setLastLaunchTime] = useState<string | null>(null);
   const logIdRef = useRef(0);
 
   const { selectedProfile } = useAccountContext();
@@ -112,6 +118,28 @@ export function LaunchProvider({ children }: { children: React.ReactNode }) {
   const clearLogs = useCallback(() => {
     setLogs([]);
     logIdRef.current = 0;
+  }, []);
+
+  // 监听游戏进程退出事件
+  useEffect(() => {
+    let unlisten: (() => void) | null = null;
+    listen<number>("game-exited", (event) => {
+      const exitCode = event.payload;
+      const timeStr = new Date().toLocaleString("zh-CN");
+      setLastLaunchTime(timeStr);
+      try { localStorage.setItem("rtl-last-launch-time", timeStr); } catch { /* ignore */ }
+      setStatus("idle");
+      setLogs((prev) => [
+        ...prev,
+        {
+          id: ++logIdRef.current,
+          timestamp: new Date().toLocaleTimeString(),
+          level: exitCode === 0 ? "info" : "warn",
+          message: `游戏已退出，退出码: ${exitCode}`,
+        },
+      ]);
+    }).then((fn) => { unlisten = fn; });
+    return () => { unlisten?.(); };
   }, []);
 
   const launchGame = useCallback(
@@ -192,6 +220,7 @@ export function LaunchProvider({ children }: { children: React.ReactNode }) {
         launchGame,
         clearLogs,
         lastCommandArgs,
+        lastLaunchTime,
       }}
     >
       {children}

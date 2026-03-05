@@ -93,6 +93,8 @@ dependencies = [
  "anyhow",
  "base64 0.21.7",
  "env_logger",
+ "fastnbt",
+ "flate2",
  "futures",
  "hex",
  "image",
@@ -960,6 +962,18 @@ dependencies = [
  "rayon-core",
  "smallvec",
  "zune-inflate",
+]
+
+[[package]]
+name = "fastnbt"
+version = "2.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "29e3bb1f9ba8b6dbb35d89b415216041c2cad0c3e0b329db85ef5d4fc9e80cd6"
+dependencies = [
+ "byteorder",
+ "cesu8",
+ "serde",
+ "serde_bytes",
 ]
 
 [[package]]
@@ -3709,6 +3723,16 @@ dependencies = [
  "serde",
  "serde_core",
  "typeid",
+]
+
+[[package]]
+name = "serde_bytes"
+version = "0.11.19"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a5d440709e79d88e51ac01c4b72fc6cb7314017bb7da9eeff678aa94c10e3ea8"
+dependencies = [
+ "serde",
+ "serde_core",
 ]
 
 [[package]]

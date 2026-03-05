@@ -13,6 +13,8 @@ import { InstanceCardGrid } from "@/components/home/instance-card-grid";
 import { ChevronDown, ChevronUp } from "lucide-react";
 import type { Account } from "@/types";
 import { TRANSITION_DURATION } from "@/constants";
+import { useInstances } from "@/hooks/use-instances";
+import { useLaunchContext } from "@/components/launch/launch-provider";
 
 /**
  * 主页组件
@@ -23,6 +25,13 @@ export default function Home() {
   const { selectedProfile, selectProfile } = useAccountContext();
   const { currentView, toggleView } = useViewToggle();
   const isUserAction = useRef(false);
+
+  // 动态实例数据
+  const { config } = useLaunchContext();
+  const instancesPath = config.minecraftPath ? `${config.minecraftPath}/instance` : undefined;
+  const { instances } = useInstances(instancesPath);
+  // 默认选中第一个实例
+  const selectedInstance = instances.length > 0 ? instances[0] : null;
 
   const handleToggleView = () => {
     isUserAction.current = true;
@@ -149,10 +158,9 @@ export default function Home() {
         {/* 顶部实例信息头 */}
         <div className="shrink-0 px-4 pt-2 pb-2 z-10 relative">
           <InstanceHeader
-            instanceName="RTL World"
-            minecraftVersion="Minecraft 1.21.8"
-            loader="Fabric 0.17.2"
-            modsCount={72}
+            instanceName={selectedInstance?.name ?? "未配置实例"}
+            minecraftVersion={selectedInstance ? `Minecraft ${selectedInstance.minecraft_version}` : ""}
+            loader={selectedInstance?.loader ?? ""}
             selectedProfile={selectedProfile}
             onOpenProfileSelector={() => setIsProfileSelectorOpen(true)}
             className="p-2"
@@ -177,7 +185,7 @@ export default function Home() {
           <div className="flex flex-col md:flex-row gap-4 h-full min-h-0">
             {/* 左侧实例信息 */}
             <div className="w-full md:w-1/3 lg:w-1/4">
-              <InstanceInfoCard />
+              <InstanceInfoCard instance={selectedInstance} />
             </div>
             {/* 右侧卡片网格 */}
             <InstanceCardGrid />

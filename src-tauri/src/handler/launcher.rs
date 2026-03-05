@@ -11,6 +11,7 @@ use std::{
     process::Command,
     thread,
 };
+use tauri::Emitter;
 
 /// 为离线玩家生成稳定的 UUID v3（基于玩家名称）
 fn offline_uuid(player_name: &str) -> String {
@@ -139,7 +140,7 @@ pub struct LauncherConfig {
     pub max_memory: String,
 }
 
-pub fn run_command(args: Vec<String>, javaPath: PathBuf, MCPath: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+pub fn run_command(args: Vec<String>, javaPath: PathBuf, MCPath: PathBuf, app_handle: tauri::AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     // 检查 Java 路径是否存在
     if !javaPath.exists() {
         return Err(format!("Java 路径不存在: {}", javaPath.display()).into());
@@ -188,12 +189,19 @@ pub fn run_command(args: Vec<String>, javaPath: PathBuf, MCPath: PathBuf) -> Res
         Ok(child) => {
             let pid = child.id();
             println!("游戏启动成功，进程ID: {}", pid);
-            // 在后台线程中等待进程结束，不阻塞前端
+            // 在后台线程中等待进程结束，结束时向前端发送事件
             thread::spawn(move || {
                 let mut child = child;
                 match child.wait() {
-                    Ok(status) => println!("游戏进程 {} 已结束，退出状态: {}", pid, status),
-                    Err(e) => println!("等待游戏进程 {} 时出错: {}", pid, e),
+                    Ok(status) => {
+                        let exit_code = status.code().unwrap_or(-1);
+                        println!("游戏进程 {} 已结束，退出状态: {}", pid, status);
+                        let _ = app_handle.emit("game-exited", exit_code);
+                    }
+                    Err(e) => {
+                        println!("等待游戏进程 {} 时出错: {}", pid, e);
+                        let _ = app_handle.emit("game-exited", -1i32);
+                    }
                 }
             });
             Ok(())
@@ -211,6 +219,7 @@ pub fn run_command(args: Vec<String>, javaPath: PathBuf, MCPath: PathBuf) -> Res
 }
 #[tauri::command]
 pub fn build_jvm_arguments(
+    app: tauri::AppHandle,
     minecraft_path: &str,
     java_path: &str,
     wrapper_path: &str,
@@ -228,13 +237,14 @@ pub fn build_jvm_arguments(
     window_height: &str
 ) -> Result<String, String> {
     build_jvm_arguments_inner(
-        minecraft_path, java_path, wrapper_path, max_memory, version_name,
+        app, minecraft_path, java_path, wrapper_path, max_memory, version_name,
         player_name, auth_token, uuid, authlib_injector_path, yggdrasil_api,
         prefetched_data, loadType, loadName, window_width, window_height,
     ).map_err(|e| e.to_string())
 }
 
 fn build_jvm_arguments_inner(
+    app_handle: tauri::AppHandle,
     minecraft_path: &str,
     java_path: &str,
     wrapper_path: &str,
@@ -830,7 +840,7 @@ fn build_jvm_arguments_inner(
     
     let arg = args.join(" ");
     println!("{}", arg);
-    run_command(args, PathBuf::from(java_path), minecraft_path_buf.clone())
+    run_command(args, PathBuf::from(java_path), minecraft_path_buf.clone(), app_handle)
         .map_err(|e| anyhow::anyhow!("{}", e))?;
     Ok(arg)
 }

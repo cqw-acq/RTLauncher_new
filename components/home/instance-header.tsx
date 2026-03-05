@@ -16,7 +16,6 @@ interface InstanceHeaderProps {
   instanceName: string;
   minecraftVersion: string;
   loader: string;
-  modsCount: number;
   selectedProfile: Account | null;
   onOpenProfileSelector: () => void;
   className?: string;
@@ -26,7 +25,6 @@ export function InstanceHeader({
   instanceName,
   minecraftVersion,
   loader,
-  modsCount,
   selectedProfile,
   onOpenProfileSelector,
   className,
@@ -61,9 +59,6 @@ export function InstanceHeader({
             <Badge variant="outline" className="text-xs">
               {loader}
             </Badge>
-            <span className="text-xs text-muted-foreground">
-              {modsCount} mods
-            </span>
           </div>
         </div>
       </div>
@@ -94,25 +89,32 @@ export function InstanceHeader({
           </Link>
         </Button>
 
-        <LaunchButton />
+        <LaunchButton instanceName={instanceName} />
       </div>
       </Card>
     </motion.div>
   );
 }
 
-function LaunchButton() {
-  const { status, launchGame } = useLaunchContext();
+function LaunchButton({ instanceName }: { instanceName: string }) {
+  const { status, launchGame, config } = useLaunchContext();
   const isLaunching = status === "preparing" || status === "launching";
   const isRunning = status === "running";
   const canLaunch = !isLaunching && !isRunning;
+
+  const handleLaunch = () => {
+    // 使用实例名视为 versionName，在配置没有设置版本时也能正常启动
+    launchGame({
+      versionName: config.versionName || instanceName,
+    });
+  };
 
   return (
     <Button
       size="default"
       className="gap-1.5"
       disabled={!canLaunch}
-      onClick={() => launchGame()}
+      onClick={handleLaunch}
     >
       {isLaunching ? (
         <>

@@ -14,8 +14,8 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import {
-  Paintbrush,
-  Info,
+  FolderOpen,
+  ImageIcon,
   MessageSquare,
   BadgeCheck,
   Smile,
@@ -23,6 +23,11 @@ import {
 } from "lucide-react";
 import { Cpu } from "lucide-react";
 import { fadeSlideUp } from "@/lib/motion";
+import type { InstanceData } from "@/types";
+import { useInstancePath } from "@/hooks/use-instance-path";
+import { useDirFiles } from "@/hooks/use-dir-files";
+import { useResourcePacks } from "@/hooks/use-resource-packs";
+import { useLaunchContext } from "@/components/launch/launch-provider";
 
 interface InfoItemProps {
   label: string;
@@ -54,7 +59,24 @@ function InfoItem({ label, value, tooltip, icon }: InfoItemProps) {
   );
 }
 
-export function InstanceInfoCard() {
+export function InstanceInfoCard({ instance }: { instance?: InstanceData | null }) {
+  const mcVersion = instance?.minecraft_version ?? "—";
+  const loader = instance?.loader ?? "—";
+  const modsCount = instance != null ? String(instance.mods_count) : "—";
+
+  // 存档数量 & 资源包数量
+  const { instanceDir } = useInstancePath();
+  const { entries: worldEntries } = useDirFiles(
+    instanceDir ? `${instanceDir}/saves` : undefined
+  );
+  const worldsCount = instance != null
+    ? String(worldEntries.filter((e) => e.is_dir).length)
+    : "—";
+  const { packs: resourcePacks } = useResourcePacks(instanceDir ?? undefined);
+  const resourcePacksCount = instance != null ? String(resourcePacks.length) : "—";
+
+  const { lastLaunchTime } = useLaunchContext();
+
   return (
     <motion.div
       variants={fadeSlideUp}
@@ -74,39 +96,39 @@ export function InstanceInfoCard() {
 
       <CardContent className="relative flex-1 space-y-3">
         <InfoItem
-          label="实例名称"
-          value="RTL World"
-          tooltip="Minecraft 实例的显示名称"
-          icon={<Paintbrush className="size-4" />}
+          label="存档数量"
+          value={worldsCount}
+          tooltip="saves/ 目录中的世界存档数量"
+          icon={<FolderOpen className="size-4" />}
         />
         <InfoItem
-          label="实例 ID"
-          value="RTLE-001"
-          tooltip="实例的唯一标识符"
-          icon={<Info className="size-4" />}
+          label="资源包数量"
+          value={resourcePacksCount}
+          tooltip="resourcepacks/ 目录中的材质包数量"
+          icon={<ImageIcon className="size-4" />}
         />
         <InfoItem
           label="游戏版本"
-          value="1.21.8"
+          value={mcVersion}
           tooltip="Minecraft 版本号"
           icon={<MessageSquare className="size-4" />}
         />
         <InfoItem
           label="加载器"
-          value="Fabric"
+          value={loader}
           tooltip="模组加载器"
           icon={<BadgeCheck className="size-4" />}
         />
         <InfoItem
-          label="启动次数"
-          value="247"
-          tooltip="总启动次数"
+          label="模组数量"
+          value={modsCount}
+          tooltip="mods/ 目录中的文件数量"
           icon={<Smile className="size-4" />}
         />
         <InfoItem
           label="上次启动"
-          value="2小时前"
-          tooltip="最后一次启动的时间"
+          value={lastLaunchTime ?? "—"}
+          tooltip="最后一次游戏进程退出的时间"
           icon={<Clock className="size-4" />}
         />
       </CardContent>

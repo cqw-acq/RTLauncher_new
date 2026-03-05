@@ -189,3 +189,57 @@ export type LaunchLogEntry = {
  * 多人联机模式
  */
 export type MultiplayerMode = "host" | "join";
+
+/**
+ * vm_list_dir 返回的条目信息
+ */
+export type DirEntry = {
+  /** 文件或目录名（不含路径） */
+  name: string;
+  /** 是否为目录 */
+  is_dir: boolean;
+  /** 文件扩展名（小写，不含点；目录为空字符串） */
+  extension: string;
+  /** 文件大小（字节），目录为 0 */
+  size: number;
+};
+
+// ── version_management 后端返回类型 ──────────────────────────────
+
+/**
+ * vm_scan_instances 返回的单个实例数据
+ */
+export type InstanceData = {
+  /** 实例目录名（同时作为实例关键标识符） */
+  name: string;
+  /** Minecraft 版本号（从版本 JSON 的 inheritsFrom 字段推断） */
+  minecraft_version: string;
+  /** 加载器类型（Vanilla / Fabric / Forge / Quilt / NeoForge / LiteLoader） */
+  loader: string;
+  /** mods/ 目录中的 mod 文件数量 */
+  mods_count: number;
+};
+
+/**
+ * vm_find_resource_packs 返回的单个材质包信息
+ */
+export type ResourcePackInfo = {
+  /** 材质包目录名 */
+  name: string;
+  /** pack.png 的绝对路径（不存在时为空字符串） */
+  icon_path: string;
+  /** 基于 pack_format 推断的 MC 版本范围描述 */
+  mc_version_range: string;
+};
+
+/**
+ * vm_parse_level_dat 返回的 level.dat 解析结果
+ */
+export type LevelDatInfo = {
+  /** 世界种子（字符串格式的整数） */
+  seed: string;
+  keep_inventory: boolean;
+  mob_griefing: boolean;
+  do_fire_tick: boolean;
+  allow_commands: boolean;
+};
