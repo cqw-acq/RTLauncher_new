@@ -10,6 +10,7 @@ import { DownloadProvider } from "@/components/download/download-provider";
 import { DownloadTaskList } from "@/components/download/download-task-list";
 import { LaunchProvider } from "@/components/launch/launch-provider";
 import { MultiplayerProvider } from "@/components/multiplayer/multiplayer-provider";
+import { PageTransition } from "@/components/page-transition";
 
 const figtree = Figtree({ subsets: ["latin"], variable: "--font-sans" });
 
@@ -53,7 +54,9 @@ export default function RootLayout({
 
                 <div className="flex flex-1 overflow-hidden">
                   <Sidebar />
-                  <main className="flex-1 overflow-hidden">{children}</main>
+                  <main className="flex-1 overflow-hidden">
+                    <PageTransition>{children}</PageTransition>
+                  </main>
                 </div>
 
                 <DownloadTaskList />

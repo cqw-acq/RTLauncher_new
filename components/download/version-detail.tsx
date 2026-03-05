@@ -1,12 +1,14 @@
 "use client";
 
 import { useState } from "react";
+import { AnimatePresence, motion } from "framer-motion";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { LoaderSelector } from "@/components/download/loader-selector";
 import { LoaderVersionList } from "@/components/download/loader-version-list";
 import { useDownloadManager } from "@/components/download/download-provider";
 import { ArrowLeft } from "lucide-react";
+import { slideInFromRight, slideInFromLeft } from "@/lib/motion";
 import type { MinecraftVersion, LoaderType, LoaderVersion } from "@/types";
 import { LOADER_OPTIONS, LOADER_VERSIONS } from "@/constants/data";
 
@@ -118,18 +120,36 @@ export function VersionDetail({ version, onBack }: VersionDetailProps) {
 
       {/* 内容区域 */}
       <div className="flex-1 min-h-0 overflow-y-auto p-1">
-        {selectedLoader && selectedLoaderInfo ? (
-          <LoaderVersionList
-            loaderName={selectedLoaderInfo.name}
-            versions={loaderVersions}
-            onInstall={handleInstallLoaderVersion}
-          />
-        ) : (
-          <LoaderSelector
-            versionId={version.id}
-            onSelectLoader={handleSelectLoader}
-          />
-        )}
+        <AnimatePresence mode="wait">
+          {selectedLoader && selectedLoaderInfo ? (
+            <motion.div
+              key="loader-versions"
+              variants={slideInFromRight}
+              initial="initial"
+              animate="animate"
+              exit="exit"
+            >
+              <LoaderVersionList
+                loaderName={selectedLoaderInfo.name}
+                versions={loaderVersions}
+                onInstall={handleInstallLoaderVersion}
+              />
+            </motion.div>
+          ) : (
+            <motion.div
+              key="loader-selector"
+              variants={slideInFromLeft}
+              initial="initial"
+              animate="animate"
+              exit="exit"
+            >
+              <LoaderSelector
+                versionId={version.id}
+                onSelectLoader={handleSelectLoader}
+              />
+            </motion.div>
+          )}
+        </AnimatePresence>
       </div>
     </div>
   );

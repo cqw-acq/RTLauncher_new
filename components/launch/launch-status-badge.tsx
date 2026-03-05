@@ -1,7 +1,9 @@
 "use client";
 
+import { AnimatePresence, motion } from "framer-motion";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
+import { fadeIn } from "@/lib/motion";
 import {
   Circle,
   Loader2,
@@ -58,10 +60,21 @@ export function LaunchStatusBadge({ status, className }: LaunchStatusBadgeProps)
   return (
     <Badge
       variant="outline"
-      className={cn("gap-1.5", cfg.color, className)}
+      className={cn("gap-1.5 overflow-hidden", cfg.color, className)}
     >
-      {cfg.icon}
-      {cfg.label}
+      <AnimatePresence mode="wait" initial={false}>
+        <motion.span
+          key={status}
+          variants={fadeIn}
+          initial="initial"
+          animate="animate"
+          exit="exit"
+          className="flex items-center gap-1.5"
+        >
+          {cfg.icon}
+          {cfg.label}
+        </motion.span>
+      </AnimatePresence>
     </Badge>
   );
 }

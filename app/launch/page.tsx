@@ -1,9 +1,11 @@
 "use client";
 
 import { Rocket } from "lucide-react";
+import { motion } from "framer-motion";
 import { LaunchConfigCard } from "@/components/launch/launch-config-card";
 import { LaunchPanel } from "@/components/launch/launch-panel";
 import { LaunchConsole } from "@/components/launch/launch-console";
+import { fadeSlideUp } from "@/lib/motion";
 
 /**
  * 启动页面
@@ -28,17 +30,29 @@ export default function LaunchPage() {
       {/* 主内容区 */}
       <div className="flex flex-col lg:flex-row gap-4 flex-1 min-h-0">
         {/* 左侧 - 启动配置 */}
-        <div className="w-full lg:w-1/2 xl:w-3/5 overflow-y-auto min-h-0">
+        <motion.div
+          variants={fadeSlideUp}
+          initial="initial"
+          animate="animate"
+          transition={{ delay: 0 }}
+          className="w-full lg:w-1/2 xl:w-3/5 overflow-y-auto min-h-0"
+        >
           <LaunchConfigCard />
-        </div>
+        </motion.div>
 
         {/* 右侧 - 启动面板 + 日志 */}
-        <div className="w-full lg:w-1/2 xl:w-2/5 flex flex-col gap-4 min-h-0">
+        <motion.div
+          variants={fadeSlideUp}
+          initial="initial"
+          animate="animate"
+          transition={{ delay: 0.1 }}
+          className="w-full lg:w-1/2 xl:w-2/5 flex flex-col gap-4 min-h-0"
+        >
           <LaunchPanel />
           <div className="flex-1 min-h-0">
             <LaunchConsole />
           </div>
-        </div>
+        </motion.div>
       </div>
     </div>
   );

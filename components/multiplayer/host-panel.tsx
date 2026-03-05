@@ -1,12 +1,14 @@
 "use client";
 
 import { useState } from "react";
+import { AnimatePresence, motion } from "framer-motion";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { useMultiplayerContext } from "@/components/multiplayer/multiplayer-provider";
+import { fadeSlideUp } from "@/lib/motion";
 import {
   Loader2,
   Server,
@@ -83,20 +85,28 @@ export function HostPanel() {
           </div>
 
           {/* 错误提示 */}
-          {hostStatus === "error" && hostError && (
-            <div className="flex items-start gap-2 rounded-xl bg-destructive/10 p-3 text-xs text-destructive">
-              <AlertCircle className="size-3.5 shrink-0 mt-0.5" />
-              <span>{hostError}</span>
-            </div>
-          )}
+          <AnimatePresence>
+            {hostStatus === "error" && hostError && (
+              <motion.div variants={fadeSlideUp} initial="initial" animate="animate" exit="exit">
+                <div className="flex items-start gap-2 rounded-xl bg-destructive/10 p-3 text-xs text-destructive">
+                  <AlertCircle className="size-3.5 shrink-0 mt-0.5" />
+                  <span>{hostError}</span>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
 
           {/* 运行状态 */}
-          {isRunning && (
-            <div className="flex items-center gap-2 rounded-xl bg-green-500/10 p-3 text-xs text-green-600 dark:text-green-400">
-              <Wifi className="size-3.5 shrink-0" />
-              <span>openp2p 已启动，等待好友连接...</span>
-            </div>
-          )}
+          <AnimatePresence>
+            {isRunning && (
+              <motion.div variants={fadeSlideUp} initial="initial" animate="animate" exit="exit">
+                <div className="flex items-center gap-2 rounded-xl bg-green-500/10 p-3 text-xs text-green-600 dark:text-green-400">
+                  <Wifi className="size-3.5 shrink-0" />
+                  <span>openp2p 已启动，等待好友连接...</span>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
 
           <Button
             className="w-full gap-2"
@@ -121,21 +131,32 @@ export function HostPanel() {
             )}
           </Button>
 
-          {isRunning && (
-            <Button
-              variant="outline"
-              className="w-full gap-2 text-destructive hover:text-destructive hover:bg-destructive/10"
-              onClick={handleHostDisconnect}
-            >
-              <WifiOff className="size-4" />
-              断开连接
-            </Button>
-          )}
+          <AnimatePresence>
+            {isRunning && (
+              <motion.div
+                initial={{ opacity: 0, height: 0 }}
+                animate={{ opacity: 1, height: "auto" }}
+                exit={{ opacity: 0, height: 0 }}
+                transition={{ duration: 0.2 }}
+              >
+                <Button
+                  variant="outline"
+                  className="w-full gap-2 text-destructive hover:text-destructive hover:bg-destructive/10"
+                  onClick={handleHostDisconnect}
+                >
+                  <WifiOff className="size-4" />
+                  断开连接
+                </Button>
+              </motion.div>
+            )}
+          </AnimatePresence>
         </CardContent>
       </Card>
 
       {/* 联机码 */}
+      <AnimatePresence>
       {hostJoinCode && (
+        <motion.div variants={fadeSlideUp} initial="initial" animate="animate" exit="exit">
         <Card size="sm">
           <CardContent className="space-y-3">
             <div className="flex items-center justify-between">
@@ -172,7 +193,9 @@ export function HostPanel() {
             </p>
           </CardContent>
         </Card>
+        </motion.div>
       )}
+      </AnimatePresence>
     </div>
   );
 }

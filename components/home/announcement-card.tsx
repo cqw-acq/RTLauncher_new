@@ -1,5 +1,6 @@
 "use client";
 
+import { AnimatePresence, motion } from "framer-motion";
 import {
   Card,
   CardContent,
@@ -11,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import { ANNOUNCEMENTS } from "@/constants/data";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { useState } from "react";
+import { slideLeftContent } from "@/lib/motion";
 
 export function AnnouncementCard() {
   const [current, setCurrent] = useState(0);
@@ -21,17 +23,27 @@ export function AnnouncementCard() {
     setCurrent((i) => (i + 1) % ANNOUNCEMENTS.length);
 
   return (
-    <Card className="h-full">
+    <Card className="h-full shadow-sm">
       <CardHeader>
         <CardTitle>公告栏</CardTitle>
         <CardDescription>最新消息和更新</CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col items-center justify-center gap-4">
-        <div className="w-full rounded-xl border p-4">
-          <h3 className="font-semibold">{ANNOUNCEMENTS[current].title}</h3>
-          <p className="mt-1 text-sm text-muted-foreground">
-            {ANNOUNCEMENTS[current].content}
-          </p>
+        <div className="w-full rounded-xl border p-4 overflow-hidden">
+          <AnimatePresence mode="wait">
+            <motion.div
+              key={current}
+              variants={slideLeftContent}
+              initial="initial"
+              animate="animate"
+              exit="exit"
+            >
+              <h3 className="font-semibold">{ANNOUNCEMENTS[current].title}</h3>
+              <p className="mt-1 text-sm text-muted-foreground">
+                {ANNOUNCEMENTS[current].content}
+              </p>
+            </motion.div>
+          </AnimatePresence>
         </div>
         <div className="flex items-center gap-2">
           <Button variant="outline" size="icon-sm" onClick={prev}>

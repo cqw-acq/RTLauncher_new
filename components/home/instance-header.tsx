@@ -1,5 +1,6 @@
 "use client";
 
+import { motion } from "framer-motion";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -9,6 +10,7 @@ import { cn } from "@/lib/utils";
 import { Play, Settings, Loader2 } from "lucide-react";
 import { useLaunchContext } from "@/components/launch/launch-provider";
 import Link from "next/link";
+import { fadeSlideUp } from "@/lib/motion";
 
 interface InstanceHeaderProps {
   instanceName: string;
@@ -30,12 +32,18 @@ export function InstanceHeader({
   className,
 }: InstanceHeaderProps) {
   return (
-    <Card
-      className={cn(
-        "flex flex-row items-center justify-between gap-4",
-        className
-      )}
+    <motion.div
+      variants={fadeSlideUp}
+      initial="initial"
+      animate="animate"
+      transition={{ delay: 0.05 }}
     >
+      <Card
+        className={cn(
+          "flex flex-row items-center justify-between gap-4",
+          className
+        )}
+      >
       <div className="flex items-center gap-4 px-4">
         {/* 实例图标 */}
         <div className="w-12 h-12 rounded-xl bg-gradient-to-r from-blue-500 to-cyan-500 flex items-center justify-center">
@@ -88,7 +96,8 @@ export function InstanceHeader({
 
         <LaunchButton />
       </div>
-    </Card>
+      </Card>
+    </motion.div>
   );
 }
 

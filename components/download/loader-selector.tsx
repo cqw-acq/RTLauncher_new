@@ -1,5 +1,6 @@
 "use client";
 
+import { motion } from "framer-motion";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import {
@@ -11,6 +12,7 @@ import {
 } from "@/components/ui/card";
 import { LOADER_OPTIONS } from "@/constants/data";
 import { isLoaderCompatible } from "@/lib/utils";
+import { staggerContainer, staggerItem } from "@/lib/motion";
 import type { LoaderType } from "@/types";
 import {
   Box,
@@ -55,56 +57,62 @@ export function LoaderSelector({ versionId, onSelectLoader }: LoaderSelectorProp
   );
 
   return (
-    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
+    <motion.div
+      className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3"
+      variants={staggerContainer}
+      initial="initial"
+      animate="animate"
+    >
       {compatibleLoaders.map((loader) => {
         const colors = loaderColors[loader.id];
         const isVanilla = loader.id === "vanilla";
         return (
-          <Card
-            key={loader.id}
-            className={cn(
-              "group cursor-pointer transition-all duration-200 hover:shadow-md",
-              colors.border
-            )}
-            onClick={() => onSelectLoader(loader.id)}
-          >
-            <CardHeader className="p-4 pb-2">
-              <div className="flex items-center justify-between">
-                <div
-                  className={cn(
-                    "flex size-10 items-center justify-center rounded-lg transition-transform duration-200 group-hover:scale-110",
-                    colors.bg
-                  )}
-                >
-                  <span className={colors.text}>{loaderIcons[loader.id]}</span>
-                </div>
-                {isVanilla ? (
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    className="opacity-0 group-hover:opacity-100 transition-opacity duration-200"
-                    aria-label={`使用 ${loader.name} 安装 ${versionId}`}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onSelectLoader(loader.id);
-                    }}
+          <motion.div key={loader.id} variants={staggerItem}>
+            <Card
+              className={cn(
+                "group cursor-pointer transition-all duration-200 shadow-sm hover:shadow-xl h-full",
+                colors.border
+              )}
+              onClick={() => onSelectLoader(loader.id)}
+            >
+              <CardHeader className="p-4 pb-2">
+                <div className="flex items-center justify-between">
+                  <div
+                    className={cn(
+                      "flex size-10 items-center justify-center rounded-lg transition-transform duration-200 group-hover:scale-110",
+                      colors.bg
+                    )}
                   >
-                    <Download className="size-4" />
-                  </Button>
-                ) : (
-                  <ChevronRight className="size-4 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity duration-200" />
-                )}
-              </div>
-              <CardTitle className="text-sm mt-2">{loader.name}</CardTitle>
-            </CardHeader>
-            <CardContent className="p-4 pt-0">
-              <CardDescription className="text-xs line-clamp-2">
-                {loader.description}
-              </CardDescription>
-            </CardContent>
-          </Card>
+                    <span className={colors.text}>{loaderIcons[loader.id]}</span>
+                  </div>
+                  {isVanilla ? (
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      className="opacity-0 group-hover:opacity-100 transition-opacity duration-200"
+                      aria-label={`使用 ${loader.name} 安装 ${versionId}`}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onSelectLoader(loader.id);
+                      }}
+                    >
+                      <Download className="size-4" />
+                    </Button>
+                  ) : (
+                    <ChevronRight className="size-4 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity duration-200" />
+                  )}
+                </div>
+                <CardTitle className="text-sm mt-2">{loader.name}</CardTitle>
+              </CardHeader>
+              <CardContent className="p-4 pt-0">
+                <CardDescription className="text-xs line-clamp-2">
+                  {loader.description}
+                </CardDescription>
+              </CardContent>
+            </Card>
+          </motion.div>
         );
       })}
-    </div>
+    </motion.div>
   );
 }

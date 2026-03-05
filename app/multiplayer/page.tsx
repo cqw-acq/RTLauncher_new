@@ -1,10 +1,12 @@
 "use client";
 
 import { Globe } from "lucide-react";
+import { AnimatePresence, motion } from "framer-motion";
 import { useMultiplayerContext } from "@/components/multiplayer/multiplayer-provider";
 import { HostPanel } from "@/components/multiplayer/host-panel";
 import { JoinPanel } from "@/components/multiplayer/join-panel";
 import { OpenP2PInstaller } from "@/components/multiplayer/openp2p-installer";
+import { fadeSlideUp } from "@/lib/motion";
 import { cn } from "@/lib/utils";
 
 const TABS = [
@@ -52,7 +54,17 @@ export default function MultiplayerPage() {
             ))}
           </div>
 
-          {mode === "host" ? <HostPanel /> : <JoinPanel />}
+          <AnimatePresence mode="wait" initial={false}>
+            <motion.div
+              key={mode}
+              variants={fadeSlideUp}
+              initial="initial"
+              animate="animate"
+              exit="exit"
+            >
+              {mode === "host" ? <HostPanel /> : <JoinPanel />}
+            </motion.div>
+          </AnimatePresence>
         </div>
 
         {/* 右侧：openp2p 安装器（拖入文件安装） */}

@@ -1,10 +1,12 @@
 "use client";
 
+import { AnimatePresence, motion } from "framer-motion";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useMultiplayerContext } from "@/components/multiplayer/multiplayer-provider";
+import { fadeSlideUp } from "@/lib/motion";
 import {
   Loader2,
   Users,
@@ -93,23 +95,31 @@ export function JoinPanel() {
         </div>
 
         {/* 错误提示 */}
-        {joinStatus === "error" && joinError && (
-          <div className="flex items-start gap-2 rounded-xl bg-destructive/10 p-3 text-xs text-destructive">
-            <AlertCircle className="size-3.5 shrink-0 mt-0.5" />
-            <span>{joinError}</span>
-          </div>
-        )}
+        <AnimatePresence>
+          {joinStatus === "error" && joinError && (
+            <motion.div variants={fadeSlideUp} initial="initial" animate="animate" exit="exit">
+              <div className="flex items-start gap-2 rounded-xl bg-destructive/10 p-3 text-xs text-destructive">
+                <AlertCircle className="size-3.5 shrink-0 mt-0.5" />
+                <span>{joinError}</span>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
 
         {/* 运行状态 */}
-        {isRunning && (
-          <div className="flex items-center gap-2 rounded-xl bg-green-500/10 p-3 text-xs text-green-600 dark:text-green-400">
-            <Wifi className="size-3.5 shrink-0" />
-            <span>
-              已成功连接！在 Minecraft 中以{" "}
-              <code className="font-mono">127.0.0.1</code> 加入服务器即可
-            </span>
-          </div>
-        )}
+        <AnimatePresence>
+          {isRunning && (
+            <motion.div variants={fadeSlideUp} initial="initial" animate="animate" exit="exit">
+              <div className="flex items-center gap-2 rounded-xl bg-green-500/10 p-3 text-xs text-green-600 dark:text-green-400">
+                <Wifi className="size-3.5 shrink-0" />
+                <span>
+                  已成功连接！在 Minecraft 中以{" "}
+                  <code className="font-mono">127.0.0.1</code> 加入服务器即可
+                </span>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
 
         <Button
           className="w-full gap-2"
@@ -136,16 +146,25 @@ export function JoinPanel() {
           )}
         </Button>
 
-        {isRunning && (
-          <Button
-            variant="outline"
-            className="w-full gap-2 text-destructive hover:text-destructive hover:bg-destructive/10"
-            onClick={handleDisconnect}
-          >
-            <WifiOff className="size-4" />
-            断开连接
-          </Button>
-        )}
+        <AnimatePresence>
+          {isRunning && (
+            <motion.div
+              initial={{ opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: "auto" }}
+              exit={{ opacity: 0, height: 0 }}
+              transition={{ duration: 0.2 }}
+            >
+              <Button
+                variant="outline"
+                className="w-full gap-2 text-destructive hover:text-destructive hover:bg-destructive/10"
+                onClick={handleDisconnect}
+              >
+                <WifiOff className="size-4" />
+                断开连接
+              </Button>
+            </motion.div>
+          )}
+        </AnimatePresence>
       </CardContent>
     </Card>
   );

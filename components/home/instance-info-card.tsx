@@ -1,5 +1,6 @@
 "use client";
 
+import { motion } from "framer-motion";
 import {
   Card,
   CardContent,
@@ -21,6 +22,7 @@ import {
   Clock,
 } from "lucide-react";
 import { Cpu } from "lucide-react";
+import { fadeSlideUp } from "@/lib/motion";
 
 interface InfoItemProps {
   label: string;
@@ -54,21 +56,17 @@ function InfoItem({ label, value, tooltip, icon }: InfoItemProps) {
 
 export function InstanceInfoCard() {
   return (
-    <Card className="h-full group relative overflow-hidden hover:shadow-xl transition-all duration-300 cursor-pointer flex flex-col border hover:border-primary/50">
-      {/* 卡片边框发光效果 */}
-      <div
-        className="absolute inset-0 rounded-2xl opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none"
-        style={{
-          boxShadow:
-            "inset 0 0 20px rgba(59, 130, 246, 0.3), inset 0 0 40px rgba(6, 182, 212, 0.2)",
-        }}
-      />
+    <motion.div
+      variants={fadeSlideUp}
+      initial="initial"
+      animate="animate"
+      transition={{ delay: 0.15 }}
+      className="h-full"
+    >
+      <Card className="h-full relative overflow-hidden shadow-sm hover:shadow-xl transition-all duration-300 cursor-pointer flex flex-col border">
       <CardHeader className="relative">
-        <div className="w-14 h-14 mb-4 relative">
-          <div className="absolute inset-0 bg-gradient-to-r from-blue-500 to-cyan-500 rounded-xl opacity-20" />
-          <div className="absolute inset-0 flex items-center justify-center">
-            <Cpu className="size-8 text-blue-600 dark:text-blue-400" />
-          </div>
+        <div className="w-14 h-14 mb-4 flex items-center justify-center rounded-xl bg-muted">
+          <Cpu className="size-8 text-muted-foreground" />
         </div>
         <CardTitle className="text-xl font-bold">实例信息</CardTitle>
         <CardDescription>查看实例详情</CardDescription>
@@ -113,5 +111,6 @@ export function InstanceInfoCard() {
         />
       </CardContent>
     </Card>
+    </motion.div>
   );
 }

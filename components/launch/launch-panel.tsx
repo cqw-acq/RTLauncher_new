@@ -4,9 +4,11 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { AnimatePresence, motion } from "framer-motion";
 import { useLaunchContext } from "@/components/launch/launch-provider";
 import { useAccountContext } from "@/components/accounts/account-provider";
 import { LaunchStatusBadge } from "@/components/launch/launch-status-badge";
+import { fadeSlideUp } from "@/lib/motion";
 import {
   Play,
   Loader2,
@@ -72,12 +74,21 @@ export function LaunchPanel() {
         </div>
 
         {/* 错误信息 */}
-        {errorMessage && (
-          <div className="flex items-start gap-2 rounded-xl bg-destructive/10 p-3 text-xs text-destructive">
-            <AlertCircle className="size-3.5 shrink-0 mt-0.5" />
-            <span>{errorMessage}</span>
-          </div>
-        )}
+        <AnimatePresence>
+          {errorMessage && (
+            <motion.div
+              variants={fadeSlideUp}
+              initial="initial"
+              animate="animate"
+              exit="exit"
+            >
+              <div className="flex items-start gap-2 rounded-xl bg-destructive/10 p-3 text-xs text-destructive">
+                <AlertCircle className="size-3.5 shrink-0 mt-0.5" />
+                <span>{errorMessage}</span>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
 
         {/* 启动按钮 */}
         <Button

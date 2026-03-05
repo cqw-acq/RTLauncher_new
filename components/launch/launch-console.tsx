@@ -3,6 +3,7 @@
 import { useEffect, useRef } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { AnimatePresence, motion } from "framer-motion";
 import { useLaunchContext } from "@/components/launch/launch-provider";
 import { Terminal, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -36,17 +37,26 @@ export function LaunchConsole() {
           <Terminal className="size-4 text-primary" />
           启动日志
         </CardTitle>
-        {logs.length > 0 && (
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-7 px-2 text-xs"
-            onClick={clearLogs}
-          >
-            <Trash2 className="size-3 mr-1" />
-            清空
-          </Button>
-        )}
+        <AnimatePresence>
+          {logs.length > 0 && (
+            <motion.div
+              initial={{ opacity: 0, scale: 0.8 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.8 }}
+              transition={{ duration: 0.15 }}
+            >
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 px-2 text-xs"
+                onClick={clearLogs}
+              >
+                <Trash2 className="size-3 mr-1" />
+                清空
+              </Button>
+            </motion.div>
+          )}
+        </AnimatePresence>
       </CardHeader>
       <CardContent className="flex-1 min-h-0">
         <div
@@ -59,7 +69,13 @@ export function LaunchConsole() {
             </p>
           ) : (
             logs.map((log) => (
-              <div key={log.id} className="flex gap-2">
+              <motion.div
+                key={log.id}
+                initial={{ opacity: 0, x: -4 }}
+                animate={{ opacity: 1, x: 0 }}
+                transition={{ duration: 0.15 }}
+                className="flex gap-2"
+              >
                 <span className="shrink-0 text-muted-foreground/60">
                   [{log.timestamp}]
                 </span>
@@ -71,7 +87,7 @@ export function LaunchConsole() {
                 >
                   {log.message}
                 </span>
-              </div>
+              </motion.div>
             ))
           )}
         </div>

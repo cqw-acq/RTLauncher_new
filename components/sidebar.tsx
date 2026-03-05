@@ -11,6 +11,7 @@ import {
 } from "lucide-react"
 import Link from "next/link"
 import { usePathname } from "next/navigation"
+import { motion } from "framer-motion"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import {
@@ -80,10 +81,18 @@ function NavButton({ item, isActive }: { item: NavItem; isActive: boolean }) {
               variant="ghost"
               size="icon"
               className={cn(
-                isActive && "bg-accent text-accent-foreground"
+                "relative overflow-hidden",
+                isActive && "text-accent-foreground"
               )}
             >
-              {item.icon}
+              {isActive && (
+                <motion.span
+                  layoutId="active-nav-indicator"
+                  className="absolute inset-0 rounded-md bg-accent"
+                  transition={{ type: "spring", stiffness: 380, damping: 30 }}
+                />
+              )}
+              <span className="relative z-10">{item.icon}</span>
             </Button>
           )}
         </Link>
