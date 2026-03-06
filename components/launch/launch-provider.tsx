@@ -144,8 +144,8 @@ export function LaunchProvider({ children }: { children: React.ReactNode }) {
     let unlisten: (() => void) | null = null;
     listen<{ level: string; message: string }>("game-log", (event) => {
       const { level, message } = event.payload;
-      const logLevel =
-        level === "error" || level === "warn" ? (level as "error" | "warn") : "info";
+      const logLevel: "error" | "info" | "warn" =
+        level === "error" || level === "warn" ? level : "info";
       setLogs((prev) => {
         const next = [
           ...prev,
