@@ -13,6 +13,27 @@ import {
 } from "@/components/ui/select";
 import { useLaunchContext } from "@/components/launch/launch-provider";
 import { FolderOpen, HardDrive, Cpu, Package, User, Monitor } from "lucide-react";
+import { useState, useEffect } from "react";
+import { invoke } from "@tauri-apps/api/core";
+
+interface MemoryInfo {
+  totalMB: number;
+  usedMB: number;
+}
+
+function useSystemMemory(): MemoryInfo {
+  const [info, setInfo] = useState<MemoryInfo>({ totalMB: 0, usedMB: 0 });
+
+  useEffect(() => {
+    invoke<{ total_mb: number; used_mb: number }>("get_system_memory")
+      .then(({ total_mb, used_mb }) =>
+        setInfo({ totalMB: total_mb, usedMB: used_mb })
+      )
+      .catch(() => {});
+  }, []);
+
+  return info;
+}
 
 /**
  * 启动配置卡片
@@ -20,6 +41,7 @@ import { FolderOpen, HardDrive, Cpu, Package, User, Monitor } from "lucide-react
  */
 export function LaunchConfigCard() {
   const { config, updateConfig } = useLaunchContext();
+  const { totalMB, usedMB } = useSystemMemory();
 
   const handleOpenFileDialog = async (
     field: "minecraftPath" | "javaPath" | "wrapperPath"
@@ -139,14 +161,35 @@ export function LaunchConfigCard() {
 
         {/* 最大内存 */}
         <div className="space-y-1.5">
-          <Label className="text-xs text-muted-foreground">
-            最大内存 (MB)
-          </Label>
+          <div className="flex items-center justify-between">
+            <Label className="text-xs text-muted-foreground">
+              最大内存 (MB)
+            </Label>
+            {totalMB > 0 && (
+              <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
+                <span>系统总计 <span className="text-foreground font-medium">{totalMB >= 1024 ? `${totalMB / 1024} GB` : `${totalMB} MB`}</span></span>
+                {usedMB > 0 && (
+                  <>
+                    <span className="text-muted-foreground/40">·</span>
+                    <span>已占用 <span className="text-foreground font-medium">{usedMB} MB</span></span>
+                  </>
+                )}
+              </div>
+            )}
+          </div>
+          {totalMB > 0 && (
+            <div className="w-full h-1 rounded-full bg-muted overflow-hidden">
+              <div
+                className="h-full rounded-full bg-primary/40 transition-all"
+                style={{ width: `${Math.min(100, (Number(config.maxMemory) / totalMB) * 100)}%` }}
+              />
+            </div>
+          )}
           <div className="flex items-center gap-3">
             <input
               type="range"
               min={1024}
-              max={16384}
+              max={totalMB > 0 ? totalMB : 16384}
               step={512}
               value={Number(config.maxMemory) || 4096}
               onChange={(e) => updateConfig({ maxMemory: e.target.value })}
@@ -163,6 +206,11 @@ export function LaunchConfigCard() {
           </div>
           <p className="text-[10px] text-muted-foreground">
             建议分配系统内存的 50%–75%
+            {totalMB > 0 && (
+              <span className="ml-1 text-muted-foreground/60">
+                （{Math.round(totalMB * 0.5)}–{Math.round(totalMB * 0.75)} MB）
+              </span>
+            )}
           </p>
         </div>
 

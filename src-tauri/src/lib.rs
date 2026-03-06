@@ -5,6 +5,7 @@ mod mutiplayer;
 mod version_management;
 use handler::launcher::build_jvm_arguments;
 use handler::skinloader::get_avatar_base64;
+use handler::system::get_system_memory;
 use downloader::dwPatch::{download_patcher, cancel_download};
 use downloader::version_fetcher::classify_minecraft_versions;
 use downloader::decompression::extract_library_paths;
@@ -33,7 +34,7 @@ const NS_WINDOW_STYLE_MASK_FULL_SIZE_CONTENT_VIEW: u64 = 1 << 15;
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![build_jvm_arguments,download_patcher,cancel_download,classify_minecraft_versions,extract_library_paths,useMethod,thirdPartyLogin,getAccountList,getPlayerSkin,ms_request_device_code,ms_poll_and_login,get_avatar_base64,mp_host_room,mp_join_room,mp_encode_info,mp_disconnect,mp_install_openp2p,mp_check_openp2p,vm_scan_instances,vm_find_resource_packs,vm_parse_level_dat,vm_modify_game_rule,vm_list_dir])
+        .invoke_handler(tauri::generate_handler![build_jvm_arguments,download_patcher,cancel_download,classify_minecraft_versions,extract_library_paths,useMethod,thirdPartyLogin,getAccountList,getPlayerSkin,ms_request_device_code,ms_poll_and_login,get_avatar_base64,mp_host_room,mp_join_room,mp_encode_info,mp_disconnect,mp_install_openp2p,mp_check_openp2p,vm_scan_instances,vm_find_resource_packs,vm_parse_level_dat,vm_modify_game_rule,vm_list_dir,get_system_memory])
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             if cfg!(debug_assertions) {
