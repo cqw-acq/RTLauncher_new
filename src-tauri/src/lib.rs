@@ -48,7 +48,8 @@ pub fn run() {
             } else {
                 let win_builder = WebviewWindowBuilder::new(app, "main", WebviewUrl::default())
                     .title("RTLauncher")
-                    .inner_size(1200.0, 800.0)
+                    .inner_size(1280.0, 800.0)
+                    .min_inner_size(1024.0, 640.0)
                     .center()
                     .resizable(true)
                     .fullscreen(false)

@@ -1,15 +1,18 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import { invoke } from "@tauri-apps/api/core";
 import { useMultiplayerContext } from "@/components/multiplayer/multiplayer-provider";
-import { AlertCircle, CheckCircle2, Loader2, UploadCloud } from "lucide-react";
+import { AlertCircle, CheckCircle2, Loader2, UploadCloud, X } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
 type InstallStatus = "checking" | "not_installed" | "installed" | "installing" | "success" | "error";
 
 export function OpenP2PInstaller() {
   const { installOpenp2p } = useMultiplayerContext();
+  const router = useRouter();
 
   const [status, setStatus] = useState<InstallStatus>("checking");
   const [installedPath, setInstalledPath] = useState<string | null>(null);
@@ -17,6 +20,15 @@ export function OpenP2PInstaller() {
   const [isDragOver, setIsDragOver] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [closing, setClosing] = useState(false);
+
+  const handleExit = () => {
+    setClosing(true);
+    setTimeout(() => {
+      setDialogOpen(false);
+      setClosing(false);
+      router.push("/");
+    }, 300);
+  };
 
   // 用 ref 追踪 dialogOpen，避免 effect 重新注册
   const dialogOpenRef = useRef(dialogOpen);
@@ -109,8 +121,17 @@ export function OpenP2PInstaller() {
           )}
         >          {/* 遮罩 */}
           <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" />
-          {/* 对话框（不可关闭，必须完成安装） */}
+          {/* 对话框 */}
           <div className="relative z-10 w-full max-w-md mx-4 rounded-2xl bg-background border shadow-2xl p-6 space-y-4">
+            <Button
+              variant="ghost"
+              size="icon"
+              className="absolute top-3 right-3 size-7 text-muted-foreground hover:text-foreground"
+              onClick={handleExit}
+              disabled={status === "installing"}
+            >
+              <X className="size-4" />
+            </Button>
             <div className="space-y-0.5">
               <h3 className="text-sm font-semibold">安装 openp2p</h3>
               <p className="text-[11px] text-muted-foreground">
@@ -159,6 +180,7 @@ export function OpenP2PInstaller() {
                 <span>{errorMsg}</span>
               </div>
             )}
+
           </div>
         </div>
       )}

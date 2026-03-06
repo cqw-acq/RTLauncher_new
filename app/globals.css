@@ -125,6 +125,42 @@
   }
 }
 
+/* ============================================================
+   分辨率响应式缩放 (Resolution-Responsive Scaling)
+   通过调整 html font-size 对所有 rem 单位等比缩放
+
+   720P  (≤ 768px 高):  12px — 紧凑布局
+   1080P (默认基准)  :  14px — 标准布局
+   2K/2.7K (≥ 1440px): 18px — 宽松布局
+   4K    (≥ 2160px 高): 24px — 超大布局
+   ============================================================ */
+
+/* 基准：1080P Full HD — 使用 WebView 原生默认值，与未适配时完全一致 */
+html {
+  font-size: 100%;
+}
+
+/* 720P HD (≤ 720px height) */
+@media screen and (max-height: 720px) {
+  html {
+    font-size: 81.25%; /* ~13px */
+  }
+}
+
+/* 2K / 2.7K / QHD (≥ 1440px height) */
+@media screen and (min-height: 1440px) {
+  html {
+    font-size: 20px;
+  }
+}
+
+/* 4K / UHD (≥ 2160px height) */
+@media screen and (min-height: 2160px) {
+  html {
+    font-size: 28px;
+  }
+}
+
 /* Tauri Custom Titlebar Drag Region */
 *[data-tauri-drag-region] {
   app-region: drag;
@@ -144,10 +180,10 @@
   -webkit-user-select: none;
 }
 
-/* Custom scrollbar for the app */
+/* Custom scrollbar for the app — 使用 rem 随分辨率缩放 */
 ::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+  width: 0.5rem;
+  height: 0.5rem;
 }
 
 ::-webkit-scrollbar-track {
@@ -156,7 +192,7 @@
 
 ::-webkit-scrollbar-thumb {
   background: color-mix(in oklch, var(--muted-foreground) 30%, transparent);
-  border-radius: 4px;
+  border-radius: 0.25rem;
 }
 
 ::-webkit-scrollbar-thumb:hover {
