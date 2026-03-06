@@ -37,6 +37,14 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![build_jvm_arguments,download_patcher,cancel_download,classify_minecraft_versions,extract_library_paths,useMethod,thirdPartyLogin,getAccountList,getPlayerSkin,ms_request_device_code,ms_poll_and_login,get_avatar_base64,mp_host_room,mp_join_room,mp_encode_info,mp_disconnect,mp_install_openp2p,mp_check_openp2p,vm_scan_instances,vm_find_resource_packs,vm_parse_level_dat,vm_modify_game_rule,vm_list_dir,get_system_memory])
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
+            #[cfg(not(target_os = "macos"))]
+            app.handle().plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.show();
+                    let _ = window.unminimize();
+                    let _ = window.set_focus();
+                }
+            }))?;
             if cfg!(debug_assertions) {
                 app.handle().plugin(
                     tauri_plugin_log::Builder::default()

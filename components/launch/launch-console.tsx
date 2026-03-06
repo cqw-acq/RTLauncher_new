@@ -1,11 +1,17 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { AnimatePresence, motion } from "framer-motion";
 import { useLaunchContext } from "@/components/launch/launch-provider";
-import { Terminal, Trash2 } from "lucide-react";
+import { Maximize2, Terminal, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const levelColors: Record<string, string> = {
@@ -14,6 +20,44 @@ const levelColors: Record<string, string> = {
   error: "text-destructive",
 };
 
+/** 日志内容（可复用） */
+function LogLines({ logs }: { logs: ReturnType<typeof useLaunchContext>["logs"] }) {
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [logs]);
+
+  return (
+    <div
+      ref={scrollRef}
+      className="h-full overflow-y-auto rounded-xl bg-muted/50 p-3 font-mono text-xs leading-relaxed"
+    >
+      {logs.length === 0 ? (
+        <p className="text-muted-foreground/50 select-none">等待启动...</p>
+      ) : (
+        logs.map((log) => (
+          <motion.div
+            key={log.id}
+            initial={{ opacity: 0, x: -4 }}
+            animate={{ opacity: 1, x: 0 }}
+            transition={{ duration: 0.15 }}
+            className="flex gap-2"
+          >
+            <span className="shrink-0 text-muted-foreground/60">
+              [{log.timestamp}]
+            </span>
+            <span className={cn("break-all", levelColors[log.level] ?? "text-foreground")}>
+              {log.message}
+            </span>
+          </motion.div>
+        ))
+      )}
+    </div>
+  );
+}
+
 /**
  * 启动日志控制台
  * 显示启动过程的日志输出
@@ -21,6 +65,7 @@ const levelColors: Record<string, string> = {
 export function LaunchConsole() {
   const { logs, clearLogs } = useLaunchContext();
   const scrollRef = useRef<HTMLDivElement>(null);
+  const [open, setOpen] = useState(false);
 
   // 自动滚动到底部
   useEffect(() => {
@@ -31,67 +76,105 @@ export function LaunchConsole() {
   }, [logs]);
 
   return (
-    <Card size="sm" className="flex flex-col min-h-0">
-      <CardHeader className="flex-row items-center justify-between">
-        <CardTitle className="flex items-center gap-2 text-sm">
-          <Terminal className="size-4 text-primary" />
-          启动日志
-        </CardTitle>
-        <AnimatePresence>
-          {logs.length > 0 && (
-            <motion.div
-              initial={{ opacity: 0, scale: 0.8 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.8 }}
-              transition={{ duration: 0.15 }}
+    <>
+      <Card size="sm" className="flex flex-col min-h-0">
+        <CardHeader className="flex-row items-center justify-between">
+          <CardTitle className="flex items-center gap-2 text-sm">
+            <Terminal className="size-4 text-primary" />
+            启动日志
+          </CardTitle>
+          <div className="flex items-center gap-1">
+            <AnimatePresence>
+              {logs.length > 0 && (
+                <motion.div
+                  initial={{ opacity: 0, scale: 0.8 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  exit={{ opacity: 0, scale: 0.8 }}
+                  transition={{ duration: 0.15 }}
+                >
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 px-2 text-xs"
+                    onClick={clearLogs}
+                  >
+                    <Trash2 className="size-3 mr-1" />
+                    清空
+                  </Button>
+                </motion.div>
+              )}
+            </AnimatePresence>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 w-7 p-0"
+              onClick={() => setOpen(true)}
             >
+              <Maximize2 className="size-3.5" />
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent className="flex-1 min-h-0">
+          <div
+            ref={scrollRef}
+            className="h-48 overflow-y-auto rounded-xl bg-muted/50 p-3 font-mono text-xs leading-relaxed"
+          >
+            {logs.length === 0 ? (
+              <p className="text-muted-foreground/50 select-none">
+                等待启动...
+              </p>
+            ) : (
+              logs.map((log) => (
+                <motion.div
+                  key={log.id}
+                  initial={{ opacity: 0, x: -4 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  transition={{ duration: 0.15 }}
+                  className="flex gap-2"
+                >
+                  <span className="shrink-0 text-muted-foreground/60">
+                    [{log.timestamp}]
+                  </span>
+                  <span
+                    className={cn(
+                      "break-all",
+                      levelColors[log.level] ?? "text-foreground"
+                    )}
+                  >
+                    {log.message}
+                  </span>
+                </motion.div>
+              ))
+            )}
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* 放大弹窗 */}
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent className="flex flex-col h-[80vh]">
+          <DialogHeader>
+            <DialogTitle>
+              <Terminal className="size-4 text-primary" />
+              启动日志
+            </DialogTitle>
+            {logs.length > 0 && (
               <Button
                 variant="ghost"
                 size="sm"
-                className="h-7 px-2 text-xs"
+                className="h-7 px-2 text-xs mr-8"
                 onClick={clearLogs}
               >
                 <Trash2 className="size-3 mr-1" />
                 清空
               </Button>
-            </motion.div>
-          )}
-        </AnimatePresence>
-      </CardHeader>
-      <CardContent className="flex-1 min-h-0">
-        <div
-          ref={scrollRef}
-          className="h-48 overflow-y-auto rounded-xl bg-muted/50 p-3 font-mono text-xs leading-relaxed"
-        >
-          {logs.length === 0 ? (
-            <p className="text-muted-foreground/50 select-none">
-              等待启动...
-            </p>
-          ) : (
-            logs.map((log) => (
-              <motion.div
-                key={log.id}
-                initial={{ opacity: 0, x: -4 }}
-                animate={{ opacity: 1, x: 0 }}
-                transition={{ duration: 0.15 }}
-                className="flex gap-2"
-              >
-                <span className="shrink-0 text-muted-foreground/60">
-                  [{log.timestamp}]
-                </span>
-                <span
-                  className={cn(
-                    "break-all",
-                    levelColors[log.level] ?? "text-foreground"
-                  )}
-                >
-                  {log.message}
-                </span>
-              </motion.div>
-            ))
-          )}
-        </div>
-      </CardContent>
-    </Card>
+            )}
+          </DialogHeader>
+          <div className="flex-1 min-h-0 p-4">
+            <LogLines logs={logs} />
+          </div>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }

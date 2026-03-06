@@ -120,6 +120,26 @@ export function LaunchProvider({ children }: { children: React.ReactNode }) {
     logIdRef.current = 0;
   }, []);
 
+  // 监听游戏日志事件（来自 Minecraft log4j stdout/stderr）
+  useEffect(() => {
+    let unlisten: (() => void) | null = null;
+    listen<{ level: string; message: string }>("game-log", (event) => {
+      const { level, message } = event.payload;
+      const logLevel =
+        level === "error" || level === "warn" ? (level as "error" | "warn") : "info";
+      setLogs((prev) => [
+        ...prev,
+        {
+          id: ++logIdRef.current,
+          timestamp: new Date().toLocaleTimeString(),
+          level: logLevel,
+          message,
+        },
+      ]);
+    }).then((fn) => { unlisten = fn; });
+    return () => { unlisten?.(); };
+  }, []);
+
   // 监听游戏进程退出事件
   useEffect(() => {
     let unlisten: (() => void) | null = null;

@@ -1,4 +1,4 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashSet, HashMap},
     path::PathBuf,
@@ -8,10 +8,46 @@ use os_info::Type;
 use anyhow::Context;
 use regex::Regex;
 use std::{
-    process::Command,
+    io::{BufRead, BufReader},
+    process::{Command, Stdio},
     thread,
 };
 use tauri::Emitter;
+
+/// 游戏日志事件，发送给前端的结构体
+#[derive(Debug, Clone, Serialize)]
+struct GameLogEvent {
+    level: String,
+    message: String,
+}
+
+/// 解析 Minecraft log4j 日志行，提取日志级别
+/// 支持格式: [HH:MM:SS] [Thread/LEVEL]: message
+fn parse_log_level(line: &str) -> &'static str {
+    // 查找 [XXX/LEVEL] 模式（log4j2 标准格式）
+    if let Some(start) = line.find('[') {
+        if let Some(end) = line[start..].find(']') {
+            let tag = &line[start + 1..start + end];
+            if let Some(slash) = tag.rfind('/') {
+                let level = &tag[slash + 1..];
+                match level.to_uppercase().as_str() {
+                    "ERROR" | "FATAL" => return "error",
+                    "WARN" | "WARNING" => return "warn",
+                    _ => {}
+                }
+            }
+        }
+    }
+    // fallback: 全文扫描关键词
+    let u = line.to_uppercase();
+    if u.contains("[ERROR]") || u.contains("[FATAL]") || u.contains("STDERR:") {
+        "error"
+    } else if u.contains("[WARN]") || u.contains("[WARNING]") {
+        "warn"
+    } else {
+        "info"
+    }
+}
 
 /// 为离线玩家生成稳定的 UUID v3（基于玩家名称）
 fn offline_uuid(player_name: &str) -> String {
@@ -184,14 +220,55 @@ pub fn run_command(args: Vec<String>, javaPath: PathBuf, MCPath: PathBuf, app_ha
     };
     command.current_dir(&MCPath);
     command.args(&args);
+    // 捕获标准输出和错误输出以便转发日志到前端
+    command.stdout(Stdio::piped());
+    command.stderr(Stdio::piped());
 
     match command.spawn() {
-        Ok(child) => {
+        Ok(mut child) => {
             let pid = child.id();
             println!("游戏启动成功，进程ID: {}", pid);
+
+            // 从子进程取出 stdout/stderr 管道
+            let stdout = child.stdout.take();
+            let stderr = child.stderr.take();
+
+            // 读取 stdout 并逐行转发给前端
+            if let Some(out) = stdout {
+                let handle = app_handle.clone();
+                thread::spawn(move || {
+                    let reader = BufReader::new(out);
+                    for line in reader.lines() {
+                        if let Ok(line) = line {
+                            let level = parse_log_level(&line).to_string();
+                            let _ = handle.emit("game-log", GameLogEvent {
+                                level,
+                                message: line,
+                            });
+                        }
+                    }
+                });
+            }
+
+            // 读取 stderr 并逐行转发给前端（通常为错误/警告信息）
+            if let Some(err) = stderr {
+                let handle = app_handle.clone();
+                thread::spawn(move || {
+                    let reader = BufReader::new(err);
+                    for line in reader.lines() {
+                        if let Ok(line) = line {
+                            let level = parse_log_level(&line).to_string();
+                            let _ = handle.emit("game-log", GameLogEvent {
+                                level,
+                                message: line,
+                            });
+                        }
+                    }
+                });
+            }
+
             // 在后台线程中等待进程结束，结束时向前端发送事件
             thread::spawn(move || {
-                let mut child = child;
                 match child.wait() {
                     Ok(status) => {
                         let exit_code = status.code().unwrap_or(-1);

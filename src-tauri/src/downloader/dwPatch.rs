@@ -37,9 +37,9 @@ struct DownloadFinishedPayload {
 }
 
 /// 获取平台对应的 Minecraft 数据目录
-/// - macOS:   ~/Library/Application Support/RTLauncher
+/// - macOS:   ~/Library/Application Support/RTLauncher/version
 /// - Linux:   ~/.minecraft
-/// - Windows: %APPDATA%\.minecraft
+/// - Windows: <启动器所在目录>/minecraft
 pub fn get_minecraft_dir() -> Result<PathBuf, String> {
     #[cfg(target_os = "macos")]
     {
@@ -53,8 +53,12 @@ pub fn get_minecraft_dir() -> Result<PathBuf, String> {
     }
     #[cfg(target_os = "windows")]
     {
-        let appdata = std::env::var("APPDATA").map_err(|_| "无法获取 APPDATA 环境变量".to_string())?;
-        Ok(PathBuf::from(appdata).join(".minecraft"))
+        let exe_dir = std::env::current_exe()
+            .map_err(|e| format!("无法获取当前可执行文件路径: {}", e))?
+            .parent()
+            .ok_or_else(|| "无法获取可执行文件父目录".to_string())?
+            .to_path_buf();
+        Ok(exe_dir.join("minecraft"))
     }
 }
 
