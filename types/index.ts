@@ -140,6 +140,22 @@ export type LoaderVersion = {
 export type LaunchStatus = "idle" | "preparing" | "launching" | "running" | "stopped" | "error";
 
 /**
+ * 存储在 config/launcher.json 中的路径配置
+ */
+export type LauncherPathsConfig = {
+  /** Java 可执行文件路径列表 */
+  java_paths: string[];
+  /** 当前选中的 Java 路径 */
+  selected_java_path: string;
+  /** 游戏目录路径列表 */
+  minecraft_paths: string[];
+  /** 当前选中的游戏目录 */
+  selected_minecraft_path: string;
+  /** 平台默认 .minecraft 路径（只读展示） */
+  default_minecraft_path: string;
+};
+
+/**
  * 游戏启动配置
  */
 export type LaunchConfig = {

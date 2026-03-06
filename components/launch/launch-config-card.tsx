@@ -12,9 +12,21 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useLaunchContext } from "@/components/launch/launch-provider";
-import { FolderOpen, HardDrive, Cpu, Package, User, Monitor } from "lucide-react";
-import { useState, useEffect } from "react";
+import {
+  FolderOpen,
+  HardDrive,
+  Cpu,
+  Package,
+  User,
+  Monitor,
+  Plus,
+  X,
+  CheckCircle2,
+  Circle,
+} from "lucide-react";
+import { useState, useEffect, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import type { LauncherPathsConfig } from "@/types";
 
 interface MemoryInfo {
   totalMB: number;
@@ -35,6 +47,54 @@ function useSystemMemory(): MemoryInfo {
   return info;
 }
 
+/** 路径列表条目 */
+function PathItem({
+  path,
+  isSelected,
+  isDefault,
+  canRemove,
+  onSelect,
+  onRemove,
+}: {
+  path: string;
+  isSelected: boolean;
+  isDefault?: boolean;
+  canRemove: boolean;
+  onSelect: () => void;
+  onRemove: () => void;
+}) {
+  return (
+    <div
+      className={`flex items-center gap-1.5 rounded-md px-2 py-1 cursor-pointer transition-colors text-xs group ${
+        isSelected
+          ? "bg-primary/10 text-primary"
+          : "hover:bg-muted text-muted-foreground"
+      }`}
+      onClick={onSelect}
+    >
+      {isSelected ? (
+        <CheckCircle2 className="size-3 shrink-0 text-primary" />
+      ) : (
+        <Circle className="size-3 shrink-0 opacity-40" />
+      )}
+      <span className="flex-1 break-all leading-snug">{path}</span>
+      {isDefault && (
+        <span className="shrink-0 rounded px-1 py-0.5 text-[9px] font-medium bg-muted text-muted-foreground leading-none">
+          默认
+        </span>
+      )}
+      {canRemove && (
+        <button
+          className="shrink-0 opacity-0 group-hover:opacity-100 transition-opacity hover:text-destructive"
+          onClick={(e) => { e.stopPropagation(); onRemove(); }}
+        >
+          <X className="size-3" />
+        </button>
+      )}
+    </div>
+  );
+}
+
 /**
  * 启动配置卡片
  * 设置 Java 路径、内存、版本等启动参数
@@ -43,34 +103,70 @@ export function LaunchConfigCard() {
   const { config, updateConfig } = useLaunchContext();
   const { totalMB, usedMB } = useSystemMemory();
 
-  const handleOpenFileDialog = async (
-    field: "minecraftPath" | "javaPath" | "wrapperPath"
-  ) => {
+  const [pathsCfg, setPathsCfg] = useState<LauncherPathsConfig>({
+    java_paths: [],
+    selected_java_path: "",
+    minecraft_paths: [],
+    selected_minecraft_path: "",
+    default_minecraft_path: "",
+  });
+
+  useEffect(() => {
+    invoke<LauncherPathsConfig>("get_launcher_paths_config")
+      .then((cfg) => setPathsCfg(cfg))
+      .catch(() => {});
+  }, []);
+
+  const savePaths = useCallback(
+    async (next: LauncherPathsConfig) => {
+      setPathsCfg(next);
+      try {
+        await invoke("save_launcher_paths_config", { config: next });
+      } catch { /* ignore */ }
+      if (next.selected_java_path) updateConfig({ javaPath: next.selected_java_path });
+      if (next.selected_minecraft_path) updateConfig({ minecraftPath: next.selected_minecraft_path });
+    },
+    [updateConfig]
+  );
+
+  const openDialog = async (mode: "java" | "minecraft") => {
     try {
-      // 动态导入 dialog 插件，若不可用则静默跳过
       const mod = await import("@tauri-apps/plugin-dialog" as string);
       const open = mod.open;
-      const isDir = field === "minecraftPath";
-      const result = isDir
-        ? await open({ directory: true, multiple: false })
-        : await open({
-            multiple: false,
-            filters: [
-              {
-                name: "Executable",
-                extensions:
-                  field === "javaPath"
-                    ? ["exe", ""]
-                    : ["jar", "exe", ""],
-              },
-            ],
-          });
-      if (result) {
-        updateConfig({ [field]: result as string });
+      const result =
+        mode === "minecraft"
+          ? await open({ directory: true, multiple: false })
+          : await open({ multiple: false, filters: [{ name: "Executable", extensions: ["exe", ""] }] });
+      if (!result) return;
+      const path = result as string;
+      if (mode === "java") {
+        if (pathsCfg.java_paths.includes(path)) return;
+        await savePaths({
+          ...pathsCfg,
+          java_paths: [...pathsCfg.java_paths, path],
+          selected_java_path: path,
+        });
+      } else {
+        if (pathsCfg.minecraft_paths.includes(path)) return;
+        await savePaths({
+          ...pathsCfg,
+          minecraft_paths: [...pathsCfg.minecraft_paths, path],
+          selected_minecraft_path: path,
+        });
       }
-    } catch {
-      // 若 dialog 插件不可用，忽略错误（用户可手动输入路径）
-    }
+    } catch { /* dialog 不可用或用户取消 */ }
+  };
+
+  const handleOpenFileDialog = async (field: "wrapperPath") => {
+    try {
+      const mod = await import("@tauri-apps/plugin-dialog" as string);
+      const open = mod.open;
+      const result = await open({
+        multiple: false,
+        filters: [{ name: "Executable", extensions: ["jar", "exe", ""] }],
+      });
+      if (result) updateConfig({ [field]: result as string });
+    } catch { /* ignore */ }
   };
 
   return (
@@ -82,54 +178,108 @@ export function LaunchConfigCard() {
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
-        {/* Minecraft 路径 */}
+        {/* 游戏目录 — 路径列表 */}
         <div className="space-y-1.5">
-          <Label className="text-xs text-muted-foreground">
-            <HardDrive className="size-3" />
-            游戏目录
-          </Label>
-          <div className="flex gap-2">
-            <Input
-              placeholder=".minecraft 目录路径"
-              value={config.minecraftPath}
-              onChange={(e) =>
-                updateConfig({ minecraftPath: e.target.value })
-              }
-              className="text-xs h-8"
-            />
+          <div className="flex items-center justify-between">
+            <Label className="text-xs text-muted-foreground">
+              <HardDrive className="size-3" />
+              游戏目录
+            </Label>
             <Button
-              variant="outline"
+              variant="ghost"
               size="sm"
-              className="shrink-0 h-8 px-2"
-              onClick={() => handleOpenFileDialog("minecraftPath")}
+              className="h-6 px-2 text-[10px] text-muted-foreground gap-1"
+              onClick={() => openDialog("minecraft")}
             >
-              <FolderOpen className="size-3.5" />
+              <Plus className="size-3" /> 添加
             </Button>
           </div>
+          {/* 默认路径始终显示 */}
+          {pathsCfg.default_minecraft_path && (
+            <PathItem
+              path={pathsCfg.default_minecraft_path}
+              isSelected={pathsCfg.selected_minecraft_path === pathsCfg.default_minecraft_path}
+              isDefault
+              canRemove={false}
+              onSelect={() =>
+                savePaths({ ...pathsCfg, selected_minecraft_path: pathsCfg.default_minecraft_path })
+              }
+              onRemove={() => {}}
+            />
+          )}
+          {/* 用户手动添加的路径 */}
+          {pathsCfg.minecraft_paths
+            .filter((p) => p !== pathsCfg.default_minecraft_path)
+            .map((p) => (
+              <PathItem
+                key={p}
+                path={p}
+                isSelected={pathsCfg.selected_minecraft_path === p}
+                canRemove
+                onSelect={() => savePaths({ ...pathsCfg, selected_minecraft_path: p })}
+                onRemove={() => {
+                  const next = {
+                    ...pathsCfg,
+                    minecraft_paths: pathsCfg.minecraft_paths.filter((x) => x !== p),
+                    selected_minecraft_path:
+                      pathsCfg.selected_minecraft_path === p
+                        ? pathsCfg.default_minecraft_path
+                        : pathsCfg.selected_minecraft_path,
+                  };
+                  savePaths(next);
+                }}
+              />
+            ))}
+          {!pathsCfg.default_minecraft_path &&
+            pathsCfg.minecraft_paths.length === 0 && (
+              <p className="text-[10px] text-muted-foreground/60 px-1">
+                点击"添加"选择游戏目录
+              </p>
+            )}
         </div>
 
-        {/* Java 路径 */}
+        {/* Java 路径 — 路径列表 */}
         <div className="space-y-1.5">
-          <Label className="text-xs text-muted-foreground">
-            <Cpu className="size-3" />
-            Java 路径
-          </Label>
-          <div className="flex gap-2">
-            <Input
-              placeholder="java 可执行文件路径"
-              value={config.javaPath}
-              onChange={(e) => updateConfig({ javaPath: e.target.value })}
-              className="text-xs h-8"
-            />
+          <div className="flex items-center justify-between">
+            <Label className="text-xs text-muted-foreground">
+              <Cpu className="size-3" />
+              Java 路径
+            </Label>
             <Button
-              variant="outline"
+              variant="ghost"
               size="sm"
-              className="shrink-0 h-8 px-2"
-              onClick={() => handleOpenFileDialog("javaPath")}
+              className="h-6 px-2 text-[10px] text-muted-foreground gap-1"
+              onClick={() => openDialog("java")}
             >
-              <FolderOpen className="size-3.5" />
+              <Plus className="size-3" /> 添加
             </Button>
           </div>
+          {pathsCfg.java_paths.length === 0 ? (
+            <p className="text-[10px] text-muted-foreground/60 px-1">
+              点击"添加"选择 Java 可执行文件
+            </p>
+          ) : (
+            pathsCfg.java_paths.map((p) => (
+              <PathItem
+                key={p}
+                path={p}
+                isSelected={pathsCfg.selected_java_path === p}
+                canRemove
+                onSelect={() => savePaths({ ...pathsCfg, selected_java_path: p })}
+                onRemove={() => {
+                  const nextPaths = pathsCfg.java_paths.filter((x) => x !== p);
+                  savePaths({
+                    ...pathsCfg,
+                    java_paths: nextPaths,
+                    selected_java_path:
+                      pathsCfg.selected_java_path === p
+                        ? (nextPaths[0] ?? "")
+                        : pathsCfg.selected_java_path,
+                  });
+                }}
+              />
+            ))
+          )}
         </div>
 
         {/* Wrapper 路径（可选） */}

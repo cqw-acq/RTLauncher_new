@@ -66,18 +66,32 @@ export function useLaunchContext() {
 export function LaunchProvider({ children }: { children: React.ReactNode }) {
   const [config, setConfig] = useState<LaunchConfig>(DEFAULT_LAUNCH_CONFIG);
 
-  // 客户端挂载后从 localStorage 恢复配置，避免 SSR hydration 不匹配
+  // 客户端挂载后从 localStorage 恢复配置，再用 Tauri config 覆盖路径字段
   useEffect(() => {
-    try {
-      const saved = localStorage.getItem("rtl-launch-config");
-      if (saved) {
-        setConfig((prev) => ({ ...prev, ...JSON.parse(saved) }));
-      }
-      const savedTime = localStorage.getItem("rtl-last-launch-time");
-      if (savedTime) setLastLaunchTime(savedTime);
-    } catch {
-      // ignore
-    }
+    let cancelled = false;
+    const init = async () => {
+      let base: Partial<LaunchConfig> = {};
+      try {
+        const saved = localStorage.getItem("rtl-launch-config");
+        if (saved) base = JSON.parse(saved);
+        const savedTime = localStorage.getItem("rtl-last-launch-time");
+        if (savedTime) setLastLaunchTime(savedTime);
+      } catch { /* ignore */ }
+
+      // 从 Tauri config 目录加载选中路径，优先级高于 localStorage
+      try {
+        const pathsCfg = await invoke<{
+          selected_java_path: string;
+          selected_minecraft_path: string;
+        }>("get_launcher_paths_config");
+        if (pathsCfg.selected_java_path) base.javaPath = pathsCfg.selected_java_path;
+        if (pathsCfg.selected_minecraft_path) base.minecraftPath = pathsCfg.selected_minecraft_path;
+      } catch { /* 不可用时保留 localStorage 值 */ }
+
+      if (!cancelled) setConfig((prev) => ({ ...prev, ...base }));
+    };
+    init();
+    return () => { cancelled = true; };
   }, []);
 
   const [status, setStatus] = useState<LaunchStatus>("idle");
