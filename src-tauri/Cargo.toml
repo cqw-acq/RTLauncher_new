@@ -31,6 +31,7 @@ webbrowser = "0.8"
 image = { version = "0.24", features = ["png"] }
 tauri = { version = "2.10.0", features = ["macos-private-api"] }
 tauri-plugin-log = "2"
+tauri-plugin-dialog = "2"
 regex = "1.5"
 os_info = "3.0.0"
 anyhow = "1.0"
