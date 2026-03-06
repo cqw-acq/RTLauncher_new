@@ -1,89 +1,142 @@
-name: 'Tauri App Build Test'
+name: 'Tauri App Build PR Test'
 
 on:
   push:
     branches:
-      - main
-
-# This workflow will build your tauri app without uploading it anywhere.
+      - main  # main 有提交时触发
+  pull_request:
+    branches:
+      - main  # 有 PR 到 main 时触发
+    types: [opened, synchronize, labeled]
 
 jobs:
   test-tauri:
+    # 逻辑：如果是 push 到 main，或者 PR 状态符合条件，或者有特定标签则运行
+    if: |
+      github.event_name == 'push' ||
+      github.event.action == 'opened' || 
+      github.event.action == 'synchronize' || 
+      (github.event.action == 'labeled' && github.event.label.name == '需要 Action 构建')
+    
+    permissions:
+      contents: read
+      pull-requests: write
+
     strategy:
       fail-fast: false
       matrix:
         include:
-          - platform: 'macos-latest' # for Arm based macs (M1 and above).
+          - platform: 'macos-latest'
             args: '--target aarch64-apple-darwin'
-          - platform: 'macos-latest' # for Intel based macs.
+            name: 'macOS ARM64'
+            artifact_name: 'macos-arm64'
+            bundle_path: 'src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg'
+          - platform: 'macos-latest'
             args: '--target x86_64-apple-darwin'
-          - platform: 'ubuntu-22.04' # for Tauri v1 you could replace this with ubuntu-20.04.
+            name: 'macOS x64'
+            artifact_name: 'macos-x64'
+            bundle_path: 'src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/*.dmg'
+          - platform: 'ubuntu-22.04'
             args: ''
+            name: 'Linux'
+            artifact_name: 'linux'
+            bundle_path: 'src-tauri/target/release/bundle/deb/*.deb'
           - platform: 'windows-latest'
             args: ''
+            name: 'Windows'
+            artifact_name: 'windows'
+            bundle_path: 'src-tauri/target/release/bundle/msi/*.msi'
 
     runs-on: ${{ matrix.platform }}
-    steps:
-      - uses: actions/checkout@v4
 
-      - name: setup node
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v3
+        with:
+          version: 8
+
+      - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: lts/*
+          cache: 'pnpm'
 
-      - name: enable corepack
-        run: corepack enable
-
-      - name: install Rust stable
+      - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          # Those targets are only used on macos runners so it's in an `if` to slightly speed up windows and linux builds.
           targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
 
-      - name: install dependencies (ubuntu only)
-        if: matrix.platform == 'ubuntu-22.04' # This must match the platform value defined above.
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.platform }}-${{ matrix.args }}-${{ hashFiles('src-tauri/Cargo.lock') }}
+
+      - if: matrix.platform == 'ubuntu-22.04'
+        name: Install Linux dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
 
-      - name: install frontend dependencies
+      - name: Install JS dependencies
         run: pnpm install
 
-      # If tagName and releaseId are omitted tauri-action will only build the app and won't try to upload any assets.
-      - uses: tauri-apps/tauri-action@v0
-        id: tauri-build  # 添加 id 以便后续引用
+      - name: Build Tauri App
+        uses: tauri-apps/tauri-action@v0
+        id: tauri-build
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CARGO_INCREMENTAL: 1
+          RUSTFLAGS: ${{ matrix.platform == 'macos-latest' && '-C split-debuginfo=unpacked' || '' }}
         with:
           args: ${{ matrix.args }}
 
-      # ===== 上传构建产物 =====
-      - name: upload artifacts (macOS)
-        if: matrix.platform == 'macos-latest'
+      - name: Upload Bundles
         uses: actions/upload-artifact@v4
         with:
-          name: tauri-app-${{ matrix.args == '--target aarch64-apple-darwin' && 'macos-arm64' || 'macos-x64' }}
-          path: |
-            src-tauri/target/*/release/bundle/**/*.dmg
-            src-tauri/target/*/release/bundle/**/*.app
-          if-no-files-found: warn
+          name: ${{ matrix.artifact_name }}-bundle
+          path: ${{ matrix.bundle_path }}
+          if-no-files-found: error
+          retention-days: 7
 
-      - name: upload artifacts (Ubuntu)
-        if: matrix.platform == 'ubuntu-22.04'
-        uses: actions/upload-artifact@v4
-        with:
-          name: tauri-app-linux
-          path: |
-            src-tauri/target/release/bundle/**/*.AppImage
-            src-tauri/target/release/bundle/**/*.deb
-          if-no-files-found: warn
+    outputs:
+      result: ${{ job.status }}
 
-      - name: upload artifacts (Windows)
-        if: matrix.platform == 'windows-latest'
-        uses: actions/upload-artifact@v4
+  report-status:
+    needs: test-tauri
+    # 仅在 PR 环境下运行评论功能，避免 push 到 main 时找不到 PR 会报错
+    if: always() && github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Report build status
+        uses: actions/github-script@v7
         with:
-          name: tauri-app-windows
-          path: |
-            src-tauri/target/release/bundle/**/*.msi
-            src-tauri/target/release/bundle/**/*.exe
-          if-no-files-found: warn
+          script: |
+            const runUrl = `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            let body = ('${{ needs.test-tauri.result }}' === 'success') 
+              ? `### ✅ 构建成功！\n\n[点击前往下载页面并查看产物](${runUrl})` 
+              : `### ❌ 构建失败\n\n请检查 [构建日志](${runUrl})`;
+
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: body
+            });
+
+      - name: Remove build label
+        if: always() && github.event.action == 'labeled' && github.event.label.name == '需要 Action 构建'
+        continue-on-error: true
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.removeLabel({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              name: '需要 Action 构建'
+            });
