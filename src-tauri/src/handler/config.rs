@@ -30,7 +30,7 @@ fn default_minecraft_path() -> String {
             .ok()
             .and_then(|p| p.parent().map(|d| d.to_path_buf()))
             .unwrap_or_else(|| std::path::PathBuf::from("."));
-        return exe_dir.join("rtl").join("minecraft").to_string_lossy().to_string();
+        return exe_dir.join("minecraft").to_string_lossy().to_string();
     }
     #[cfg(target_os = "macos")]
     {
