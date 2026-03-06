@@ -19,7 +19,7 @@ import {
   MessageSquare,
   BadgeCheck,
   Smile,
-  Clock,
+  Sparkles,
 } from "lucide-react";
 import { Cpu } from "lucide-react";
 import { fadeSlideUp } from "@/lib/motion";
@@ -27,7 +27,7 @@ import type { InstanceData } from "@/types";
 import { useInstancePath } from "@/hooks/use-instance-path";
 import { useDirFiles } from "@/hooks/use-dir-files";
 import { useResourcePacks } from "@/hooks/use-resource-packs";
-import { useLaunchContext } from "@/components/launch/launch-provider";
+
 
 interface InfoItemProps {
   label: string;
@@ -75,7 +75,10 @@ export function InstanceInfoCard({ instance }: { instance?: InstanceData | null 
   const { packs: resourcePacks } = useResourcePacks(instanceDir ?? undefined);
   const resourcePacksCount = instance != null ? String(resourcePacks.length) : "—";
 
-  const { lastLaunchTime } = useLaunchContext();
+  const { entries: shaderEntries } = useDirFiles(
+    instanceDir ? `${instanceDir}/shaderpacks` : undefined
+  );
+  const shadersCount = instance != null ? String(shaderEntries.length) : "—";
 
   return (
     <motion.div
@@ -126,10 +129,10 @@ export function InstanceInfoCard({ instance }: { instance?: InstanceData | null 
           icon={<Smile className="size-4" />}
         />
         <InfoItem
-          label="上次启动"
-          value={lastLaunchTime ?? "—"}
-          tooltip="最后一次游戏进程退出的时间"
-          icon={<Clock className="size-4" />}
+          label="光影包数量"
+          value={shadersCount}
+          tooltip="shaderpacks/ 目录中的光影包数量"
+          icon={<Sparkles className="size-4" />}
         />
       </CardContent>
     </Card>

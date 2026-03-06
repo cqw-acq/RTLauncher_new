@@ -119,6 +119,12 @@ export default function Home() {
           <ProfileCard
             selectedProfile={selectedProfile}
             onOpenProfileSelector={() => setIsProfileSelectorOpen(true)}
+            instanceName={selectedInstance?.name ?? ""}
+            versionDisplay={
+              selectedInstance
+                ? `${selectedInstance.minecraft_version}${selectedInstance.loader ? ` ${selectedInstance.loader}` : ""}`
+                : "未配置实例"
+            }
           />
         </div>
 
