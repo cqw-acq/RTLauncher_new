@@ -44,7 +44,8 @@ jobs:
             args: ''
             name: 'Windows'
             artifact_name: 'windows'
-            bundle_path: 'src-tauri/target/release/bundle/msi/*.msi'
+            # 核心修改：专门提取 NSIS 生成的 setup.exe 文件
+            bundle_path: 'src-tauri/target/release/bundle/nsis/*.exe'
 
     runs-on: ${{ matrix.platform }}
 
@@ -52,7 +53,6 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # --- 1. 前端环境与缓存优化 ---
       - name: Setup pnpm
         uses: pnpm/action-setup@v3
         with:
@@ -64,7 +64,6 @@ jobs:
           node-version: lts/*
           cache: 'pnpm'
 
-      # --- 2. Rust 环境与增量编译缓存 ---
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -73,9 +72,9 @@ jobs:
       - name: Rust Cache
         uses: Swatinem/rust-cache@v2
         with:
+          workspaces: "src-tauri -> target"
           key: ${{ matrix.platform }}-${{ matrix.args }}-${{ hashFiles('src-tauri/Cargo.lock') }}
 
-      # --- 3. 系统依赖安装 (仅 Linux) ---
       - if: matrix.platform == 'ubuntu-22.04'
         name: Install Linux dependencies
         run: |
@@ -83,10 +82,8 @@ jobs:
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
 
       - name: Install JS dependencies
-        # 核心修复：增加 --ignore-workspace 避免配置失效导致的 ERR_PNPM_INVALID_WORKSPACE_CONFIGURATION
         run: pnpm install --ignore-workspace
 
-      # --- 4. 执行 Tauri 构建 ---
       - name: Build Tauri App
         uses: tauri-apps/tauri-action@v0
         id: tauri-build
@@ -97,7 +94,6 @@ jobs:
         with:
           args: ${{ matrix.args }}
 
-      # --- 5. 产物上传 (只提取 .dmg/.msi/.deb) ---
       - name: Upload Bundles
         uses: actions/upload-artifact@v4
         with:
@@ -111,7 +107,6 @@ jobs:
 
   report-status:
     needs: test-tauri
-    # 仅在 PR 环境下尝试发表评论，避免在 main 分支直接提交时报错
     if: always() && github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     permissions:
@@ -122,13 +117,9 @@ jobs:
         with:
           script: |
             const runUrl = `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
-            
-            let body;
-            if ('${{ needs.test-tauri.result }}' === 'success') {
-              body = `### ✅ 构建成功！\n\n编译已完成，您可以点击下方链接跳转到页面底部的 **Artifacts** 处下载安装包：\n\n🔗 [查看构建产物](${runUrl})\n\n> 💡 **小贴士**: 本次已启用增量编译缓存，后续构建速度将显著提升。`;
-            } else {
-              body = `### ❌ 构建失败\n\n编译过程中遇到了错误，请查看日志排查：\n\n🔗 [查看错误日志](${runUrl})`;
-            }
+            let body = ('${{ needs.test-tauri.result }}' === 'success') 
+              ? `### ✅ 构建成功！\n\nWindows 版 Setup.exe 及其他平台安装包已生成。\n\n[点击前往下载页面](${runUrl})` 
+              : `### ❌ 构建失败\n\n请检查 [错误日志](${runUrl})`;
 
             await github.rest.issues.createComment({
               issue_number: context.issue.number,
@@ -150,6 +141,4 @@ jobs:
                 repo: context.repo.repo,
                 name: '需要 Action 构建'
               });
-            } catch (e) {
-              console.log('无法移除标签，可能已被手动移除');
-            }
+            } catch (e) {}
