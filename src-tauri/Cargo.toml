@@ -50,6 +50,8 @@ objc2-app-kit = { version = "0.3.2", features = ["NSColor", "NSWindow"] }
 
 [target."cfg(target_os = \"windows\")".dependencies]
 winapi = { version = "0.3", features = ["processthreadsapi", "securitybaseapi", "winnt", "shellapi", "winuser"] }
+
+[target.'cfg(not(target_os = "macos"))'.dependencies]
 tauri-plugin-single-instance = "2"
 
 [target."cfg(unix)".dependencies]
