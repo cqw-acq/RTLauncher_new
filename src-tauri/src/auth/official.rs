@@ -59,6 +59,16 @@ struct Xui {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
+struct XSTSErrorResponse {
+    #[serde(rename = "XErr")]
+    x_err: Option<u64>,
+    #[serde(rename = "Message")]
+    message: Option<String>,
+    #[serde(rename = "Redirect")]
+    redirect: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
 struct MinecraftLoginResponse {
     username: String,
     access_token: String,
@@ -160,13 +170,33 @@ async fn get_xsts_token(
         "RelyingParty": "rp://api.minecraftservices.com/",
         "TokenType": "JWT"
     });
-    let response = client
+    let resp = client
         .post("https://xsts.auth.xboxlive.com/xsts/authorize")
         .json(&body)
         .send()
-        .await?
-        .json::<XboxLiveTokenResponse>()
         .await?;
+    let status = resp.status();
+    let text = resp.text().await?;
+    if !status.is_success() {
+        // 尝试解析 XSTS 错误响应
+        let xsts_err_msg = if let Ok(err_resp) = serde_json::from_str::<XSTSErrorResponse>(&text) {
+            match err_resp.x_err {
+                Some(2148916233) => "该 Microsoft 账户未关联 Xbox 账户，请先前往 xbox.com 注册".to_string(),
+                Some(2148916235) => "您所在地区不支持 Xbox Live，无法使用正版登录".to_string(),
+                Some(2148916236) | Some(2148916237) => "需要在 Xbox 官网完成成人验证".to_string(),
+                Some(2148916238) => "未成年账户需要家长在 Microsoft Family 中审批".to_string(),
+                Some(code) => format!("XSTS 错误码: {}", code),
+                None => err_resp.message.unwrap_or_else(|| format!("HTTP {}: {}", status, text)),
+            }
+        } else if text.is_empty() {
+            format!("XSTS 服务器返回 HTTP {} 且响应体为空，可能是账户权限问题", status)
+        } else {
+            format!("HTTP {}: {}", status, text)
+        };
+        return Err(xsts_err_msg.into());
+    }
+    let response = serde_json::from_str::<XboxLiveTokenResponse>(&text)
+        .map_err(|e| format!("解析 XSTS 响应失败: {} (响应: {})", e, text))?;
     Ok(response)
 }
 
@@ -479,13 +509,32 @@ async fn add_new_account(
 
 // ======================== Tauri Commands ========================
 
+/// 构造带连接超时和读取超时的 HTTP 客户端，避免断网时无限卡死
+fn build_http_client() -> Result<Client, String> {
+    Client::builder()
+        .connect_timeout(Duration::from_secs(10))
+        .timeout(Duration::from_secs(30))
+        .build()
+        .map_err(|e| format!("无法创建 HTTP 客户端: {}", e))
+}
+
+/// 将 reqwest 网络错误转换为对用户友好的中文提示
+fn friendly_net_err(e: impl std::fmt::Display) -> String {
+    let msg = e.to_string();
+    if msg.contains("connect") || msg.contains("connection") || msg.contains("timed out") || msg.contains("timeout") || msg.contains("dns") || msg.contains("resolve") {
+        format!("网络连接失败，请检查您的网络后重试（{}）", msg)
+    } else {
+        msg
+    }
+}
+
 /// 第一步：请求设备代码，前端展示 user_code 和 verification_uri
 #[tauri::command]
 pub async fn ms_request_device_code() -> Result<DeviceCodeInfo, String> {
-    let client = Client::new();
+    let client = build_http_client()?;
     let resp = get_device_code(&client, CLIENT_ID)
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| friendly_net_err(e))?;
     // 自动打开浏览器让用户授权
     let _ = webbrowser::open(&resp.verification_uri);
     Ok(DeviceCodeInfo {
@@ -500,7 +549,7 @@ pub async fn ms_request_device_code() -> Result<DeviceCodeInfo, String> {
 /// 第二步：轮询等待用户授权，完成后走完整认证链并返回 AccountInfo
 #[tauri::command]
 pub async fn ms_poll_and_login(device_code: String, interval: u64) -> Result<AccountInfo, String> {
-    let client = Client::new();
+    let client = build_http_client()?;
     let start_time = Instant::now();
     let timeout = Duration::from_secs(300); // 5 分钟超时
 
@@ -522,7 +571,7 @@ pub async fn ms_poll_and_login(device_code: String, interval: u64) -> Result<Acc
             .form(&params)
             .send()
             .await
-            .map_err(|e| format!("轮询请求失败: {}", e))?;
+            .map_err(|e| friendly_net_err(e))?;
 
         if !response.status().is_success() {
             continue; // 用户尚未授权，继续轮询
@@ -534,7 +583,14 @@ pub async fn ms_poll_and_login(device_code: String, interval: u64) -> Result<Acc
         // Xbox Live 认证
         let xbox = authenticate_with_xbox_live(&client, &token.access_token)
             .await
-            .map_err(|e| format!("Xbox Live 认证失败: {}", e))?;
+            .map_err(|e| {
+                let msg = e.to_string();
+                if msg.contains("connect") || msg.contains("timed out") || msg.contains("timeout") || msg.contains("dns") || msg.contains("resolve") {
+                    format!("网络连接失败，请检查您的网络后重试（{}）", msg)
+                } else {
+                    format!("Xbox Live 认证失败: {}", msg)
+                }
+            })?;;
 
         // XSTS Token
         let xsts = get_xsts_token(&client, &xbox.Token)
