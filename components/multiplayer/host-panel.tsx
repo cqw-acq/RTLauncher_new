@@ -34,6 +34,13 @@ export function HostPanel() {
   const isLoading = hostStatus === "loading";
   const isRunning = hostStatus === "running";
 
+  const roomNameError = (() => {
+    if (!hostRoomName) return null;
+    if (/\s/.test(hostRoomName)) return "房间名称不能包含空格";
+    if (/[^a-zA-Z0-9_\-]/.test(hostRoomName)) return "房间名称只能包含英文字母、数字、下划线和连字符";
+    return null;
+  })();
+
   const handleCopy = async () => {
     if (!hostJoinCode) return;
     await navigator.clipboard.writeText(hostJoinCode);
@@ -67,7 +74,14 @@ export function HostPanel() {
                 value={hostRoomName}
                 onChange={(e) => setHostRoomName(e.target.value)}
                 disabled={isRunning || isLoading}
+                className={cn(roomNameError && "border-destructive focus-visible:ring-destructive")}
               />
+              {roomNameError && (
+                <p className="flex items-center gap-1 text-[11px] text-destructive">
+                  <AlertCircle className="size-3 shrink-0" />
+                  {roomNameError}
+                </p>
+              )}
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="host-port">Minecraft 端口</Label>
@@ -111,7 +125,7 @@ export function HostPanel() {
           <Button
             className="w-full gap-2"
             onClick={handleHostRoom}
-            disabled={isLoading || isRunning || !hostRoomName.trim() || !hostPort.trim()}
+            disabled={isLoading || isRunning || !hostRoomName.trim() || !hostPort.trim() || !!roomNameError}
           >
             {isLoading ? (
               <>
