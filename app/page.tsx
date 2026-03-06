@@ -123,7 +123,7 @@ export default function Home() {
             versionDisplay={
               selectedInstance
                 ? `${selectedInstance.minecraft_version}${selectedInstance.loader ? ` ${selectedInstance.loader}` : ""}`
-                : "未配置实例"
+                : "未选择游戏版本"
             }
           />
         </div>
@@ -139,9 +139,9 @@ export default function Home() {
             onClick={handleToggleView}
             className="gap-2 shadow-lg hover:shadow-xl transition-shadow"
             size="lg"
-            aria-label="切换到实例设置"
+            aria-label="切换到游戏设置"
           >
-            <span>切换到实例设置</span>
+            <span>切换到游戏设置</span>
             <ChevronDown className="size-4" />
           </Button>
         </div>
@@ -164,7 +164,7 @@ export default function Home() {
         {/* 顶部实例信息头 */}
         <div className="shrink-0 px-4 pt-2 pb-2 z-10 relative">
           <InstanceHeader
-            instanceName={selectedInstance?.name ?? "未配置实例"}
+            instanceName={selectedInstance?.name ?? "未选择游戏版本"}
             minecraftVersion={selectedInstance ? `Minecraft ${selectedInstance.minecraft_version}` : ""}
             loader={selectedInstance?.loader ?? ""}
             selectedProfile={selectedProfile}
