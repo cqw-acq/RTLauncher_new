@@ -1,8 +1,20 @@
 "use client";
 
-import React, { createContext, useCallback, useContext, useState } from "react";
+import React, { createContext, useCallback, useContext, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { MultiplayerMode } from "@/types";
+
+/** 生成随机 16 位 UUID（仅包含 a-z0-9） */
+function generateRoomId(): string {
+  const chars = "abcdefghijklmnopqrstuvwxyz0123456789";
+  let result = "";
+  const arr = new Uint8Array(16);
+  crypto.getRandomValues(arr);
+  for (let i = 0; i < 16; i++) {
+    result += chars[arr[i] % chars.length];
+  }
+  return result;
+}
 
 type PanelStatus = "idle" | "loading" | "running" | "error";
 
@@ -13,7 +25,6 @@ type MultiplayerContextValue = {
 
   // ── 房主面板状态（持久化，切 Tab 不丢失）──
   hostRoomName: string;
-  setHostRoomName: (v: string) => void;
   hostPort: string;
   setHostPort: (v: string) => void;
   hostJoinCode: string | null;
@@ -50,19 +61,20 @@ export function MultiplayerProvider({ children }: { children: React.ReactNode })
   const [mode, setMode] = useState<MultiplayerMode>("host");
 
   // ── 房主面板 ──
-  const [hostRoomName, setHostRoomName] = useState("");
+  const hostRoomNameRef = useRef(generateRoomId());
   const [hostPort, setHostPort] = useState("25565");
   const [hostJoinCode, setHostJoinCode] = useState<string | null>(null);
   const [hostStatus, setHostStatus] = useState<PanelStatus>("idle");
   const [hostError, setHostError] = useState<string | null>(null);
 
   const handleHostRoom = useCallback(async () => {
-    if (!hostRoomName.trim() || !hostPort.trim()) return;
+    if (!hostPort.trim()) return;
+    const roomName = hostRoomNameRef.current;
     setHostStatus("loading");
     setHostError(null);
     try {
       const code = await invoke<string>("mp_host_room", {
-        roomName: hostRoomName.trim(),
+        roomName,
         port: hostPort.trim(),
       });
       setHostJoinCode(code);
@@ -71,10 +83,11 @@ export function MultiplayerProvider({ children }: { children: React.ReactNode })
       setHostStatus("error");
       setHostError(typeof e === "string" ? e : (e as Error).message ?? "启动失败");
     }
-  }, [hostRoomName, hostPort]);
+  }, [hostPort]);
 
   const handleHostDisconnect = useCallback(async () => {
     try { await invoke<void>("mp_disconnect"); } catch { /* ignore */ }
+    hostRoomNameRef.current = generateRoomId(); // 断开后重新生成
     setHostStatus("idle");
     setHostJoinCode(null);
     setHostError(null);
@@ -117,7 +130,7 @@ export function MultiplayerProvider({ children }: { children: React.ReactNode })
     <MultiplayerContext.Provider
       value={{
         mode, setMode,
-        hostRoomName, setHostRoomName,
+        hostRoomName: hostRoomNameRef.current,
         hostPort, setHostPort,
         hostJoinCode,
         hostStatus, hostError,

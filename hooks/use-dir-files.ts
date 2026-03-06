@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { DirEntry } from "@/types";
 
@@ -25,6 +25,13 @@ export function useDirFiles(
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // 稳定化 extensionsFilter 引用，避免每次渲染都重新触发 fetch
+  const stableFilter = useMemo(
+    () => extensionsFilter ?? [],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [extensionsFilter?.join(",")]
+  );
+
   const fetch = useCallback(async () => {
     if (!dirPath) {
       setEntries([]);
@@ -35,7 +42,7 @@ export function useDirFiles(
     try {
       const data = await invoke<DirEntry[]>("vm_list_dir", {
         dirPath,
-        extensionsFilter: extensionsFilter ?? [],
+        extensionsFilter: stableFilter,
       });
       setEntries(data);
     } catch (e) {
@@ -43,7 +50,7 @@ export function useDirFiles(
     } finally {
       setLoading(false);
     }
-  }, [dirPath, JSON.stringify(extensionsFilter ?? [])]);  // eslint-disable-line react-hooks/exhaustive-deps
+  }, [dirPath, stableFilter]);
 
   useEffect(() => {
     fetch();

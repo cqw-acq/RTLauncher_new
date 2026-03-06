@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useAccountContext } from "@/components/accounts/account-provider";
-import { X, Globe, User, Loader2, Shield, Check, Copy } from "lucide-react";
+import { X, Globe, User, Loader2, Shield, Check, Copy, AlertCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { overlayFade, scaleIn, fadeSlideUp } from "@/lib/motion";
 import type { ThirdPartyProfile } from "@/lib/auth";
@@ -42,6 +42,16 @@ export function LoginDialog({ open, onClose }: LoginDialogProps) {
 
   // 离线登录
   const [offlineName, setOfflineName] = useState("");
+
+  // 离线玩家名校验：仅允许英文字母、数字和下划线，不允许空格
+  const offlineNameError = (() => {
+    if (!offlineName) return null;
+    if (/\s/.test(offlineName)) return "玩家名不能包含空格";
+    if (/[^a-zA-Z0-9_]/.test(offlineName)) return "玩家名只能包含英文字母、数字和下划线";
+    if (offlineName.length < 3) return "玩家名至少 3 个字符";
+    if (offlineName.length > 16) return "玩家名最多 16 个字符";
+    return null;
+  })();
 
   // 微软正版登录
   const [msDeviceCode, setMsDeviceCode] = useState<DeviceCodeInfo | null>(null);
@@ -374,12 +384,22 @@ export function LoginDialog({ open, onClose }: LoginDialogProps) {
                             placeholder="Steve"
                             value={offlineName}
                             onChange={(e) => setOfflineName(e.target.value)}
+                            className={cn(offlineNameError && "border-destructive focus-visible:ring-destructive")}
                           />
+                          {offlineNameError && (
+                            <p className="flex items-center gap-1 text-[11px] text-destructive">
+                              <AlertCircle className="size-3 shrink-0" />
+                              {offlineNameError}
+                            </p>
+                          )}
+                          <p className="text-[11px] text-muted-foreground">
+                            仅支持英文字母、数字和下划线，3-16 个字符
+                          </p>
                         </div>
                         <Button
                           className="w-full"
                           onClick={handleOffline}
-                          disabled={!offlineName.trim()}
+                          disabled={!offlineName.trim() || !!offlineNameError}
                         >
                           离线登录
                         </Button>

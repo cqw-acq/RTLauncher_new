@@ -103,6 +103,8 @@ export function LaunchProvider({ children }: { children: React.ReactNode }) {
 
   const { selectedProfile } = useAccountContext();
 
+  const MAX_LOG_ENTRIES = 500;
+
   const addLog = useCallback(
     (level: LaunchLogEntry["level"], message: string) => {
       const entry: LaunchLogEntry = {
@@ -111,7 +113,10 @@ export function LaunchProvider({ children }: { children: React.ReactNode }) {
         level,
         message,
       };
-      setLogs((prev) => [...prev, entry]);
+      setLogs((prev) => {
+        const next = [...prev, entry];
+        return next.length > MAX_LOG_ENTRIES ? next.slice(-MAX_LOG_ENTRIES) : next;
+      });
     },
     []
   );
@@ -141,15 +146,18 @@ export function LaunchProvider({ children }: { children: React.ReactNode }) {
       const { level, message } = event.payload;
       const logLevel =
         level === "error" || level === "warn" ? (level as "error" | "warn") : "info";
-      setLogs((prev) => [
-        ...prev,
-        {
-          id: ++logIdRef.current,
-          timestamp: new Date().toLocaleTimeString(),
-          level: logLevel,
-          message,
-        },
-      ]);
+      setLogs((prev) => {
+        const next = [
+          ...prev,
+          {
+            id: ++logIdRef.current,
+            timestamp: new Date().toLocaleTimeString(),
+            level: logLevel,
+            message,
+          },
+        ];
+        return next.length > MAX_LOG_ENTRIES ? next.slice(-MAX_LOG_ENTRIES) : next;
+      });
     }).then((fn) => { unlisten = fn; });
     return () => { unlisten?.(); };
   }, []);

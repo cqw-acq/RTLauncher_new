@@ -115,7 +115,8 @@ export default function Home() {
         }}
       >
         {/* 右侧栏 - 个人资料卡片 */}
-        <div className="absolute right-0 top-0 w-full md:w-1/3 lg:w-1/4 h-full p-4 flex flex-col justify-end">
+        <div className="absolute right-0 top-0 w-full md:w-1/3 lg:w-1/4 h-full p-4 pointer-events-none">
+          <div className="pointer-events-auto h-full">
           <ProfileCard
             selectedProfile={selectedProfile}
             onOpenProfileSelector={() => setIsProfileSelectorOpen(true)}
@@ -126,11 +127,14 @@ export default function Home() {
                 : "未选择游戏版本"
             }
           />
+          </div>
         </div>
 
         {/* 公告栏 */}
-        <div className="absolute left-0 top-0 w-full md:w-1/3 lg:w-1/4 h-auto p-4">
+        <div className="absolute left-0 top-0 w-full md:w-1/3 lg:w-1/4 h-auto p-4 pointer-events-none">
+          <div className="pointer-events-auto">
           <AnnouncementCard />
+          </div>
         </div>
 
         {/* 底部切换按钮 */}
