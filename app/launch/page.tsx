@@ -22,7 +22,7 @@ export default function LaunchPage() {
         <div>
           <h1 className="text-lg font-semibold leading-none">游戏启动</h1>
           <p className="mt-1 text-xs text-muted-foreground">
-            配置启动参数，开始你的 Minecraft 之旅
+            选择版本，配置启动参数，开始你的 Minecraft 之旅
           </p>
         </div>
       </div>

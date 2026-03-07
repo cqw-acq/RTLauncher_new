@@ -12,6 +12,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useLaunchContext } from "@/components/launch/launch-provider";
+import { VersionSelectorDialog } from "@/components/launch/version-selector-dialog";
 import {
   FolderOpen,
   HardDrive,
@@ -371,15 +372,10 @@ export function LaunchConfigCard() {
           </p>
         </div>
 
-        {/* 版本名称 */}
+        {/* 版本名称 - 使用版本选择对话框 */}
         <div className="space-y-1.5">
           <Label className="text-xs text-muted-foreground">游戏版本</Label>
-          <Input
-            placeholder="版本名称，如 1.21.4"
-            value={config.versionName}
-            onChange={(e) => updateConfig({ versionName: e.target.value })}
-            className="text-xs h-8"
-          />
+          <VersionSelectorDialog />
         </div>
 
         {/* 加载器类型 */}

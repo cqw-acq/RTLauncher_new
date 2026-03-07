@@ -8,7 +8,7 @@ import { fadeSlideUp } from "@/lib/motion";
 import { Loader2, Play } from "lucide-react";
 import type { Account } from "@/types";
 import { useLaunchContext } from "@/components/launch/launch-provider";
-import Link from "next/link";
+import { VersionSelectorDialog } from "@/components/launch/version-selector-dialog";
 
 type ProfileCardProps = {
   selectedProfile: Account | null;
@@ -92,9 +92,7 @@ export function ProfileCard({
               <p className="text-xs text-destructive text-center mb-2">{errorMessage}</p>
             )}
             <div className="flex gap-2 mt-2">
-              <Button variant="secondary" className="flex-1" asChild>
-                <Link href="/launch">版本管理</Link>
-              </Button>
+              <VersionSelectorDialog />
             </div>
           </div>
         </CardContent>
