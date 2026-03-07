@@ -5,6 +5,12 @@ import { TitleBar } from "@/components/title-bar";
 import { Sidebar } from "@/components/sidebar";
 import { ThemeProvider } from "@/components/theme-provider";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { AccountProvider } from "@/components/accounts/account-provider";
+import { DownloadProvider } from "@/components/download/download-provider";
+import { DownloadTaskList } from "@/components/download/download-task-list";
+import { LaunchProvider } from "@/components/launch/launch-provider";
+import { MultiplayerProvider } from "@/components/multiplayer/multiplayer-provider";
+import { PageTransition } from "@/components/page-transition";
 
 const figtree = Figtree({ subsets: ["latin"], variable: "--font-sans" });
 
@@ -39,14 +45,26 @@ export default function RootLayout({
           enableSystem
           disableTransitionOnChange
         >
-          <TooltipProvider>
-            <TitleBar />
+          <AccountProvider>
+            <LaunchProvider>
+            <MultiplayerProvider>
+            <DownloadProvider>
+              <TooltipProvider>
+                <TitleBar />
 
-            <div className="flex flex-1 overflow-hidden">
-              <Sidebar />
-              <main className="flex-1 overflow-auto">{children}</main>
-            </div>
-          </TooltipProvider>
+                <div className="flex flex-1 overflow-hidden">
+                  <Sidebar />
+                  <main className="flex-1 overflow-hidden">
+                    <PageTransition>{children}</PageTransition>
+                  </main>
+                </div>
+
+                <DownloadTaskList />
+              </TooltipProvider>
+            </DownloadProvider>
+            </MultiplayerProvider>
+            </LaunchProvider>
+          </AccountProvider>
         </ThemeProvider>
       </body>
     </html>

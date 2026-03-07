@@ -1,16 +1,104 @@
+mod auth;
+mod handler;
+mod downloader;
+mod mutiplayer;
+mod version_management;
+use handler::config::{get_launcher_paths_config, save_launcher_paths_config};
+use handler::launcher::build_jvm_arguments;
+use handler::skinloader::get_avatar_base64;
+use handler::system::get_system_memory;
+use downloader::dwPatch::{download_patcher, cancel_download};
+use downloader::version_fetcher::classify_minecraft_versions;
+use downloader::decompression::extract_library_paths;
+use auth::littleskinLoader::useMethod;
+use auth::yissadrail::{thirdPartyLogin, getAccountList, getPlayerSkin};
+use auth::official::{ms_request_device_code, ms_poll_and_login};
+use mutiplayer::{mp_host_room, mp_join_room, mp_encode_info, mp_disconnect, mp_install_openp2p, mp_check_openp2p};
+use version_management::{vm_scan_instances, vm_find_resource_packs, vm_parse_level_dat, vm_modify_game_rule, vm_list_dir};
+
+use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
+
+#[cfg(target_os = "macos")]
+use objc2::msg_send;
+#[cfg(target_os = "macos")]
+use objc2::runtime::AnyObject;
+#[cfg(target_os = "macos")]
+use objc2_app_kit::{NSColor, NSWindow};
+#[cfg(target_os = "macos")]
+use tauri::TitleBarStyle;
+
+#[cfg(target_os = "macos")]
+const NS_WINDOW_TITLE_HIDDEN: i64 = 1;
+#[cfg(target_os = "macos")]
+const NS_WINDOW_STYLE_MASK_FULL_SIZE_CONTENT_VIEW: u64 = 1 << 15;
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-  tauri::Builder::default()
-    .setup(|app| {
-      if cfg!(debug_assertions) {
-        app.handle().plugin(
-          tauri_plugin_log::Builder::default()
-            .level(log::LevelFilter::Info)
-            .build(),
-        )?;
-      }
-      Ok(())
-    })
-    .run(tauri::generate_context!())
-    .expect("error while running tauri application");
+    tauri::Builder::default()
+        .invoke_handler(tauri::generate_handler![build_jvm_arguments,download_patcher,cancel_download,classify_minecraft_versions,extract_library_paths,useMethod,thirdPartyLogin,getAccountList,getPlayerSkin,ms_request_device_code,ms_poll_and_login,get_avatar_base64,mp_host_room,mp_join_room,mp_encode_info,mp_disconnect,mp_install_openp2p,mp_check_openp2p,vm_scan_instances,vm_find_resource_packs,vm_parse_level_dat,vm_modify_game_rule,vm_list_dir,get_system_memory,get_launcher_paths_config,save_launcher_paths_config])
+        .plugin(tauri_plugin_dialog::init())
+        .setup(|app| {
+            #[cfg(not(target_os = "macos"))]
+            app.handle().plugin(tauri_plugin_single_instance::init(|app: &tauri::AppHandle, _args, _cwd| {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.show();
+                    let _ = window.unminimize();
+                    let _ = window.set_focus();
+                }
+            }))?;
+            if cfg!(debug_assertions) {
+                app.handle().plugin(
+                    tauri_plugin_log::Builder::default()
+                        .level(log::LevelFilter::Info)
+                        .build(),
+                )?;
+            }
+
+            let window = if let Some(window) = app.get_webview_window("main") {
+                window
+            } else {
+                let win_builder = WebviewWindowBuilder::new(app, "main", WebviewUrl::default())
+                    .title("RTLauncher")
+                    .inner_size(1280.0, 800.0)
+                    .min_inner_size(1024.0, 640.0)
+                    .center()
+                    .resizable(true)
+                    .fullscreen(false)
+                    .shadow(true);
+
+                #[cfg(target_os = "macos")]
+                let win_builder = win_builder.title_bar_style(TitleBarStyle::Transparent);
+
+                #[cfg(not(target_os = "macos"))]
+                let win_builder = win_builder.decorations(false);
+
+                win_builder.build()?
+            };
+
+            #[cfg(not(target_os = "macos"))]
+            let _ = &window;
+
+            #[cfg(target_os = "macos")]
+            unsafe {
+                let ns_window_ptr = window.ns_window().unwrap() as *mut AnyObject;
+                let ns_window = &*(ns_window_ptr as *const NSWindow);
+
+                // Transparent title bar and hidden native title text.
+                let () = msg_send![ns_window_ptr, setTitlebarAppearsTransparent: true];
+                let () = msg_send![ns_window_ptr, setTitleVisibility: NS_WINDOW_TITLE_HIDDEN];
+
+                // Extend content into the title bar region.
+                let style_mask: u64 = msg_send![ns_window_ptr, styleMask];
+                let style_mask = style_mask | NS_WINDOW_STYLE_MASK_FULL_SIZE_CONTENT_VIEW;
+                let () = msg_send![ns_window_ptr, setStyleMask: style_mask];
+                let () = msg_send![ns_window_ptr, setMovableByWindowBackground: false];
+
+                let bg_color = NSColor::colorWithSRGBRed_green_blue_alpha(0.0, 0.0, 0.0, 0.0);
+                ns_window.setBackgroundColor(Some(&bg_color));
+            }
+
+            Ok(())
+        })
+        .run(tauri::generate_context!())
+        .expect("error while running tauri application")
 }
