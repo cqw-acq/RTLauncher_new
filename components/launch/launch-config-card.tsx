@@ -317,29 +317,33 @@ export function LaunchConfigCard() {
             </Label>
             {totalMB > 0 && (
               <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
-                <span>系统总计 <span className="text-foreground font-medium">{totalMB >= 1024 ? `${totalMB / 1024} GB` : `${totalMB} MB`}</span></span>
+                <span>系统总计 <span className="text-foreground font-medium">{totalMB >= 1024 ? `${(totalMB / 1024).toFixed(1)} GB` : `${totalMB} MB`}</span></span>
                 {usedMB > 0 && (
                   <>
                     <span className="text-muted-foreground/40">·</span>
-                    <span>已占用 <span className="text-foreground font-medium">{usedMB} MB</span></span>
+                    <span>可用 <span className="text-foreground font-medium">{((totalMB - usedMB) / 1024).toFixed(1)} GB</span></span>
                   </>
                 )}
               </div>
             )}
           </div>
-          {totalMB > 0 && (
-            <div className="w-full h-1 rounded-full bg-muted overflow-hidden">
-              <div
-                className="h-full rounded-full bg-primary/40 transition-all"
-                style={{ width: `${Math.min(100, (Number(config.maxMemory) / totalMB) * 100)}%` }}
-              />
-            </div>
-          )}
+          {totalMB > 0 && usedMB > 0 && (() => {
+            const availableMB = totalMB - usedMB;
+            const percentage = Math.min(100, (Number(config.maxMemory) / availableMB) * 100);
+            return (
+              <div className="w-full h-1 rounded-full bg-muted overflow-hidden">
+                <div
+                  className="h-full rounded-full bg-primary/40 transition-all"
+                  style={{ width: `${percentage}%` }}
+                />
+              </div>
+            );
+          })()}
           <div className="flex items-center gap-3">
             <input
               type="range"
               min={1024}
-              max={totalMB > 0 ? totalMB : 16384}
+              max={totalMB > 0 && usedMB > 0 ? Math.max(1024, totalMB - usedMB) : 16384}
               step={512}
               value={Number(config.maxMemory) || 4096}
               onChange={(e) => updateConfig({ maxMemory: e.target.value })}
@@ -355,12 +359,15 @@ export function LaunchConfigCard() {
             />
           </div>
           <p className="text-[10px] text-muted-foreground">
-            建议分配系统内存的 50%–75%
-            {totalMB > 0 && (
-              <span className="ml-1 text-muted-foreground/60">
-                （{Math.round(totalMB * 0.5)}–{Math.round(totalMB * 0.75)} MB）
-              </span>
-            )}
+            建议分配可用内存的 50%–75%
+            {totalMB > 0 && usedMB > 0 && (() => {
+              const availableMB = totalMB - usedMB;
+              return (
+                <span className="ml-1 text-muted-foreground/60">
+                  （{Math.round(availableMB * 0.5)}–{Math.round(availableMB * 0.75)} MB）
+                </span>
+              );
+            })()}
           </p>
         </div>
 
