@@ -1,4 +1,5 @@
 use crate::downloader::original_dwl::process_version;
+use crate::downloader::decompression::extract_library_paths;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -120,16 +121,37 @@ pub async fn download_patcher(app: AppHandle, mc_version: String) -> Result<u64,
             match result {
                 Ok(warnings) => {
                     let failed_count = warnings.len();
-                    let _ = app_finish.emit("download-finished", DownloadFinishedPayload {
-                        task_id,
-                        success: true,
-                        error: if failed_count > 0 {
-                            Some(format!("{} 个文件下载失败", failed_count))
-                        } else {
-                            None
-                        },
-                        failed_count,
-                    });
+
+                    // 下载成功后，立即解压原生库
+                    let extract_result = extract_library_paths(
+                        minecraft_path.to_string_lossy().to_string(),
+                        version.clone()
+                    ).await;
+
+                    match extract_result {
+                        Ok(paths) => {
+                            println!("成功解压 {} 个原生库", paths.len());
+                            let _ = app_finish.emit("download-finished", DownloadFinishedPayload {
+                                task_id,
+                                success: true,
+                                error: if failed_count > 0 {
+                                    Some(format!("{} 个文件下载失败", failed_count))
+                                } else {
+                                    None
+                                },
+                                failed_count,
+                            });
+                        }
+                        Err(e) => {
+                            println!("解压原生库失败: {}", e);
+                            let _ = app_finish.emit("download-finished", DownloadFinishedPayload {
+                                task_id,
+                                success: false,
+                                error: Some(format!("下载完成但解压失败: {}", e)),
+                                failed_count,
+                            });
+                        }
+                    }
                 }
                 Err(e) => {
                     let _ = app_finish.emit("download-finished", DownloadFinishedPayload {

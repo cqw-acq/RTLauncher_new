@@ -18,6 +18,7 @@ interface InstanceHeaderProps {
   loader: string;
   selectedProfile: Account | null;
   onOpenProfileSelector: () => void;
+  onOpenVersionSelector?: () => void;
   className?: string;
 }
 
@@ -27,6 +28,7 @@ export function InstanceHeader({
   loader,
   selectedProfile,
   onOpenProfileSelector,
+  onOpenVersionSelector,
   className,
 }: InstanceHeaderProps) {
   return (
@@ -43,24 +45,35 @@ export function InstanceHeader({
         )}
       >
       <div className="flex items-center gap-4 px-4">
-        {/* 实例图标 */}
-        <div className="w-12 h-12 rounded-xl bg-gradient-to-r from-blue-500 to-cyan-500 flex items-center justify-center">
-          <span className="text-white font-bold text-lg">
-            {instanceName.charAt(0)}
-          </span>
-        </div>
-        {/* 实例信息 */}
-        <div>
-          <h2 className="font-bold text-base">{instanceName}</h2>
-          <div className="flex items-center gap-2 mt-0.5">
-            <Badge variant="secondary" className="text-xs">
-              {minecraftVersion}
-            </Badge>
-            <Badge variant="outline" className="text-xs">
-              {loader}
-            </Badge>
+        {/* 实例图标和信息 - 可点击区域 */}
+        <button
+          type="button"
+          className={cn(
+            "flex items-center gap-4 rounded-xl transition-colors",
+            onOpenVersionSelector && "hover:bg-accent p-2 -m-2"
+          )}
+          onClick={onOpenVersionSelector}
+          disabled={!onOpenVersionSelector}
+        >
+          {/* 实例图标 */}
+          <div className="w-12 h-12 rounded-xl bg-gradient-to-r from-blue-500 to-cyan-500 flex items-center justify-center">
+            <span className="text-white font-bold text-lg">
+              {instanceName.charAt(0)}
+            </span>
           </div>
-        </div>
+          {/* 实例信息 */}
+          <div className="text-left">
+            <h2 className="font-bold text-base">{instanceName}</h2>
+            <div className="flex items-center gap-2 mt-0.5">
+              <Badge variant="secondary" className="text-xs">
+                {minecraftVersion}
+              </Badge>
+              <Badge variant="outline" className="text-xs">
+                {loader}
+              </Badge>
+            </div>
+          </div>
+        </button>
       </div>
 
       <div className="flex items-center gap-2 px-4">

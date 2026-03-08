@@ -29,16 +29,32 @@ interface VersionInfo {
   type: string;
 }
 
+interface VersionSelectorDialogProps {
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+}
+
 /**
  * 版本选择对话框
  * 从 versions 目录扫描已安装的游戏版本
  */
-export function VersionSelectorDialog() {
+export function VersionSelectorDialog({ open: controlledOpen, onOpenChange }: VersionSelectorDialogProps = {}) {
   const { config, updateConfig } = useLaunchContext();
-  const [open, setOpen] = useState(false);
+  const [internalOpen, setInternalOpen] = useState(false);
   const [versions, setVersions] = useState<VersionInfo[]>([]);
   const [loading, setLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
+
+  // 使用受控或非受控模式
+  const isControlled = controlledOpen !== undefined;
+  const open = isControlled ? controlledOpen : internalOpen;
+  const setOpen = (value: boolean) => {
+    if (isControlled) {
+      onOpenChange?.(value);
+    } else {
+      setInternalOpen(value);
+    }
+  };
 
   // 打开对话框时加载版本列表
   useEffect(() => {
@@ -113,17 +129,19 @@ export function VersionSelectorDialog() {
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger asChild>
-        <Button
-          variant="outline"
-          className="w-full justify-between text-xs h-8"
-        >
-          <span className="truncate">
-            {config.versionName || "选择游戏版本"}
-          </span>
-          <ChevronDown className="size-3 ml-2 shrink-0" />
-        </Button>
-      </DialogTrigger>
+      {!isControlled && (
+        <DialogTrigger asChild>
+          <Button
+            variant="outline"
+            className="w-full justify-between text-xs h-8"
+          >
+            <span className="truncate">
+              {config.versionName || "选择游戏版本"}
+            </span>
+            <ChevronDown className="size-3 ml-2 shrink-0" />
+          </Button>
+        </DialogTrigger>
+      )}
       <DialogContent className="max-w-md max-h-[80vh] overflow-hidden">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
