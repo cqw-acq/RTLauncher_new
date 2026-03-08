@@ -1,7 +1,7 @@
     use reqwest::blocking::Client;
     use sqlite::{Connection, State};
     use std::collections::HashMap;
-    use std::net::{TcpListener, TcpStream};
+    use std::net::{TcpListener, TcpStream, ToSocketAddrs};
     use std::io::{Read, Write};
     use std::thread;
     use std::sync::{Arc, Mutex};
@@ -10,6 +10,29 @@
     use serde::{Deserialize, Serialize};
     use serde_json::{Value, json};
     use webbrowser;
+
+    /// 检测网络连接
+    /// 尝试连接到常见的DNS服务器来检测网络连接
+    fn check_network_connection() -> Result<(), String> {
+        let test_hosts = vec![
+            ("8.8.8.8:53", "Google DNS"),
+            ("1.1.1.1:53", "Cloudflare DNS"),
+            ("114.114.114.114:53", "114 DNS"),
+        ];
+
+        for (host, name) in test_hosts {
+            if let Ok(mut addrs) = host.to_socket_addrs() {
+                if let Some(addr) = addrs.next() {
+                    if TcpStream::connect_timeout(&addr, Duration::from_secs(3)).is_ok() {
+                        println!("网络连接正常 (通过 {})", name);
+                        return Ok(());
+                    }
+                }
+            }
+        }
+
+        Err("无法连接到网络，请检查网络连接后重试".to_string())
+    }
 
     #[derive(Debug, Serialize, Deserialize)]
     struct TokenResponse {
@@ -39,6 +62,11 @@
         }
 
         pub fn authenticate(&mut self) -> String {
+            // 首先检测网络连接
+            if let Err(e) = check_network_connection() {
+                return e;
+            }
+
             let authorize_url = format!(
                 "https://littleskin.cn/oauth/authorize?client_id={}&redirect_uri={}&response_type=code&scope=Player.ReadWrite",
                 self.client_id, self.redirect_uri
@@ -127,6 +155,9 @@
 
         /// 认证并返回结构化账户信息
         pub fn authenticate_and_return(&mut self) -> Result<super::AccountInfo, String> {
+            // 首先检测网络连接
+            check_network_connection()?;
+
             let authorize_url = format!(
                 "https://littleskin.cn/oauth/authorize?client_id={}&redirect_uri={}&response_type=code&scope=Player.ReadWrite",
                 self.client_id, self.redirect_uri
