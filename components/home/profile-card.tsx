@@ -76,7 +76,7 @@ export function ProfileCard({
             <Button
               variant="default"
               size="lg"
-              className="w-full mb-2 gap-1.5"
+              className="w-full mb-2 sm:mb-3 md:mb-4 gap-1.5"
               disabled={!canLaunch}
               onClick={handleLaunch}
             >

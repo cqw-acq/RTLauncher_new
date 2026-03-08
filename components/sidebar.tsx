@@ -83,7 +83,7 @@ function NavButton({ item, isActive }: { item: NavItem; isActive: boolean }) {
               variant="ghost"
               size="icon"
               className={cn(
-                "relative overflow-hidden",
+                "relative overflow-hidden touch-manipulation",
                 isActive && "text-accent-foreground"
               )}
             >

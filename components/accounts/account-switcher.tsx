@@ -57,12 +57,13 @@ export function AccountSwitcher({
                     <Button
                       variant="ghost"
                       size="icon-sm"
+                      className="touch-manipulation"
                       onClick={() => setLoginOpen(true)}
                       title="添加账户"
                     >
                       <Plus className="size-4" />
                     </Button>
-                    <Button variant="ghost" size="icon-sm" onClick={onClose}>
+                    <Button variant="ghost" size="icon-sm" className="touch-manipulation" onClick={onClose}>
                       <X className="size-4" />
                     </Button>
                   </div>
@@ -112,7 +113,7 @@ export function AccountSwitcher({
                       <Button
                         variant="ghost"
                         size="icon-sm"
-                        className="opacity-0 group-hover:opacity-100 transition-opacity"
+                        className="opacity-0 group-hover:opacity-100 transition-opacity touch-manipulation"
                         onClick={(e) => {
                           e.stopPropagation();
                           setDeleteTarget(profile);

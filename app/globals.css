@@ -129,10 +129,13 @@
    分辨率响应式缩放 (Resolution-Responsive Scaling)
    通过调整 html font-size 对所有 rem 单位等比缩放
 
-   720P  (≤ 768px 高):  12px — 紧凑布局
-   1080P (默认基准)  :  14px — 标准布局
-   2K/2.7K (≥ 1440px): 18px — 宽松布局
-   4K    (≥ 2160px 高): 24px — 超大布局
+   Mobile/Compact: 13px — 移动设备优化
+   720P          : 12px — 紧凑布局
+   1080P (基准)  : 14px — 标准布局
+   Tablet/Laptop : 15px — 中等屏幕
+   2K/QHD        : 18px — 宽松布局 (优化密度)
+   4K/UHD        : 24px — 超大布局 (优化密度)
+   Ultra-wide    : 动态缩放
    ============================================================ */
 
 /* 基准：1080P Full HD — 使用 WebView 原生默认值，与未适配时完全一致 */
@@ -140,24 +143,45 @@ html {
   font-size: 100%;
 }
 
-/* 720P HD (≤ 720px height) */
+/* Mobile / Small tablets (portrait) - 移动设备/小平板竖屏 */
+@media screen and (max-width: 640px) {
+  html {
+    font-size: 13px; /* 稍微紧凑，适合移动设备 */
+  }
+}
+
+/* Compact displays (720p height) - 紧凑显示器 */
 @media screen and (max-height: 720px) {
   html {
-    font-size: 81.25%; /* ~13px */
+    font-size: 12px; /* 更紧凑 */
   }
 }
 
-/* 2K / 2.7K / QHD (≥ 1440px height) */
+/* Large tablets / Small laptops - 大平板/小笔记本 */
+@media screen and (min-width: 1024px) and (min-height: 900px) {
+  html {
+    font-size: 15px; /* 中等缩放 */
+  }
+}
+
+/* 2K / 2.7K / QHD (≥ 1440px height) - 2K 显示器 */
 @media screen and (min-height: 1440px) {
   html {
-    font-size: 20px;
+    font-size: 18px; /* 从 20px 减少到 18px，提升密度 */
   }
 }
 
-/* 4K / UHD (≥ 2160px height) */
+/* 4K / UHD (≥ 2160px height) - 4K 显示器 */
 @media screen and (min-height: 2160px) {
   html {
-    font-size: 28px;
+    font-size: 24px; /* 从 28px 减少到 24px，提升密度 */
+  }
+}
+
+/* Ultra-wide displays - 超宽屏显示器 */
+@media screen and (min-aspect-ratio: 21/9) {
+  html {
+    font-size: max(14px, 0.65vw); /* 基于宽度的动态缩放 */
   }
 }
 

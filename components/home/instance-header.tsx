@@ -96,7 +96,7 @@ export function InstanceHeader({
           </span>
         </button>
 
-        <Button variant="ghost" size="icon" asChild>
+        <Button variant="ghost" size="icon" className="shrink-0" asChild>
           <Link href="/launch">
             <Settings className="size-4" />
           </Link>
