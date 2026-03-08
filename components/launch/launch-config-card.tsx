@@ -12,6 +12,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useLaunchContext } from "@/components/launch/launch-provider";
+import { useAccountContext } from "@/components/accounts/account-provider";
 import { VersionSelectorDialog } from "@/components/launch/version-selector-dialog";
 import {
   FolderOpen,
@@ -24,6 +25,7 @@ import {
   X,
   CheckCircle2,
   Circle,
+  Download,
 } from "lucide-react";
 import { useState, useEffect, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
@@ -102,6 +104,7 @@ function PathItem({
  */
 export function LaunchConfigCard() {
   const { config, updateConfig } = useLaunchContext();
+  const { selectedProfile } = useAccountContext();
   const { totalMB, usedMB } = useSystemMemory();
 
   const [pathsCfg, setPathsCfg] = useState<LauncherPathsConfig>({
@@ -170,12 +173,72 @@ export function LaunchConfigCard() {
     } catch { /* ignore */ }
   };
 
+  const handleExportLaunchArgs = async () => {
+    try {
+      if (!selectedProfile) {
+        alert("请先选择账户");
+        return;
+      }
+
+      const mod = await import("@tauri-apps/plugin-dialog" as string);
+      const save = mod.save;
+      const filePath = await save({
+        defaultPath: "launch_command.txt",
+        filters: [{ name: "Text", extensions: ["txt"] }, { name: "Batch", extensions: ["bat"] }, { name: "Shell", extensions: ["sh"] }],
+      });
+      if (!filePath) return;
+
+      // 构建完整的启动命令参数
+      const result = await invoke<string>("build_jvm_arguments", {
+        minecraftPath: config.minecraftPath,
+        javaPath: config.javaPath,
+        wrapperPath: config.wrapperPath,
+        maxMemory: config.maxMemory,
+        versionName: config.versionName,
+        playerName: config.playerName || selectedProfile.name,
+        authToken: config.authToken || selectedProfile.accessToken || "",
+        uuid: config.uuid || selectedProfile.uuid || selectedProfile.id,
+        authlibInjectorPath: config.authlibInjectorPath,
+        yggdrasilApi: config.yggdrasilApi || selectedProfile.yggdrasilUrl || "",
+        prefetchedData: config.prefetchedData,
+        loadType: config.loadType,
+        loadName: config.loadName,
+        windowWidth: config.windowWidth || "873",
+        windowHeight: config.windowHeight || "486",
+      });
+
+      const exportData = `# Minecraft 启动命令
+# 导出时间: ${new Date().toLocaleString()}
+# 版本: ${config.versionName || "未设置"}
+# 玩家: ${selectedProfile.name}
+
+${result}
+`;
+
+      await invoke("write_file", { path: filePath, content: exportData });
+      alert("启动命令已导出成功！");
+    } catch (err) {
+      alert(`导出失败: ${err}`);
+    }
+  };
+
   return (
     <Card size="sm">
       <CardHeader>
-        <CardTitle className="flex items-center gap-2 text-sm">
-          <Package className="size-4 text-primary" />
-          启动配置
+        <CardTitle className="flex items-center justify-between text-sm">
+          <div className="flex items-center gap-2">
+            <Package className="size-4 text-primary" />
+            启动配置
+          </div>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 px-2 text-[10px] gap-1.5"
+            onClick={handleExportLaunchArgs}
+          >
+            <Download className="size-3" />
+            导出参数
+          </Button>
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">

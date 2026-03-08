@@ -9,6 +9,7 @@ import {
   Settings,
   Globe,
   Gamepad2,
+  Coffee,
 } from "lucide-react"
 import Link from "next/link"
 import { usePathname } from "next/navigation"
@@ -44,6 +45,7 @@ const topNavItems: NavItem[] = [
   { icon: <Rocket className="size-4" />, label: "启动", href: "/launch" },
   { icon: <Download className="size-4" />, label: "下载", href: "/download" },
   { icon: <Globe className="size-4" />, label: "联机", href: "/multiplayer" },
+  { icon: <Coffee className="size-4" />, label: "Java管理", href: "/java" },
   { icon: <Wrench className="size-4" />, label: "工具", href: "/tools" },
 ]
 

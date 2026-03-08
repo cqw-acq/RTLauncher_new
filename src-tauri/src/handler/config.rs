@@ -1,6 +1,17 @@
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
+use std::collections::HashMap;
+
+/// Java安装信息
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct JavaInstallationInfo {
+    pub path: String,
+    pub version: String,
+    pub major_version: i32,
+    pub vendor: String,
+    pub architecture: String,
+}
 
 /// 获取平台配置目录（与 auth::config_dir 一致）
 fn config_dir() -> String {
@@ -50,6 +61,9 @@ pub struct LauncherPathsConfig {
     pub java_paths: Vec<String>,
     /// 当前选中的 Java 路径
     pub selected_java_path: String,
+    /// Java安装信息映射 (major_version -> JavaInstallationInfo)
+    #[serde(default)]
+    pub java_installations: HashMap<String, JavaInstallationInfo>,
     /// 游戏目录路径列表
     pub minecraft_paths: Vec<String>,
     /// 当前选中的游戏目录
@@ -64,6 +78,7 @@ impl Default for LauncherPathsConfig {
         Self {
             java_paths: Vec::new(),
             selected_java_path: String::new(),
+            java_installations: HashMap::new(),
             minecraft_paths: vec![def_mc.clone()],
             selected_minecraft_path: def_mc.clone(),
             default_minecraft_path: def_mc,

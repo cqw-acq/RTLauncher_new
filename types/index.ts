@@ -147,6 +147,14 @@ export type LauncherPathsConfig = {
   java_paths: string[];
   /** 当前选中的 Java 路径 */
   selected_java_path: string;
+  /** Java安装信息映射 */
+  java_installations?: Record<string, {
+    path: string;
+    version: string;
+    major_version: number;
+    vendor: string;
+    architecture: string;
+  }>;
   /** 游戏目录路径列表 */
   minecraft_paths: string[];
   /** 当前选中的游戏目录 */
