@@ -14,19 +14,12 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import {
-  FolderOpen,
-  ImageIcon,
   MessageSquare,
   BadgeCheck,
-  Smile,
-  Sparkles,
 } from "lucide-react";
 import { Cpu } from "lucide-react";
 import { fadeSlideUp } from "@/lib/motion";
 import type { InstanceData } from "@/types";
-import { useInstancePath } from "@/hooks/use-instance-path";
-import { useDirFiles } from "@/hooks/use-dir-files";
-import { useResourcePacks } from "@/hooks/use-resource-packs";
 
 
 interface InfoItemProps {
@@ -62,23 +55,6 @@ function InfoItem({ label, value, tooltip, icon }: InfoItemProps) {
 export function InstanceInfoCard({ instance }: { instance?: InstanceData | null }) {
   const mcVersion = instance?.minecraft_version ?? "—";
   const loader = instance?.loader ?? "—";
-  const modsCount = instance != null ? String(instance.mods_count) : "—";
-
-  // 存档数量 & 资源包数量
-  const { instanceDir } = useInstancePath();
-  const { entries: worldEntries } = useDirFiles(
-    instanceDir ? `${instanceDir}/saves` : undefined
-  );
-  const worldsCount = instance != null
-    ? String(worldEntries.filter((e) => e.is_dir).length)
-    : "—";
-  const { packs: resourcePacks } = useResourcePacks(instanceDir ?? undefined);
-  const resourcePacksCount = instance != null ? String(resourcePacks.length) : "—";
-
-  const { entries: shaderEntries } = useDirFiles(
-    instanceDir ? `${instanceDir}/shaderpacks` : undefined
-  );
-  const shadersCount = instance != null ? String(shaderEntries.length) : "—";
 
   return (
     <motion.div
@@ -99,18 +75,6 @@ export function InstanceInfoCard({ instance }: { instance?: InstanceData | null 
 
       <CardContent className="relative flex-1 space-y-3">
         <InfoItem
-          label="存档数量"
-          value={worldsCount}
-          tooltip="saves/ 目录中的世界存档数量"
-          icon={<FolderOpen className="size-4" />}
-        />
-        <InfoItem
-          label="资源包数量"
-          value={resourcePacksCount}
-          tooltip="resourcepacks/ 目录中的材质包数量"
-          icon={<ImageIcon className="size-4" />}
-        />
-        <InfoItem
           label="游戏版本"
           value={mcVersion}
           tooltip="Minecraft 版本号"
@@ -121,18 +85,6 @@ export function InstanceInfoCard({ instance }: { instance?: InstanceData | null 
           value={loader}
           tooltip="模组加载器"
           icon={<BadgeCheck className="size-4" />}
-        />
-        <InfoItem
-          label="模组数量"
-          value={modsCount}
-          tooltip="mods/ 目录中的文件数量"
-          icon={<Smile className="size-4" />}
-        />
-        <InfoItem
-          label="光影包数量"
-          value={shadersCount}
-          tooltip="shaderpacks/ 目录中的光影包数量"
-          icon={<Sparkles className="size-4" />}
         />
       </CardContent>
     </Card>
