@@ -13,7 +13,7 @@ import { useResourcePacks } from "@/hooks/use-resource-packs";
 
 export default function ResourcesPage() {
   const [search, setSearch] = useState("");
-  const { instanceDir, selectedInstance, minecraftPath } = useInstancePath();
+  const { instanceDir, selectedInstance, minecraftPath, configLoaded } = useInstancePath();
   const { packs, loading, error, refetch } = useResourcePacks(instanceDir);
 
   const filtered = packs.filter((p) =>
@@ -91,7 +91,20 @@ export default function ResourcesPage() {
       <Separator />
 
       {/* 内容 */}
-      {!minecraftPath ? (
+      {!configLoaded ? (
+        <motion.div
+          variants={fadeSlideUp}
+          initial="initial"
+          animate="animate"
+          className="flex flex-col items-center justify-center flex-1 gap-3 text-center"
+        >
+          <div className="size-12 rounded-full bg-muted flex items-center justify-center">
+            <Image className="size-6 text-muted-foreground" />
+          </div>
+          <p className="text-sm font-medium">正在加载配置...</p>
+          <p className="text-xs text-muted-foreground">请稍候</p>
+        </motion.div>
+      ) : !minecraftPath ? (
         <motion.div
           variants={fadeSlideUp}
           initial="initial"
