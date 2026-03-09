@@ -51,6 +51,8 @@ interface LaunchContextValue {
   lastCommandArgs: string | null;
   /** 上次启动时间 */
   lastLaunchTime: string | null;
+  /** 配置是否已加载完成 */
+  configLoaded: boolean;
 }
 
 const LaunchContext = createContext<LaunchContextValue | null>(null);
@@ -65,7 +67,9 @@ export function useLaunchContext() {
 
 export function LaunchProvider({ children }: { children: React.ReactNode }) {
   const [config, setConfig] = useState<LaunchConfig>(DEFAULT_LAUNCH_CONFIG);
+  const [configLoaded, setConfigLoaded] = useState(false);
 
+  
   // 客户端挂载后从 localStorage 恢复配置，再用 Tauri config 覆盖路径字段
   useEffect(() => {
     let cancelled = false;
@@ -88,7 +92,10 @@ export function LaunchProvider({ children }: { children: React.ReactNode }) {
         if (pathsCfg.selected_minecraft_path) base.minecraftPath = pathsCfg.selected_minecraft_path;
       } catch { /* 不可用时保留 localStorage 值 */ }
 
-      if (!cancelled) setConfig((prev) => ({ ...prev, ...base }));
+      if (!cancelled) {
+        setConfig((prev) => ({ ...prev, ...base }));
+        setConfigLoaded(true);
+      }
     };
     init();
     return () => { cancelled = true; };
@@ -263,6 +270,7 @@ export function LaunchProvider({ children }: { children: React.ReactNode }) {
         clearLogs,
         lastCommandArgs,
         lastLaunchTime,
+        configLoaded,
       }}
     >
       {children}
