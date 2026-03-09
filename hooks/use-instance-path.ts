@@ -25,7 +25,9 @@ export function useInstancePath(): InstancePathInfo {
     : undefined;
   const { instances, loading, error } = useInstances(instancesPath);
 
-  const selectedInstance = instances.length > 0 ? instances[0] : null;
+  const selectedInstance =
+    instances.find((i) => i.name === config.versionName)
+    ?? (instances.length > 0 ? instances[0] : null);
   const instanceDir =
     config.minecraftPath && selectedInstance
       ? `${config.minecraftPath}/instance/${selectedInstance.name}`

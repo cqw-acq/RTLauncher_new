@@ -3,7 +3,7 @@ mod handler;
 mod downloader;
 mod mutiplayer;
 mod version_management;
-use handler::config::{get_launcher_paths_config, save_launcher_paths_config};
+use handler::config::{get_launcher_paths_config, save_launcher_paths_config, get_java_download_dir};
 use handler::launcher::build_jvm_arguments;
 use handler::skinloader::get_avatar_base64;
 use handler::system::{get_system_memory, write_file};
@@ -37,7 +37,7 @@ const NS_WINDOW_STYLE_MASK_FULL_SIZE_CONTENT_VIEW: u64 = 1 << 15;
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![build_jvm_arguments,download_patcher,cancel_download,classify_minecraft_versions,extract_library_paths,useMethod,thirdPartyLogin,getAccountList,getPlayerSkin,ms_request_device_code,ms_poll_and_login,get_avatar_base64,mp_host_room,mp_join_room,mp_encode_info,mp_disconnect,mp_install_openp2p,mp_check_openp2p,vm_scan_instances,vm_find_resource_packs,vm_parse_level_dat,vm_modify_game_rule,vm_list_dir,get_system_memory,get_launcher_paths_config,save_launcher_paths_config,write_file,get_java_versions,download_java_runtime,search_java_installations,validate_java_path])
+        .invoke_handler(tauri::generate_handler![build_jvm_arguments,download_patcher,cancel_download,classify_minecraft_versions,extract_library_paths,useMethod,thirdPartyLogin,getAccountList,getPlayerSkin,ms_request_device_code,ms_poll_and_login,get_avatar_base64,mp_host_room,mp_join_room,mp_encode_info,mp_disconnect,mp_install_openp2p,mp_check_openp2p,vm_scan_instances,vm_find_resource_packs,vm_parse_level_dat,vm_modify_game_rule,vm_list_dir,get_system_memory,get_launcher_paths_config,save_launcher_paths_config,write_file,get_java_versions,download_java_runtime,search_java_installations,validate_java_path,get_java_download_dir])
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             #[cfg(not(target_os = "macos"))]

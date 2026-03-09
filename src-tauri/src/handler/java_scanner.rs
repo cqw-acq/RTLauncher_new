@@ -144,6 +144,12 @@ fn find_java_exe(dir: &Path) -> Option<PathBuf> {
         if macos.exists() {
             return Some(macos);
         }
+
+        // Mojang 下载的 Java: dir/jre.bundle/Contents/Home/bin/java
+        let mojang = dir.join("jre.bundle").join("Contents").join("Home").join("bin").join(bin_name);
+        if mojang.exists() {
+            return Some(mojang);
+        }
     }
 
     None
@@ -246,12 +252,16 @@ fn get_search_paths() -> Vec<PathBuf> {
         if let Ok(profile) = std::env::var("USERPROFILE") {
             paths.push(PathBuf::from(&profile).join(".jdks"));
         }
+        // RTLauncher 内置 Java 下载目录
+        paths.push(PathBuf::from("./RTL/java"));
     } else if cfg!(target_os = "macos") {
         paths.push(PathBuf::from("/Library/Java/JavaVirtualMachines"));
         paths.push(PathBuf::from("/System/Library/Java/JavaVirtualMachines"));
         if let Ok(home) = std::env::var("HOME") {
             paths.push(PathBuf::from(&home).join("Library/Java/JavaVirtualMachines"));
             paths.push(PathBuf::from(&home).join(".jdks"));
+            // RTLauncher 内置 Java 下载目录
+            paths.push(PathBuf::from(&home).join("Library/Application Support/RTLauncher/java"));
         }
     } else {
         paths.push(PathBuf::from("/usr/lib/jvm"));
@@ -262,6 +272,8 @@ fn get_search_paths() -> Vec<PathBuf> {
             paths.push(PathBuf::from(&home).join(".jdks"));
             paths.push(PathBuf::from(&home).join(".sdkman/candidates/java"));
         }
+        // RTLauncher 内置 Java 下载目录
+        paths.push(PathBuf::from("./java"));
     }
 
     paths

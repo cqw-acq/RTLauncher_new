@@ -114,6 +114,25 @@ pub fn get_launcher_paths_config() -> LauncherPathsConfig {
     }
 }
 
+/// 获取 Java 下载目录（应用数据目录下的 java 子目录）
+#[tauri::command]
+pub fn get_java_download_dir() -> Result<String, String> {
+    #[cfg(target_os = "macos")]
+    let dir = {
+        let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+        format!("{}/Library/Application Support/RTLauncher/java", home)
+    };
+
+    #[cfg(target_os = "windows")]
+    let dir = "./RTL/java".to_string();
+
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    let dir = "./java".to_string();
+
+    let _ = fs::create_dir_all(&dir);
+    Ok(dir)
+}
+
 /// 将 launcher.json 持久化
 #[tauri::command]
 pub fn save_launcher_paths_config(config: LauncherPathsConfig) -> Result<(), String> {

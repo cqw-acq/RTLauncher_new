@@ -26,6 +26,7 @@ import {
   CheckCircle2,
   Circle,
   Download,
+  Search,
 } from "lucide-react";
 import { useState, useEffect, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
@@ -121,6 +122,7 @@ export function LaunchConfigCard() {
     selected_minecraft_path: "",
     default_minecraft_path: "",
   });
+  const [scanning, setScanning] = useState(false);
 
   useEffect(() => {
     invoke<LauncherPathsConfig>("get_launcher_paths_config")
@@ -229,6 +231,28 @@ ${result}
     }
   };
 
+  const handleScanJava = async () => {
+    setScanning(true);
+    try {
+      const results = await invoke<Array<{ path: string; version: string; major_version: number; vendor: string; architecture: string }>>("search_java_installations");
+      if (results.length > 0) {
+        const newPaths = [...new Set([...pathsCfg.java_paths, ...results.map((r) => r.path)])];
+        const installations: Record<string, any> = { ...pathsCfg.java_installations };
+        for (const r of results) {
+          installations[r.path] = r;
+        }
+        const next = {
+          ...pathsCfg,
+          java_paths: newPaths,
+          java_installations: installations,
+          selected_java_path: pathsCfg.selected_java_path || results[0].path,
+        };
+        await savePaths(next);
+      }
+    } catch { /* ignore */ }
+    setScanning(false);
+  };
+
   return (
     <Card size="sm">
       <CardHeader>
@@ -316,18 +340,30 @@ ${result}
               <Cpu className="size-3" />
               Java 路径
             </Label>
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-6 px-2 text-[10px] text-muted-foreground gap-1"
-              onClick={() => openDialog("java")}
-            >
-              <Plus className="size-3" /> 添加
-            </Button>
+            <div className="flex gap-1">
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-6 px-2 text-[10px] text-muted-foreground gap-1"
+                onClick={handleScanJava}
+                disabled={scanning}
+              >
+                <Search className={`size-3 ${scanning ? "animate-spin" : ""}`} />
+                {scanning ? "扫描中" : "扫描"}
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-6 px-2 text-[10px] text-muted-foreground gap-1"
+                onClick={() => openDialog("java")}
+              >
+                <Plus className="size-3" /> 添加
+              </Button>
+            </div>
           </div>
           {pathsCfg.java_paths.length === 0 ? (
             <p className="text-[10px] text-muted-foreground/60 px-1">
-              点击"添加"选择 Java 可执行文件
+              点击"扫描"自动搜索或"添加"手动选择 Java
             </p>
           ) : (
             pathsCfg.java_paths.map((p) => {
