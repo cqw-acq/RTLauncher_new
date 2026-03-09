@@ -13,12 +13,28 @@ pub struct JavaInstallation {
 }
 
 /// 使用单次 -XshowSettings:properties -version 调用获取所有信息
+/// Windows 上使用 javaw 避免弹出控制台窗口
 fn get_java_version(java_path: &str) -> Option<JavaInstallation> {
     if !Path::new(java_path).exists() {
         return None;
     }
 
-    let output = Command::new(java_path)
+    // Windows: 用 javaw 代替 java 执行检测，避免弹出黑窗口
+    let detect_path = if cfg!(windows) {
+        java_path
+            .replace("java.exe", "javaw.exe")
+            .replace("\\java\"", "\\javaw\"")
+    } else {
+        java_path.to_string()
+    };
+
+    let detect_exe = if cfg!(windows) && Path::new(&detect_path).exists() {
+        detect_path.as_str()
+    } else {
+        java_path
+    };
+
+    let output = Command::new(detect_exe)
         .args(["-XshowSettings:properties", "-version"])
         .stderr(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
