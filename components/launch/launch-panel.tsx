@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { AnimatePresence, motion } from "framer-motion";
+import { invoke } from "@tauri-apps/api/core";
 import { useLaunchContext } from "@/components/launch/launch-provider";
 import { useAccountContext } from "@/components/accounts/account-provider";
 import { LaunchStatusBadge } from "@/components/launch/launch-status-badge";
@@ -15,6 +16,8 @@ import {
   AlertCircle,
   Gamepad2,
 } from "lucide-react";
+import { useState, useEffect } from "react";
+import type { LauncherPathsConfig } from "@/types";
 
 /**
  * 启动操作面板
@@ -23,6 +26,13 @@ import {
 export function LaunchPanel() {
   const { config, status, errorMessage, launchGame } = useLaunchContext();
   const { selectedProfile } = useAccountContext();
+  const [javaInstallations, setJavaInstallations] = useState<LauncherPathsConfig["java_installations"]>({});
+
+  useEffect(() => {
+    invoke<LauncherPathsConfig>("get_launcher_paths_config")
+      .then((cfg) => setJavaInstallations(cfg.java_installations ?? {}))
+      .catch(() => {});
+  }, []);
 
   const isLaunching = status === "preparing" || status === "launching";
   const isRunning = status === "running";
@@ -125,8 +135,10 @@ export function LaunchPanel() {
             <span className="block font-medium text-foreground">Java</span>
             <span className="truncate block">
               {config.javaPath
-                ? config.javaPath.split("/").pop() ||
-                  config.javaPath.split("\\").pop()
+                ? (() => {
+                    const inst = javaInstallations?.[config.javaPath];
+                    return inst ? `Java ${inst.major_version}` : (config.javaPath.split("/").pop() || config.javaPath.split("\\").pop());
+                  })()
                 : "未设置"}
             </span>
           </div>

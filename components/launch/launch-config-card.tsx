@@ -55,6 +55,7 @@ function PathItem({
   path,
   isSelected,
   isDefault,
+  badge,
   canRemove,
   onSelect,
   onRemove,
@@ -62,6 +63,7 @@ function PathItem({
   path: string;
   isSelected: boolean;
   isDefault?: boolean;
+  badge?: string;
   canRemove: boolean;
   onSelect: () => void;
   onRemove: () => void;
@@ -81,6 +83,11 @@ function PathItem({
         <Circle className="size-3 shrink-0 opacity-40" />
       )}
       <span className="flex-1 break-all leading-snug">{path}</span>
+      {badge && (
+        <span className="shrink-0 rounded px-1.5 py-0.5 text-[9px] font-medium bg-primary/10 text-primary leading-none">
+          {badge}
+        </span>
+      )}
       {isDefault && (
         <span className="shrink-0 rounded px-1 py-0.5 text-[9px] font-medium bg-muted text-muted-foreground leading-none">
           默认
@@ -323,26 +330,31 @@ ${result}
               点击"添加"选择 Java 可执行文件
             </p>
           ) : (
-            pathsCfg.java_paths.map((p) => (
-              <PathItem
-                key={p}
-                path={p}
-                isSelected={pathsCfg.selected_java_path === p}
-                canRemove
-                onSelect={() => savePaths({ ...pathsCfg, selected_java_path: p })}
-                onRemove={() => {
-                  const nextPaths = pathsCfg.java_paths.filter((x) => x !== p);
-                  savePaths({
-                    ...pathsCfg,
-                    java_paths: nextPaths,
-                    selected_java_path:
-                      pathsCfg.selected_java_path === p
-                        ? (nextPaths[0] ?? "")
-                        : pathsCfg.selected_java_path,
-                  });
-                }}
-              />
-            ))
+            pathsCfg.java_paths.map((p) => {
+              const inst = pathsCfg.java_installations?.[p];
+              const badge = inst ? `Java ${inst.major_version}` : undefined;
+              return (
+                <PathItem
+                  key={p}
+                  path={p}
+                  isSelected={pathsCfg.selected_java_path === p}
+                  badge={badge}
+                  canRemove
+                  onSelect={() => savePaths({ ...pathsCfg, selected_java_path: p })}
+                  onRemove={() => {
+                    const nextPaths = pathsCfg.java_paths.filter((x) => x !== p);
+                    savePaths({
+                      ...pathsCfg,
+                      java_paths: nextPaths,
+                      selected_java_path:
+                        pathsCfg.selected_java_path === p
+                          ? (nextPaths[0] ?? "")
+                          : pathsCfg.selected_java_path,
+                    });
+                  }}
+                />
+              );
+            })
           )}
         </div>
 

@@ -77,6 +77,7 @@ struct DownloadTask {
     target_path: PathBuf,
     sha1: String,
     size: u64,
+    executable: bool,
 }
 
 struct DownloadProgress {
@@ -97,6 +98,12 @@ impl DownloadProgress {
 pub struct JavaVersionInfo {
     pub name: String,
     pub version: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DownloadResult {
+    pub message: String,
+    pub java_path: String,
 }
 
 fn get_platform_identifier() -> &'static str {
@@ -156,7 +163,7 @@ pub async fn download_java_runtime(
     target_version: i32,
     base_path: String,
     window: tauri::Window,
-) -> Result<String, String> {
+) -> Result<DownloadResult, String> {
     let client = reqwest::Client::new();
     let response = client.get(JAVA_MANIFEST_URL).send().await
         .map_err(|e| format!("获取Java版本列表失败: {}", e))?;
@@ -217,9 +224,18 @@ pub async fn download_java_runtime(
     let mut download_tasks = Vec::new();
     let java_dir = PathBuf::from(&base_path).join(runtime_name);
 
+    // 从 manifest 中找 java 可执行文件的相对路径
+    let java_exe_name = if cfg!(windows) { "bin/java.exe" } else { "bin/java" };
+    let mut java_relative_path: Option<String> = None;
+
     for (file_path, file_info) in &files_manifest.files {
         if file_info.file_type == "directory" {
             continue;
+        }
+
+        // 记录 java 可执行文件的相对路径（以 bin/java 或 bin/java.exe 结尾）
+        if file_path.ends_with(java_exe_name) && java_relative_path.is_none() {
+            java_relative_path = Some(file_path.clone());
         }
 
         if let Some(downloads) = &file_info.downloads {
@@ -231,6 +247,7 @@ pub async fn download_java_runtime(
                 target_path,
                 sha1: download_info.sha1.clone(),
                 size: download_info.size,
+                executable: file_info.executable.unwrap_or(false),
             });
         }
     }
@@ -239,11 +256,18 @@ pub async fn download_java_runtime(
         return Err("没有找到需要下载的文件".to_string());
     }
 
+    let java_bin = java_relative_path
+        .map(|p| java_dir.join(p))
+        .unwrap_or_else(|| java_dir.join(java_exe_name));
+
     download_java_files(download_tasks, window.clone()).await
         .map_err(|e| format!("下载失败: {}", e))?;
 
-    Ok(format!("Java {} ({}) 已成功下载到: {}",
-               runtime_name, version_name, java_dir.display()))
+    Ok(DownloadResult {
+        message: format!("Java {} ({}) 已成功下载到: {}",
+                         runtime_name, version_name, java_dir.display()),
+        java_path: java_bin.to_string_lossy().to_string(),
+    })
 }
 
 async fn download_java_files(
@@ -384,6 +408,18 @@ async fn download_java_file(
     if !check_sha1(&mut file, &task.sha1).await.unwrap_or(false) {
         let _ = std::fs::remove_file(&task.target_path);
         return Err("SHA1校验失败".to_string());
+    }
+
+    // 设置可执行权限（macOS / Linux）
+    #[cfg(unix)]
+    if task.executable {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&task.target_path)
+            .map_err(|e| format!("获取文件权限失败: {}", e))?
+            .permissions();
+        perms.set_mode(perms.mode() | 0o111);
+        std::fs::set_permissions(&task.target_path, perms)
+            .map_err(|e| format!("设置可执行权限失败: {}", e))?;
     }
 
     progress.done.fetch_add(1, Ordering::SeqCst);
