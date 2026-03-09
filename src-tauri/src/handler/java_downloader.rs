@@ -160,7 +160,7 @@ pub async fn get_java_versions() -> Result<Vec<JavaVersionInfo>, String> {
 
 #[tauri::command]
 pub async fn download_java_runtime(
-    target_version: i32,
+    runtime_name: String,
     base_path: String,
     window: tauri::Window,
 ) -> Result<DownloadResult, String> {
@@ -175,41 +175,14 @@ pub async fn download_java_runtime(
     let platform_data = manifest.platforms.get(platform)
         .ok_or_else(|| format!("未找到平台 {} 的Java版本", platform))?;
 
-    let mut candidates: Vec<(String, String, String, i32, String)> = Vec::new();
+    let runtimes = platform_data.runtimes.get(&runtime_name)
+        .ok_or_else(|| format!("未找到 Java 版本: {}", runtime_name))?;
 
-    for (runtime_name, runtimes) in &platform_data.runtimes {
-        for runtime in runtimes {
-            let version_num: i32 = runtime.version.name
-                .split(|c: char| !c.is_numeric())
-                .filter(|s| !s.is_empty())
-                .next()
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(0);
+    let runtime = runtimes.first()
+        .ok_or_else(|| format!("Java 版本 {} 无可用下载", runtime_name))?;
 
-            candidates.push((
-                runtime_name.clone(),
-                runtime.version.name.clone(),
-                runtime.manifest.url.clone(),
-                version_num,
-                runtime.version.released.clone(),
-            ));
-        }
-    }
-
-    if candidates.is_empty() {
-        return Err("未找到可用的Java版本".to_string());
-    }
-
-    candidates.sort_by(|a, b| {
-        let diff_a = (a.3 - target_version).abs();
-        let diff_b = (b.3 - target_version).abs();
-        match diff_a.cmp(&diff_b) {
-            std::cmp::Ordering::Equal => b.4.cmp(&a.4),
-            other => other,
-        }
-    });
-
-    let (runtime_name, version_name, manifest_url, _, _) = &candidates[0];
+    let version_name = &runtime.version.name;
+    let manifest_url = &runtime.manifest.url;
 
     let files_response = client.get(manifest_url).send().await
         .map_err(|e| format!("获取Java文件列表失败: {}", e))?;
@@ -222,7 +195,7 @@ pub async fn download_java_runtime(
         .map_err(|e| format!("解析Java文件列表失败: {}", e))?;
 
     let mut download_tasks = Vec::new();
-    let java_dir = PathBuf::from(&base_path).join(runtime_name);
+    let java_dir = PathBuf::from(&base_path).join(&runtime_name);
 
     // 从 manifest 中找 java 可执行文件的相对路径
     let java_exe_name = if cfg!(windows) { "bin/java.exe" } else { "bin/java" };

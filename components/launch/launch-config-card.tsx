@@ -154,11 +154,25 @@ export function LaunchConfigCard() {
       const path = result as string;
       if (mode === "java") {
         if (pathsCfg.java_paths.includes(path)) return;
-        await savePaths({
-          ...pathsCfg,
-          java_paths: [...pathsCfg.java_paths, path],
-          selected_java_path: path,
-        });
+        // 自动识别版本信息
+        const installations = { ...pathsCfg.java_installations };
+        try {
+          const info = await invoke<{ path: string; version: string; major_version: number; vendor: string; architecture: string; java_type: string }>("validate_java_path", { javaPath: path });
+          installations[info.path] = info;
+          await savePaths({
+            ...pathsCfg,
+            java_paths: [...pathsCfg.java_paths, info.path],
+            java_installations: installations,
+            selected_java_path: info.path,
+          });
+        } catch {
+          // 验证失败仍保存路径，但无版本信息
+          await savePaths({
+            ...pathsCfg,
+            java_paths: [...pathsCfg.java_paths, path],
+            selected_java_path: path,
+          });
+        }
       } else {
         if (pathsCfg.minecraft_paths.includes(path)) return;
         await savePaths({
@@ -234,21 +248,35 @@ ${result}
   const handleScanJava = async () => {
     setScanning(true);
     try {
-      const results = await invoke<Array<{ path: string; version: string; major_version: number; vendor: string; architecture: string }>>("search_java_installations");
-      if (results.length > 0) {
-        const newPaths = [...new Set([...pathsCfg.java_paths, ...results.map((r) => r.path)])];
-        const installations: Record<string, any> = { ...pathsCfg.java_installations };
-        for (const r of results) {
-          installations[r.path] = r;
-        }
-        const next = {
-          ...pathsCfg,
-          java_paths: newPaths,
-          java_installations: installations,
-          selected_java_path: pathsCfg.selected_java_path || results[0].path,
-        };
-        await savePaths(next);
+      type JavaInfo = { path: string; version: string; major_version: number; vendor: string; architecture: string; java_type: string };
+      const results = await invoke<JavaInfo[]>("search_java_installations");
+
+      const installations: Record<string, JavaInfo> = {};
+      // 扫描结果加入
+      for (const r of results) {
+        installations[r.path] = r;
       }
+      // 对已有但缺少版本信息的旧路径尝试重新验证
+      for (const oldPath of pathsCfg.java_paths) {
+        if (!installations[oldPath] && !pathsCfg.java_installations?.[oldPath]) {
+          try {
+            const info = await invoke<JavaInfo>("validate_java_path", { javaPath: oldPath });
+            installations[info.path] = info;
+          } catch { /* 验证失败则忽略 */ }
+        } else if (pathsCfg.java_installations?.[oldPath]) {
+          // 保留已有的验证信息
+          installations[oldPath] = pathsCfg.java_installations[oldPath] as JavaInfo;
+        }
+      }
+
+      const newPaths = [...new Set([...pathsCfg.java_paths, ...results.map((r) => r.path)])];
+      const next = {
+        ...pathsCfg,
+        java_paths: newPaths,
+        java_installations: installations,
+        selected_java_path: pathsCfg.selected_java_path || (results.length > 0 ? results[0].path : ""),
+      };
+      await savePaths(next);
     } catch { /* ignore */ }
     setScanning(false);
   };

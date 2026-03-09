@@ -11,6 +11,8 @@ pub struct JavaInstallationInfo {
     pub major_version: i32,
     pub vendor: String,
     pub architecture: String,
+    #[serde(default)]
+    pub java_type: String,
 }
 
 /// 获取平台配置目录（与 auth::config_dir 一致）

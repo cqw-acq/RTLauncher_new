@@ -4,8 +4,6 @@ import { useState, useMemo, useEffect } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { Download, Loader2, AlertCircle, RefreshCw, Coffee } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Progress } from "@/components/ui/progress";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
@@ -34,9 +32,10 @@ export default function DownloadPage() {
   const [tab, setTab] = useState<"minecraft" | "java">("minecraft");
 
   // Java 下载状态
-  const [javaDownloading, setJavaDownloading] = useState(false);
+  const [javaVersions, setJavaVersions] = useState<{ name: string; version: string }[]>([]);
+  const [javaVersionsLoading, setJavaVersionsLoading] = useState(false);
+  const [javaDownloadingName, setJavaDownloadingName] = useState<string | null>(null);
   const [javaProgress, setJavaProgress] = useState(0);
-  const [javaTargetVersion, setJavaTargetVersion] = useState("17");
   const [javaBasePath, setJavaBasePath] = useState("");
   const [javaMessage, setJavaMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
@@ -48,17 +47,36 @@ export default function DownloadPage() {
     return () => { unlisten.then((fn) => fn()); };
   }, []);
 
-  const handleJavaDownload = async () => {
+  const loadJavaVersions = async () => {
+    setJavaVersionsLoading(true);
+    try {
+      const result = await invoke<{ name: string; version: string }[]>("get_java_versions");
+      setJavaVersions(result);
+    } catch (err) {
+      setJavaMessage({ type: "error", text: `获取 Java 版本失败: ${err}` });
+    } finally {
+      setJavaVersionsLoading(false);
+    }
+  };
+
+  // 切换到 Java tab 时加载版本列表
+  useEffect(() => {
+    if (tab === "java" && javaVersions.length === 0 && !javaVersionsLoading) {
+      loadJavaVersions();
+    }
+  }, [tab]);
+
+  const handleJavaDownload = async (runtimeName: string) => {
     if (!javaBasePath) {
       setJavaMessage({ type: "error", text: "下载路径未就绪，请稍候重试" });
       return;
     }
-    setJavaDownloading(true);
+    setJavaDownloadingName(runtimeName);
     setJavaProgress(0);
     setJavaMessage(null);
     try {
       const result = await invoke<{ message: string; java_path: string }>("download_java_runtime", {
-        targetVersion: parseInt(javaTargetVersion),
+        runtimeName,
         basePath: javaBasePath,
       });
       setJavaMessage({ type: "success", text: result.message });
@@ -68,7 +86,7 @@ export default function DownloadPage() {
     } catch (err) {
       setJavaMessage({ type: "error", text: `下载失败: ${err}` });
     } finally {
-      setJavaDownloading(false);
+      setJavaDownloadingName(null);
       setJavaProgress(0);
     }
   };
@@ -205,62 +223,72 @@ export default function DownloadPage() {
             </div>}
 
             {/* Java 下载 */}
-            {tab === "java" && <div className="flex-1 min-h-0 overflow-y-auto mt-4">
-              <Card>
-                <CardHeader>
-                  <CardTitle className="flex items-center gap-2 text-base">
-                    <Coffee className="size-4" />
-                    下载 Java
-                  </CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-4">
-                  {javaMessage && (
-                    <div
-                      className={`rounded-lg border p-3 text-sm ${
-                        javaMessage.type === "error"
-                          ? "border-red-500 bg-red-50 text-red-900 dark:bg-red-950 dark:text-red-100"
-                          : "border-green-500 bg-green-50 text-green-900 dark:bg-green-950 dark:text-green-100"
-                      }`}
-                    >
-                      {javaMessage.text}
-                    </div>
-                  )}
+            {tab === "java" && <div className="flex-1 min-h-0 overflow-y-auto mt-4 space-y-3">
+              {javaMessage && (
+                <div
+                  className={`rounded-lg border p-3 text-sm ${
+                    javaMessage.type === "error"
+                      ? "border-red-500 bg-red-50 text-red-900 dark:bg-red-950 dark:text-red-100"
+                      : "border-green-500 bg-green-50 text-green-900 dark:bg-green-950 dark:text-green-100"
+                  }`}
+                >
+                  {javaMessage.text}
+                </div>
+              )}
 
-                  <div className="space-y-2">
-                    <Label htmlFor="java-version">目标 Java 版本</Label>
-                    <Input
-                      id="java-version"
-                      type="number"
-                      placeholder="17"
-                      value={javaTargetVersion}
-                      onChange={(e) => setJavaTargetVersion(e.target.value)}
-                      disabled={javaDownloading}
-                    />
-                    <p className="text-xs text-muted-foreground">
-                      常用版本: 8, 11, 17, 21 | MC 1.17+ 需要 Java 17, MC 1.20.5+ 需要 Java 21
-                    </p>
+              {javaDownloadingName && (
+                <div className="space-y-2 rounded-lg border p-3">
+                  <div className="flex items-center justify-between text-sm">
+                    <span>正在下载 {javaDownloadingName}</span>
+                    <span>{javaProgress.toFixed(1)}%</span>
                   </div>
+                  <Progress value={javaProgress} />
+                </div>
+              )}
 
-                  {javaDownloading && (
-                    <div className="space-y-2">
-                      <div className="flex items-center justify-between text-sm">
-                        <span>下载进度</span>
-                        <span>{javaProgress.toFixed(1)}%</span>
-                      </div>
-                      <Progress value={javaProgress} />
-                    </div>
-                  )}
-
-                  <Button
-                    onClick={handleJavaDownload}
-                    disabled={javaDownloading || !javaTargetVersion || !javaBasePath}
-                    className="w-full"
-                  >
-                    <Download className={`mr-2 size-4 ${javaDownloading ? "animate-pulse" : ""}`} />
-                    {javaDownloading ? "下载中..." : "开始下载"}
+              {javaVersionsLoading ? (
+                <div className="flex flex-1 flex-col items-center justify-center gap-3 text-muted-foreground py-12">
+                  <Loader2 className="size-8 animate-spin" />
+                  <p className="text-sm">正在获取可用版本...</p>
+                </div>
+              ) : javaVersions.length === 0 ? (
+                <div className="flex flex-1 flex-col items-center justify-center gap-3 text-muted-foreground py-12">
+                  <AlertCircle className="size-8" />
+                  <p className="text-sm">未获取到可用版本</p>
+                  <Button variant="outline" size="sm" onClick={loadJavaVersions} className="mt-2 gap-2">
+                    <RefreshCw className="size-3.5" />
+                    重试
                   </Button>
-                </CardContent>
-              </Card>
+                </div>
+              ) : (
+                javaVersions.map((v) => (
+                  <Card key={v.name}>
+                    <CardContent className="flex items-center justify-between py-3 px-4">
+                      <div className="flex items-center gap-3">
+                        <Coffee className="size-4 text-muted-foreground" />
+                        <div>
+                          <p className="text-sm font-medium">{v.name}</p>
+                          <p className="text-xs text-muted-foreground">{v.version}</p>
+                        </div>
+                      </div>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="gap-1.5"
+                        disabled={javaDownloadingName !== null}
+                        onClick={() => handleJavaDownload(v.name)}
+                      >
+                        {javaDownloadingName === v.name ? (
+                          <Loader2 className="size-3.5 animate-spin" />
+                        ) : (
+                          <Download className="size-3.5" />
+                        )}
+                        {javaDownloadingName === v.name ? "下载中" : "下载"}
+                      </Button>
+                    </CardContent>
+                  </Card>
+                ))
+              )}
             </div>}
           </div>
         </motion.div>

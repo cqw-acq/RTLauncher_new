@@ -154,6 +154,7 @@ export type LauncherPathsConfig = {
     major_version: number;
     vendor: string;
     architecture: string;
+    java_type: string;
   }>;
   /** 游戏目录路径列表 */
   minecraft_paths: string[];

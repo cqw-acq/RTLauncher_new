@@ -13,6 +13,7 @@ interface JavaInstallation {
   major_version: number
   vendor: string
   architecture: string
+  java_type: string
 }
 
 function getVersionBadgeColor(majorVersion: number): string {
@@ -105,6 +106,7 @@ export default function ToolsPage() {
                         <Badge className={getVersionBadgeColor(inst.major_version)}>
                           Java {inst.major_version}
                         </Badge>
+                        <Badge variant="outline" className="text-xs">{inst.java_type}</Badge>
                         <span className="text-sm font-medium">{inst.vendor}</span>
                       </div>
                       <p className="text-xs text-muted-foreground">版本: {inst.version}</p>
