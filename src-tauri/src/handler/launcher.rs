@@ -168,14 +168,6 @@ struct Artifact {
     size: u64,
 }
 
-pub struct LauncherConfig {
-    pub minecraft_path: PathBuf,
-    pub java_path: PathBuf,
-    pub wrapper_path: PathBuf,
-    pub launcher_version: String,
-    pub max_memory: String,
-}
-
 pub fn run_command(args: Vec<String>, javaPath: PathBuf, MCPath: PathBuf, app_handle: tauri::AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     // 检查 Java 路径是否存在
     if !javaPath.exists() {
@@ -692,12 +684,16 @@ fn build_jvm_arguments_inner(
             format!("-Dos.name={}", os_info.os_type())
         },
         format!("-Dos.version={}", os_info.version()),
-        format!("-Djava.library.path={}", format_path(minecraft_path_buf
-                 .join("versions")
-                 .join(version_name)
-                 .join(format!("{}-natives", version_name)))),
         format!("-DlibraryDirectory={}", format_path(minecraft_path_buf.join("libraries"))),
     ];
+
+    // 确保 -Djava.library.path 参数总是被添加（不走去重）
+    args.push(format!("-Djava.library.path={}", format_path(
+        minecraft_path_buf
+            .join("versions")
+            .join(version_name)
+            .join(format!("{}-natives", version_name))
+    )));
     
     let existing_params: HashSet<String> = version_json.arguments
         .iter()
@@ -723,18 +719,16 @@ fn build_jvm_arguments_inner(
         args.push(format!("-Dauthlibinjector.yggdrasil.prefetched={}", prefetched_data));
     }
     
-    // 将 Wrapper JAR 也加入 classpath（不能用 -jar，否则 Java 会忽略 -cp）
-    if !wrapper_path.is_empty() {
-        let wrapper_abs = format_path(PathBuf::from(wrapper_path));
-        if !class_path_entries.contains(&wrapper_abs) {
-            class_path_entries.push(wrapper_abs);
-        }
-    }
-
     let sep = if is_windows { ";" } else { ":" };
     let class_path = class_path_entries.join(sep);
     args.push("-cp".to_string());
     args.push(class_path);
+
+    if !wrapper_path.is_empty() {
+        let wrapper_abs = format_path(PathBuf::from(wrapper_path));
+        args.push("-jar".to_string());
+        args.push(wrapper_abs);
+    }
     
     {
         let mut ei = 0;
@@ -901,7 +895,6 @@ fn build_jvm_arguments_inner(
 
     // 如果有 Wrapper 则用 Wrapper 主类包裹原始主类，否则直接使用原始主类
     if !wrapper_path.is_empty() {
-        args.push("oolloo.jlw.Wrapper".to_string());
         args.push(version_json.main_class.clone());
     } else {
         args.push(version_json.main_class.clone());
