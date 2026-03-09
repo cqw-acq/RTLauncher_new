@@ -23,8 +23,10 @@ export default function GameSettings() {
   const { config } = useLaunchContext();
   const instancesPath = config.minecraftPath ? `${config.minecraftPath}/instance` : undefined;
   const { instances } = useInstances(instancesPath);
-  // 默认选中第一个实例
-  const selectedInstance = instances.length > 0 ? instances[0] : null;
+  // 优先匹配当前选中版本，否则选第一个
+  const selectedInstance = instances.find((i) => i.name === config.versionName)
+    ?? instances[0]
+    ?? null;
 
   const handleProfileSelect = (profile: Account) => {
     selectProfile(profile);
