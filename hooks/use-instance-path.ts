@@ -13,11 +13,13 @@ export interface InstancePathInfo {
   minecraftPath: string;
   loading: boolean;
   error: string | null;
+  /** 配置是否已加载完成 */
+  configLoaded: boolean;
 }
 
 /** 从 LaunchContext 和 useInstances 合并出当前实例目录信息 */
 export function useInstancePath(): InstancePathInfo {
-  const { config } = useLaunchContext();
+    const { config, configLoaded } = useLaunchContext();
   const instancesPath = config.minecraftPath
     ? `${config.minecraftPath}/instance`
     : undefined;
@@ -35,5 +37,6 @@ export function useInstancePath(): InstancePathInfo {
     minecraftPath: config.minecraftPath,
     loading,
     error,
+    configLoaded,
   };
 }

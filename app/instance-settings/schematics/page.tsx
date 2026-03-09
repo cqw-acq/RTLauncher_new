@@ -27,7 +27,7 @@ const EXT_COLOR: Record<string, string> = {
 
 export default function SchematicsPage() {
   const [search, setSearch] = useState("");
-  const { instanceDir, selectedInstance, minecraftPath } = useInstancePath();
+  const { instanceDir, selectedInstance, minecraftPath, configLoaded } = useInstancePath();
   const schematicsDir = instanceDir ? `${instanceDir}/schematics` : undefined;
   const { entries, loading, error, refetch } = useDirFiles(
     schematicsDir,
@@ -108,7 +108,20 @@ export default function SchematicsPage() {
 
       <Separator />
 
-      {!minecraftPath ? (
+      {!configLoaded ? (
+        <motion.div
+          variants={fadeSlideUp}
+          initial="initial"
+          animate="animate"
+          className="flex flex-col items-center justify-center flex-1 gap-3 text-center"
+        >
+          <div className="size-12 rounded-full bg-muted flex items-center justify-center">
+            <Camera className="size-6 text-muted-foreground" />
+          </div>
+          <p className="text-sm font-medium">正在加载配置...</p>
+          <p className="text-xs text-muted-foreground">请稍候</p>
+        </motion.div>
+      ) : !minecraftPath ? (
         <motion.div
           variants={fadeSlideUp}
           initial="initial"
