@@ -20,7 +20,7 @@ function formatBytes(bytes: number): string {
 
 export default function ModsPage() {
   const [search, setSearch] = useState("");
-  const { instanceDir, selectedInstance, minecraftPath } = useInstancePath();
+  const { instanceDir, selectedInstance, minecraftPath, configLoaded } = useInstancePath();
   const modsDir = instanceDir ? `${instanceDir}/mods` : undefined;
   const { entries, loading, error, refetch } = useDirFiles(modsDir, ["jar"]);
 
@@ -99,7 +99,20 @@ export default function ModsPage() {
       <Separator />
 
       {/* 内容区 */}
-      {!minecraftPath ? (
+        {!configLoaded ? (
+        <motion.div
+          variants={fadeSlideUp}
+          initial="initial"
+          animate="animate"
+          className="flex flex-col items-center justify-center flex-1 gap-3 text-center"
+        >
+          <div className="size-12 rounded-full bg-muted flex items-center justify-center">
+            <Package className="size-6 text-muted-foreground" />
+          </div>
+          <p className="text-sm font-medium">正在加载配置...</p>
+          <p className="text-xs text-muted-foreground">请稍候</p>
+        </motion.div>
+      ) : !minecraftPath ? (
         <motion.div
           variants={fadeSlideUp}
           initial="initial"
