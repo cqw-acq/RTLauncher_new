@@ -13,23 +13,21 @@ import { VersionSelectorDialog } from "@/components/launch/version-selector-dial
 type ProfileCardProps = {
   selectedProfile: Account | null;
   onOpenProfileSelector: () => void;
-  instanceName: string;
-  versionDisplay: string;
 };
 
 export function ProfileCard({
   selectedProfile,
   onOpenProfileSelector,
-  instanceName,
-  versionDisplay,
 }: ProfileCardProps) {
-  const { status, launchGame, errorMessage } = useLaunchContext();
+  const { config, status, launchGame, errorMessage } = useLaunchContext();
   const isLaunching = status === "preparing" || status === "launching";
   const isRunning = status === "running";
   const canLaunch = !isLaunching && !isRunning;
 
+  const versionDisplay = config.versionName || "未选择游戏版本";
+
   const handleLaunch = () => {
-    launchGame({ versionName: instanceName });
+    launchGame();
   };
 
   return (
