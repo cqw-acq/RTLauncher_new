@@ -42,12 +42,27 @@ fn get_java_version_full(java_path: &str) -> Option<ValidatedJava> {
     let detect_exe = pick_detect_exe(java_path);
 
     // 先尝试 -XshowSettings:properties -version（信息最完整）
-    if let Some(v) = try_show_settings(&detect_exe, java_path) {
-        return Some(v);
+    let mut result = try_show_settings(&detect_exe, java_path)
+        .or_else(|| try_version_flag(&detect_exe, java_path))?;
+
+    // Windows: 将存储路径替换为 javaw.exe，启动游戏时无控制台窗口
+    if cfg!(windows) {
+        result.installation.path = prefer_javaw(&result.installation.path);
     }
 
-    // 回退: java -version（stderr 输出）
-    try_version_flag(&detect_exe, java_path)
+    Some(result)
+}
+
+/// Windows: 若同目录下存在 javaw.exe，则将路径替换为 javaw.exe
+fn prefer_javaw(java_path: &str) -> String {
+    let javaw_path = java_path
+        .replace("java.exe", "javaw.exe")
+        .replace("\\java\"", "\\javaw\"");
+    if javaw_path != java_path && Path::new(&javaw_path).exists() {
+        javaw_path
+    } else {
+        java_path.to_string()
+    }
 }
 
 /// Windows 上用 javaw 代替 java 执行检测，避免弹出黑窗口
@@ -269,12 +284,20 @@ fn parse_major_version(version: &str) -> Option<i32> {
 // ─── 路径查找 ───────────────────────────────────────────────────────────────────
 
 /// 在目录中查找 java 可执行文件，兼容标准布局和 macOS bundle 布局
+/// Windows 上优先返回 javaw.exe（无控制台窗口）
 fn find_java_exe(dir: &Path) -> Option<PathBuf> {
     let bin_name = if cfg!(windows) { "java.exe" } else { "java" };
 
     // 标准布局: dir/bin/java
     let standard = dir.join("bin").join(bin_name);
     if standard.exists() {
+        // Windows: 优先返回 javaw.exe
+        if cfg!(windows) {
+            let javaw = dir.join("bin").join("javaw.exe");
+            if javaw.exists() {
+                return Some(javaw);
+            }
+        }
         return Some(standard);
     }
 
