@@ -75,6 +75,68 @@ fn offline_uuid(player_name: &str) -> String {
     )
 }
 
+/// 清理参数中的空格，将引号内的空格移除
+/// 例如: "-DFabricMcEmu= net.minecraft.client.main.Main " -> "-DFabricMcEmu=net.minecraft.client.main.Main"
+fn clean_param_spaces(param: &str) -> String {
+    let trimmed = param.trim();
+    if (trimmed.starts_with('"') && trimmed.ends_with('"')) ||
+       (trimmed.starts_with("'") && trimmed.ends_with("'")) {
+        let inner = &trimmed[1..trimmed.len()-1];
+        inner.chars().filter(|c| !c.is_whitespace()).collect()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+/// 将Maven库名称转换为文件系统路径
+/// 例如: "net.minecraft:launchwrapper:1.12" -> "net/minecraft/launchwrapper/1.12/launchwrapper-1.12.jar"
+fn library_name_to_path(name: &str) -> Option<String> {
+    let parts: Vec<&str> = name.split(':').collect();
+    if parts.len() >= 3 {
+        let group = parts[0].replace('.', "/");
+        let artifact = parts[1];
+        let version = parts[2];
+        Some(format!("{}/{}/{}/{}-{}.jar", group, artifact, version, artifact, version))
+    } else {
+        None
+    }
+}
+
+/// 从库路径中提取库的标识信息（group, artifact, version）
+fn parse_library_path(path: &str) -> Option<(String, String, String)> {
+    let path_without_ext = path.strip_suffix(".jar")?;
+    let parts: Vec<&str> = path_without_ext.split('/').collect();
+    if parts.len() >= 4 {
+        let group = parts[..parts.len()-3].join("/");
+        let artifact = parts[parts.len()-3];
+        let version = parts[parts.len()-2];
+        let expected_filename = format!("{}-{}", artifact, version);
+        if parts[parts.len()-1] == expected_filename {
+            Some((group, artifact.to_string(), version.to_string()))
+        } else {
+            None
+        }
+    } else {
+        None
+    }
+}
+
+/// 比较两个版本号，返回true如果version1 > version2
+fn compare_versions(version1: &str, version2: &str) -> bool {
+    let v1_parts: Vec<&str> = version1.split('.').collect();
+    let v2_parts: Vec<&str> = version2.split('.').collect();
+    for i in 0..std::cmp::max(v1_parts.len(), v2_parts.len()) {
+        let v1_part = v1_parts.get(i).and_then(|s| s.parse::<u32>().ok()).unwrap_or(0);
+        let v2_part = v2_parts.get(i).and_then(|s| s.parse::<u32>().ok()).unwrap_or(0);
+        if v1_part > v2_part {
+            return true;
+        } else if v1_part < v2_part {
+            return false;
+        }
+    }
+    false
+}
+
 /// 检查是否是合法 UUID 格式
 fn is_valid_uuid(s: &str) -> bool {
     // 支持 xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx 或无连字符 32位 hex
@@ -418,6 +480,52 @@ fn build_jvm_arguments_inner(
                             println!("arguments.jvm: {:?}", jvm_vals);
                         }
                         
+                        // LiteLoader: 检测并读取 forge-patch/versionPatch.json
+                        let is_liteloader = loadName.to_lowercase().contains("liteloader");
+                        let mut patch_library_paths: Vec<String> = Vec::new();
+
+                        if is_liteloader {
+                            let forge_patch_path = load_path.join("forge-patch");
+                            let version_patch_path = forge_patch_path.join("versionPatch.json");
+
+                            if version_patch_path.exists() {
+                                println!("检测到LiteLoader，正在读取forge-patch/versionPatch.json");
+
+                                if let Ok(patch_content) = std::fs::read_to_string(&version_patch_path) {
+                                    if let Ok(patch_value) = serde_json::from_str::<serde_json::Value>(&patch_content) {
+                                        if let Some(patch_libraries) = patch_value.get("libraries").and_then(|v| v.as_array()) {
+                                            for patch_lib in patch_libraries {
+                                                if let Some(downloads) = patch_lib.get("downloads") {
+                                                    if let Some(artifact) = downloads.get("artifact") {
+                                                        if let Some(path_str) = artifact.get("path").and_then(|p| p.as_str()) {
+                                                            let abs = minecraft_path_buf.join("libraries").join(path_str);
+                                                            let norm = normalize(&abs);
+                                                            patch_library_paths.push(norm);
+                                                        }
+                                                    }
+                                                    if let Some(classifiers) = downloads.get("classifiers").and_then(|v| v.as_object()) {
+                                                        for art in classifiers.values() {
+                                                            if let Some(path_str) = art.get("path").and_then(|p| p.as_str()) {
+                                                                let abs = minecraft_path_buf.join("libraries").join(path_str);
+                                                                let norm = normalize(&abs);
+                                                                patch_library_paths.push(norm);
+                                                            }
+                                                        }
+                                                    }
+                                                } else if let Some(name_val) = patch_lib.get("name").and_then(|n| n.as_str()) {
+                                                    if let Some(lib_path) = library_name_to_path(name_val) {
+                                                        let abs = minecraft_path_buf.join("libraries").join(&lib_path);
+                                                        let norm = normalize(&abs);
+                                                        patch_library_paths.push(norm);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
                         if let Some(libraries) = root.get("libraries").and_then(|v| v.as_array()) {
                             for lib in libraries {
                                 if let Some(downloads) = lib.get("downloads") {
@@ -427,7 +535,7 @@ fn build_jvm_arguments_inner(
                                             let norm = normalize(&abs);
                                             println!("library artifact path: {}", abs.display());
                                             load_library_paths.push(norm.clone());
-                                            
+
                                             if let Some(name) = lib.get("name").and_then(|n| n.as_str()) {
                                                 if name.starts_with("net.minecraftforge:forge") {
                                                     if let Some(folder) = abs.parent() {
@@ -467,6 +575,42 @@ fn build_jvm_arguments_inner(
                                         println!("library artifact path: {}", abs.display());
                                         load_library_paths.push(norm);
                                     }
+                                }
+                            }
+                        }
+
+                        // LiteLoader: 比较并替换版本较低的库
+                        if is_liteloader && !patch_library_paths.is_empty() {
+                            println!("正在比较LiteLoader和versionPatch.json中的库版本...");
+
+                            let mut indices_to_remove: Vec<usize> = Vec::new();
+                            let mut patches_to_add: Vec<String> = Vec::new();
+
+                            for (i, lp) in load_library_paths.iter().enumerate() {
+                                if let Some((load_group, load_artifact, load_version)) = parse_library_path(lp) {
+                                    for patch_path in &patch_library_paths {
+                                        if let Some((patch_group, patch_artifact, patch_version)) = parse_library_path(patch_path) {
+                                            if load_group == patch_group && load_artifact == patch_artifact {
+                                                if compare_versions(&patch_version, &load_version) {
+                                                    indices_to_remove.push(i);
+                                                    patches_to_add.push(patch_path.clone());
+                                                    println!("替换库: {} -> {}", lp, patch_path);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            indices_to_remove.sort();
+                            indices_to_remove.dedup();
+                            for i in indices_to_remove.into_iter().rev() {
+                                load_library_paths.remove(i);
+                            }
+
+                            for patch_path in patches_to_add {
+                                if !load_library_paths.contains(&patch_path) {
+                                    load_library_paths.push(patch_path);
                                 }
                             }
                         }
