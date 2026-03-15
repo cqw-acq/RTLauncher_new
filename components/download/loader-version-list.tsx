@@ -8,14 +8,37 @@ import type { LoaderVersion } from "@/types";
 interface LoaderVersionListProps {
   loaderName: string;
   versions: LoaderVersion[];
+  loading?: boolean;
+  error?: string | null;
+  installing?: boolean;
   onInstall: (version: LoaderVersion) => void;
 }
 
 export function LoaderVersionList({
   loaderName,
   versions,
+  loading,
+  error,
+  installing,
   onInstall,
 }: LoaderVersionListProps) {
+  if (loading) {
+    return (
+      <div className="flex flex-col items-center justify-center gap-2 py-12 text-muted-foreground">
+        <div className="size-5 border-2 border-muted-foreground/30 border-t-muted-foreground rounded-full animate-spin" />
+        <p className="text-sm">正在加载 {loaderName} 版本列表...</p>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="flex flex-col items-center justify-center gap-2 py-12 text-destructive">
+        <p className="text-sm">加载失败: {error}</p>
+      </div>
+    );
+  }
+
   if (versions.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center gap-2 py-12 text-muted-foreground">
@@ -62,6 +85,7 @@ export function LoaderVersionList({
             size="icon-sm"
             className="opacity-0 group-hover:opacity-100 transition-opacity duration-200"
             onClick={() => onInstall(version)}
+            disabled={installing}
             aria-label={`安装 ${version.version}`}
           >
             <Download className="size-4" />
