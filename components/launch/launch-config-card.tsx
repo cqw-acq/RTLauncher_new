@@ -19,6 +19,7 @@ import {
   HardDrive,
   Cpu,
   Package,
+  User,
   Monitor,
   Plus,
   X,
@@ -570,6 +571,103 @@ ${result}
           </div>
         </div>
 
+        {/* 玩家身份（可折叠） */}
+        <details className="group">
+          <summary className="cursor-pointer text-xs text-muted-foreground hover:text-foreground transition-colors select-none">
+            高级：玩家身份设置
+          </summary>
+          <div className="mt-3 space-y-3 border-l-2 border-border pl-3">
+            <div className="space-y-1.5">
+              <Label className="text-xs text-muted-foreground">
+                <User className="size-3" />
+                玩家名称
+              </Label>
+              <Input
+                placeholder="留空则使用当前账户名"
+                value={config.playerName}
+                onChange={(e) =>
+                  updateConfig({ playerName: e.target.value })
+                }
+                className="text-xs h-8"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-xs text-muted-foreground">
+                UUID
+              </Label>
+              <Input
+                placeholder="留空则使用账户 ID"
+                value={config.uuid}
+                onChange={(e) =>
+                  updateConfig({ uuid: e.target.value })
+                }
+                className="text-xs h-8"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-xs text-muted-foreground">
+                认证令牌 (accessToken)
+              </Label>
+              <Input
+                type="password"
+                placeholder="可选"
+                value={config.authToken}
+                onChange={(e) =>
+                  updateConfig({ authToken: e.target.value })
+                }
+                className="text-xs h-8"
+              />
+            </div>
+          </div>
+        </details>
+
+        {/* 第三方验证（可折叠） */}
+        <details className="group">
+          <summary className="cursor-pointer text-xs text-muted-foreground hover:text-foreground transition-colors select-none">
+            高级：第三方验证设置
+          </summary>
+          <div className="mt-3 space-y-3 border-l-2 border-border pl-3">
+            <div className="space-y-1.5">
+              <Label className="text-xs text-muted-foreground">
+                Authlib Injector 路径
+              </Label>
+              <Input
+                placeholder="authlib-injector.jar 路径"
+                value={config.authlibInjectorPath}
+                onChange={(e) =>
+                  updateConfig({ authlibInjectorPath: e.target.value })
+                }
+                className="text-xs h-8"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-xs text-muted-foreground">
+                Yggdrasil API
+              </Label>
+              <Input
+                placeholder="https://..."
+                value={config.yggdrasilApi}
+                onChange={(e) =>
+                  updateConfig({ yggdrasilApi: e.target.value })
+                }
+                className="text-xs h-8"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-xs text-muted-foreground">
+                预取数据 (Base64)
+              </Label>
+              <Input
+                placeholder="可选"
+                value={config.prefetchedData}
+                onChange={(e) =>
+                  updateConfig({ prefetchedData: e.target.value })
+                }
+                className="text-xs h-8"
+              />
+            </div>
+          </div>
+        </details>
       </CardContent>
     </Card>
   );

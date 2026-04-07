@@ -3,9 +3,11 @@
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { AnimatePresence, motion } from "framer-motion";
 import { invoke } from "@tauri-apps/api/core";
 import { useLaunchContext } from "@/components/launch/launch-provider";
+import { useAccountContext } from "@/components/accounts/account-provider";
 import { LaunchStatusBadge } from "@/components/launch/launch-status-badge";
 import { fadeSlideUp } from "@/lib/motion";
 import {
@@ -23,6 +25,7 @@ import type { LauncherPathsConfig } from "@/types";
  */
 export function LaunchPanel() {
   const { config, status, errorMessage, launchGame } = useLaunchContext();
+  const { selectedProfile } = useAccountContext();
   const [javaInstallations, setJavaInstallations] = useState<LauncherPathsConfig["java_installations"]>({});
 
   useEffect(() => {
@@ -59,6 +62,25 @@ export function LaunchPanel() {
             </div>
           </div>
 
+          {/* 当前账户 */}
+          {selectedProfile && (
+            <div className="flex items-center gap-2">
+              <Avatar size="sm">
+                {selectedProfile.skinUrl && (
+                  <AvatarImage src={selectedProfile.skinUrl} alt={selectedProfile.name} />
+                )}
+                <AvatarFallback>
+                  {selectedProfile.name.charAt(0).toUpperCase()}
+                </AvatarFallback>
+              </Avatar>
+              <div className="text-right">
+                <p className="text-xs font-medium">{selectedProfile.name}</p>
+                <p className="text-[10px] text-muted-foreground">
+                  {selectedProfile.status}
+                </p>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* 错误信息 */}
