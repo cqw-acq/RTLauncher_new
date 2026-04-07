@@ -3,8 +3,8 @@ use reqwest::blocking::Client;
 use serde::Deserialize;
 use serde_json;
 use std::fs;
-use std::path::{Path, PathBuf};
-use super::common_libraries::LibraryItem;
+use std::path::PathBuf;
+use super::common_libraries::{LibraryItem, download_file_with_progress, download_libraries_concurrent};
 
 #[derive(Debug, Deserialize)]
 struct GameVersion {
@@ -61,6 +61,8 @@ pub fn get_fabric_api_versions(mc_version: &str) -> Result<Vec<String>> {
     }
     let xml_text = resp.text()?;
     let mut reader = Reader::from_str(&xml_text);
+    reader.config_mut().trim_text_end = true;
+    reader.config_mut().trim_text_start = true;
     let mut versions = Vec::new();
     loop {
         match reader.read_event() {
@@ -104,12 +106,11 @@ pub fn install_fabric_loader(mc_version: &str, loader_version: &str, mc_folder_p
     }
     let profile: ProfileJson = serde_json::from_str(&profile_json_text)?;
 
-    // 使用线程池并发下载库文件
     download_libraries_concurrent(
         &profile.libraries,
         "https://maven.fabricmc.net",
-        false,
-        mc_folder_path
+        mc_folder_path,
+        8,
     )?;
 
     println!("Fabric Loader安装完成！版本ID：{}", version_id);
@@ -126,144 +127,8 @@ pub fn install_fabric_api(mc_version: &str, fabric_api_version: &str, mc_folder_
     fs::create_dir_all(&mods_dir)?;
     let fabric_api_jar = mods_dir.join(format!("fabric-api-{}.jar", fabric_api_version));
 
-    // 使用多线程下载API文件
     download_file_with_progress(&fabric_api_url, &fabric_api_jar, 24)?;
 
     println!("Fabric API安装完成！版本：{}", fabric_api_version);
-    Ok(())
-}
-
-/// 使用多线程下载文件并显示进度
-fn download_file_with_progress(url: &str, path: &Path, max_threads: usize) -> Result<()> {
-    use super::downloader_wrapper::download_file_blocking;
-
-    // 获取文件大小
-    let client = Client::new();
-    let head_resp = client.head(url).send()?;
-    let file_size = head_resp
-        .headers()
-        .get(reqwest::header::CONTENT_LENGTH)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.parse::<u64>().ok())
-        .unwrap_or(0);
-
-    // 如果文件大于1MB，使用多线程下载
-    let threads = if file_size > 1024 * 1024 {
-        max_threads.min(file_size as usize)
-    } else {
-        1
-    };
-
-    println!("正在下载: {}", path.file_name().unwrap_or_default().to_string_lossy());
-    if file_size > 0 {
-        let size_mb = file_size as f64 / (1024.0 * 1024.0);
-        println!("文件大小: {:.2} MB", size_mb);
-        println!("使用 {} 个线程下载", threads);
-    }
-
-    download_file_blocking(url, path, threads)?;
-
-    Ok(())
-}
-
-/// 使用线程池并发下载多个库文件
-fn download_libraries_concurrent(
-    libraries: &[LibraryItem],
-    default_url: &str,
-    _check_md5: bool,
-    mc_folder_path: &str,
-) -> Result<()> {
-    use super::common_libraries::{parse_library_path_for_fs, parse_library_path_for_url};
-    use super::downloader_wrapper::download_file_blocking;
-    use std::sync::{Arc, Mutex};
-
-    const MAX_CONCURRENT_DOWNLOADS: usize = 8;
-    const MULTITHREAD_THRESHOLD: u64 = 1024 * 1024; // 1MB
-
-    // 准备下载任务
-    let mut download_tasks = Vec::new();
-    for lib in libraries {
-        let base_url = lib.url.as_deref().unwrap_or(default_url).trim_end_matches('/');
-        let name = lib.name.clone();
-        let (sub_path, jar_name) = parse_library_path_for_fs(&name);
-        let library_dir = PathBuf::from(mc_folder_path).join("libraries").join(&sub_path);
-        fs::create_dir_all(&library_dir)?;
-        let local_file_path = library_dir.join(&jar_name);
-        let url_sub_path = parse_library_path_for_url(&name);
-        let download_url = format!("{}/{}", base_url, url_sub_path);
-
-        download_tasks.push((download_url, local_file_path, name));
-    }
-
-    let total_files = download_tasks.len();
-    if total_files == 0 {
-        return Ok(());
-    }
-
-    println!("准备下载 {} 个库文件...", total_files);
-
-    // 创建进度跟踪器
-    let completed = Arc::new(Mutex::new(0usize));
-    let failed = Arc::new(Mutex::new(Vec::new()));
-
-    // 使用线程池并发下载
-    let pool = threadpool::ThreadPool::new(MAX_CONCURRENT_DOWNLOADS);
-
-    for (url, path, lib_name) in download_tasks {
-        let completed = Arc::clone(&completed);
-        let failed = Arc::clone(&failed);
-
-        pool.execute(move || {
-            // 获取文件大小以决定是否使用多线程下载
-            let client = Client::new();
-            let file_size = match client.head(&url).send() {
-                Ok(resp) => resp
-                    .headers()
-                    .get(reqwest::header::CONTENT_LENGTH)
-                    .and_then(|v| v.to_str().ok())
-                    .and_then(|v| v.parse::<u64>().ok())
-                    .unwrap_or(0),
-                Err(_) => 0,
-            };
-
-            // 如果文件大于1MB，使用多线程下载
-            let threads = if file_size > MULTITHREAD_THRESHOLD {
-                MAX_CONCURRENT_DOWNLOADS.min(file_size as usize)
-            } else {
-                1
-            };
-
-            // 下载文件
-            let result = download_file_blocking(&url, &path, threads);
-
-            // 更新进度
-            {
-                let mut completed_count = completed.lock().unwrap();
-                *completed_count += 1;
-                let progress = (*completed_count as f64 / total_files as f64) * 100.0;
-                println!("下载进度: {:.1}% ({}/{})", progress, *completed_count, total_files);
-            }
-
-            // 处理下载失败的情况
-            if let Err(e) = result {
-                let mut failed_list = failed.lock().unwrap();
-                failed_list.push((lib_name, e.to_string()));
-            }
-        });
-    }
-
-    // 等待所有下载任务完成
-    pool.join();
-
-    // 检查是否有下载失败的文件
-    let failed_list = failed.lock().unwrap();
-    if !failed_list.is_empty() {
-        eprintln!("\n以下文件下载失败:");
-        for (name, error) in failed_list.iter() {
-            eprintln!("  - {}: {}", name, error);
-        }
-        return Err(anyhow!("部分文件下载失败"));
-    }
-
     Ok(())
 }

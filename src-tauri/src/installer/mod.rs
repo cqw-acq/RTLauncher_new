@@ -10,27 +10,43 @@ pub mod liteloader_installer;
 // ─── Fabric ──────────────────────────────────────────────────────────────────
 
 #[tauri::command]
-pub fn get_fabric_versions(mc_version: &str, use_mirror: bool) -> Result<Vec<String>, String> {
-    fabric_installer::get_fabric_loader_versions(mc_version, use_mirror)
-        .map_err(|e| e.to_string())
+pub async fn get_fabric_versions(mc_version: String, use_mirror: bool) -> Result<Vec<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        fabric_installer::get_fabric_loader_versions(&mc_version, use_mirror)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub fn get_fabric_api_versions(mc_version: &str) -> Result<Vec<String>, String> {
-    fabric_installer::get_fabric_api_versions(mc_version)
-        .map_err(|e| e.to_string())
+pub async fn get_fabric_api_versions(mc_version: String) -> Result<Vec<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        fabric_installer::get_fabric_api_versions(&mc_version)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub fn install_fabric(mc_version: &str, loader_version: &str, mc_folder_path: &str) -> Result<(), String> {
-    fabric_installer::install_fabric_loader(mc_version, loader_version, mc_folder_path)
-        .map_err(|e| e.to_string())
+pub async fn install_fabric(mc_version: String, loader_version: String, mc_folder_path: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        fabric_installer::install_fabric_loader(&mc_version, &loader_version, &mc_folder_path)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub fn install_fabric_api(mc_version: &str, fabric_api_version: &str, mc_folder_path: &str) -> Result<(), String> {
-    fabric_installer::install_fabric_api(mc_version, fabric_api_version, mc_folder_path)
-        .map_err(|e| e.to_string())
+pub async fn install_fabric_api(mc_version: String, fabric_api_version: String, mc_folder_path: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        fabric_installer::install_fabric_api(&mc_version, &fabric_api_version, &mc_folder_path)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())
 }
 
 // ─── Forge ───────────────────────────────────────────────────────────────────
