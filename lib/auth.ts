@@ -101,12 +101,13 @@ export async function getPlayerSkin(url: string, uuid: string): Promise<string> 
 }
 
 /**
- * 获取玩家头像（基于本地皮肤文件生成）
+ * 获取玩家皮肤 base64（本地存储在 RTL/config/skins/{uuid}.png）
+ * 用于前端 3D 皮肤展示
  * @param uuid 玩家 UUID
- * @returns data URI （data:image/png;base64,...）
+ * @returns data URI (data:image/png;base64,...)
  */
-export async function getAvatarBase64(uuid: string): Promise<string> {
-  return invoke<string>("get_avatar_base64", { uuid });
+export async function getSkinBase64(uuid: string): Promise<string> {
+  return invoke<string>("get_skin_base64", { uuid });
 }
 
 // ======================== 微软正版登录 ========================
@@ -133,4 +134,106 @@ export async function msPollAndLogin(
     deviceCode,
     interval,
   });
+}
+
+/**
+ * 用户关闭登录对话框时调用：让后台的轮询循环中止
+ */
+export async function msCancelLogin(): Promise<void> {
+  return invoke("ms_cancel_login");
+}
+
+// ======================== 微软正版：皮肤/披风管理 ========================
+
+/** 单个皮肤信息 */
+export type MCSkinInfo = {
+  id: string;
+  state: string; // ACTIVE / INACTIVE
+  url: string;
+  variant: string; // classic / slim
+  alias: string | null;
+};
+
+/** 单个披风信息 */
+export type MCCapeInfo = {
+  id: string;
+  state: string; // ACTIVE / INACTIVE
+  url: string;
+  alias: string | null;
+};
+
+/** 完整皮肤/披风列表 */
+export type MCSkinCapeProfile = {
+  skins: MCSkinInfo[];
+  capes: MCCapeInfo[];
+};
+
+/**
+ * 获取当前微软账号的所有皮肤与披风列表（基于 Minecraft Services API）
+ * @param accessToken 微软登录得到的 access_token
+ */
+export async function msGetSkinsAndCapes(
+  accessToken: string
+): Promise<MCSkinCapeProfile> {
+  return invoke<MCSkinCapeProfile>("ms_get_skins_and_capes", { accessToken });
+}
+
+/**
+ * 上传新皮肤（PNG base64 编码），上传后自动设为当前皮肤
+ * @param accessToken 微软登录得到的 access_token
+ * @param pngBase64 PNG 图像的 base64 编码（不带 data:image/png;base64, 前缀）
+ * @param variant "classic"（默认）或 "slim"（细胳膊）
+ */
+export async function msUploadSkin(
+  accessToken: string,
+  pngBase64: string,
+  variant: "classic" | "slim"
+): Promise<string> {
+  return invoke<string>("ms_upload_skin", {
+    accessToken,
+    pngBase64,
+    variant,
+  });
+}
+
+/**
+ * 激活/切换到指定皮肤（从已有皮肤列表中选择）
+ * @param accessToken 微软登录得到的 access_token
+ * @param skinId 皮肤 ID
+ * @param variant "classic" 或 "slim"
+ */
+export async function msActivateSkin(
+  accessToken: string,
+  skinId: string,
+  variant: "classic" | "slim"
+): Promise<void> {
+  return invoke<void>("ms_activate_skin", {
+    accessToken,
+    skinId,
+    variant,
+  });
+}
+
+/**
+ * 删除指定皮肤
+ * @param accessToken 微软登录得到的 access_token
+ * @param skinId 皮肤 ID
+ */
+export async function msDeleteSkin(
+  accessToken: string,
+  skinId: string
+): Promise<void> {
+  return invoke<void>("ms_delete_skin", { accessToken, skinId });
+}
+
+/**
+ * 设置激活披风（capeId 为空字符串时取消激活当前披风）
+ * @param accessToken 微软登录得到的 access_token
+ * @param capeId 披风 ID（空字符串 = 取消激活）
+ */
+export async function msSetActiveCape(
+  accessToken: string,
+  capeId: string
+): Promise<void> {
+  return invoke<void>("ms_set_active_cape", { accessToken, capeId });
 }

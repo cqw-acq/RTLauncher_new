@@ -6,7 +6,7 @@
     "D:\\jdk-25.0.3+9\\bin\\javaw.exe",
     "F:\\RTLauncher\\RTL\\java\\java-runtime-beta\\bin\\javaw.exe"
   ],
-  "selected_java_path": "F:\\RTLauncher\\RTL\\java\\java-runtime-beta\\bin\\javaw.exe",
+  "selected_java_path": "D:\\jdk-25.0.3+9\\bin\\javaw.exe",
   "java_installations": {
     "C:\\Program Files\\Common Files\\Oracle\\Java\\javapath\\javaw.exe": {
       "path": "C:\\Program Files\\Common Files\\Oracle\\Java\\javapath\\javaw.exe",
@@ -16,8 +16,8 @@
       "architecture": "x64",
       "java_type": "JDK"
     },
-    "F:\\RTLauncher\\RTL\\java\\java-runtime-gamma\\bin\\javaw.exe": {
-      "path": "F:\\RTLauncher\\RTL\\java\\java-runtime-gamma\\bin\\javaw.exe",
+    "F:\\RTLauncher\\RTL\\java\\java-runtime-beta\\bin\\javaw.exe": {
+      "path": "F:\\RTLauncher\\RTL\\java\\java-runtime-beta\\bin\\javaw.exe",
       "version": "17.0.15",
       "major_version": 17,
       "vendor": "Microsoft",
@@ -40,8 +40,8 @@
       "architecture": "x64",
       "java_type": "JDK"
     },
-    "F:\\RTLauncher\\RTL\\java\\java-runtime-beta\\bin\\javaw.exe": {
-      "path": "F:\\RTLauncher\\RTL\\java\\java-runtime-beta\\bin\\javaw.exe",
+    "F:\\RTLauncher\\RTL\\java\\java-runtime-gamma\\bin\\javaw.exe": {
+      "path": "F:\\RTLauncher\\RTL\\java\\java-runtime-gamma\\bin\\javaw.exe",
       "version": "17.0.15",
       "major_version": 17,
       "vendor": "Microsoft",
@@ -52,6 +52,6 @@
   "minecraft_paths": [
     "D:\\RTLauncher_new\\src-tauri\\target\\debug\\minecraft"
   ],
-  "selected_minecraft_path": "D:\\RTLauncher_new\\src-tauri\\target\\debug\\minecraft",
+  "selected_minecraft_path": "C:\\Users\\HUAWEI\\AppData\\Roaming\\.minecraft",
   "default_minecraft_path": "C:\\Users\\HUAWEI\\AppData\\Roaming\\.minecraft"
 }

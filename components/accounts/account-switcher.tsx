@@ -7,7 +7,8 @@ import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { useAccountContext } from "@/components/accounts/account-provider";
 import { LoginDialog } from "@/components/accounts/login-dialog";
-import { X, Check, Plus, Trash2 } from "lucide-react";
+import { SkinCapeManager } from "@/components/accounts/skin-cape-manager";
+import { X, Check, Plus, Trash2, Shirt } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { overlayFade, scaleIn } from "@/lib/motion";
 import type { Account } from "@/types";
@@ -26,6 +27,7 @@ export function AccountSwitcher({
   const { profiles, selectedProfile, removeProfile } = useAccountContext();
   const [loginOpen, setLoginOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<Account | null>(null);
+  const [skinManagerAccount, setSkinManagerAccount] = useState<Account | null>(null);
 
   return (
     <>
@@ -52,7 +54,7 @@ export function AccountSwitcher({
             >
               <Card className="shadow-2xl">
                 <CardHeader className="flex flex-row items-center justify-between">
-                  <CardTitle>切换账户</CardTitle>
+                  <CardTitle>管理账户</CardTitle>
                   <div className="flex items-center gap-1">
                     <Button
                       variant="ghost"
@@ -68,7 +70,7 @@ export function AccountSwitcher({
                     </Button>
                   </div>
                 </CardHeader>
-                <CardContent className="space-y-2">
+                <CardContent className="space-y-2 max-h-[65vh] overflow-y-auto">
                   {profiles.length === 0 && (
                     <p className="text-center text-sm text-muted-foreground py-4">
                       暂无账户，请点击右上角 + 添加
@@ -110,6 +112,23 @@ export function AccountSwitcher({
                           <Check className="size-4 text-primary" />
                         )}
                       </button>
+
+                      {/* 微软正版账户：显示皮肤/披风管理按钮 */}
+                      {profile.authType === "microsoft" && (
+                        <Button
+                          variant="ghost"
+                          size="icon-sm"
+                          className="opacity-0 group-hover:opacity-100 transition-opacity touch-manipulation"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setSkinManagerAccount(profile);
+                          }}
+                          title="皮肤与披风管理"
+                        >
+                          <Shirt className="size-4" />
+                        </Button>
+                      )}
+
                       <Button
                         variant="ghost"
                         size="icon-sm"
@@ -118,6 +137,7 @@ export function AccountSwitcher({
                           e.stopPropagation();
                           setDeleteTarget(profile);
                         }}
+                        title="删除账户"
                       >
                         <Trash2 className="size-3.5 text-muted-foreground" />
                       </Button>
@@ -182,6 +202,14 @@ export function AccountSwitcher({
           </div>
         )}
       </AnimatePresence>
+
+      {/* 皮肤/披风管理弹窗 */}
+      {skinManagerAccount && (
+        <SkinCapeManager
+          account={skinManagerAccount}
+          onClose={() => setSkinManagerAccount(null)}
+        />
+      )}
 
       {/* 登录对话框 */}
       <LoginDialog open={loginOpen} onClose={() => setLoginOpen(false)} />

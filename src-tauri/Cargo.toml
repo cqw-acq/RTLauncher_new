@@ -29,7 +29,6 @@ hex = "0.4"
 sqlite = "0.30"
 url = "2.2"
 webbrowser = "0.8"
-image = { version = "0.24", default-features = false, features = ["png"] }
 tauri = { version = "2.10.0", features = ["macos-private-api"] }
 tauri-plugin-log = "2"
 tauri-plugin-dialog = "2"

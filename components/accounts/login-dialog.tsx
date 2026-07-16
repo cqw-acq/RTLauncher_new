@@ -29,9 +29,16 @@ export function LoginDialog({ open, onClose }: LoginDialogProps) {
     addOfflineAccount,
     addThirdPartyAccount,
     loginWithMicrosoft,
+    cancelMicrosoftLogin,
     loginState,
     loginError,
   } = useAccountContext();
+
+  // 包装 onClose：关闭对话框时如果正在进行微软登录，则同时取消它
+  const handleClose = () => {
+    cancelMicrosoftLogin();
+    onClose();
+  };
 
   const [tab, setTab] = useState<LoginTab>("microsoft");
 
@@ -83,7 +90,7 @@ export function LoginDialog({ open, onClose }: LoginDialogProps) {
   // LittleSkin OAuth 登录（浏览器方式）
   const handleLittleSkin = async () => {
     await loginWithLittleSkin();
-    if (loginState !== "error") onClose();
+    if (loginState !== "error") handleClose();
   };
 
   // LittleSkin 账号密码登录（PCL2 风格，无需浏览器）
@@ -96,7 +103,7 @@ export function LoginDialog({ open, onClose }: LoginDialogProps) {
       if (accounts.length === 1) {
         // 只有一个玩家，直接添加
         addLittleSkinAccount(accounts[0]);
-        onClose();
+        handleClose();
       } else if (accounts.length > 1) {
         // 多个玩家，让用户选择
         setLsProfiles(accounts);
@@ -108,7 +115,7 @@ export function LoginDialog({ open, onClose }: LoginDialogProps) {
 
   const handleSelectLittleSkinProfile = (profile: LittleSkinAccount) => {
     addLittleSkinAccount(profile);
-    onClose();
+    handleClose();
   };
 
   const handleThirdPartyLogin = async () => {
@@ -117,7 +124,7 @@ export function LoginDialog({ open, onClose }: LoginDialogProps) {
       if (result.profiles.length === 1) {
         // 只有一个角色，直接添加
         addThirdPartyAccount(result.profiles[0], result.access_token, tpUrl);
-        onClose();
+        handleClose();
       } else {
         // 多个角色，让用户选择
         setTpProfiles(result.profiles);
@@ -130,13 +137,13 @@ export function LoginDialog({ open, onClose }: LoginDialogProps) {
 
   const handleSelectProfile = (profile: ThirdPartyProfile) => {
     addThirdPartyAccount(profile, tpAccessToken, tpUrl);
-    onClose();
+    handleClose();
   };
 
   const handleOffline = () => {
     if (!offlineName.trim()) return;
     addOfflineAccount(offlineName.trim());
-    onClose();
+    handleClose();
   };
 
   const handleMicrosoft = async () => {
@@ -174,7 +181,7 @@ export function LoginDialog({ open, onClose }: LoginDialogProps) {
             animate="animate"
             exit="exit"
             className="absolute inset-0 bg-black/50 backdrop-blur-sm"
-            onClick={onClose}
+            onClick={handleClose}
           />
 
           <motion.div
@@ -187,7 +194,7 @@ export function LoginDialog({ open, onClose }: LoginDialogProps) {
             <Card className="shadow-2xl">
               <CardHeader className="flex flex-row items-center justify-between">
                 <CardTitle>添加账户</CardTitle>
-                <Button variant="ghost" size="icon-sm" onClick={onClose}>
+                <Button variant="ghost" size="icon-sm" onClick={handleClose}>
                   <X className="size-4" />
                 </Button>
               </CardHeader>

@@ -80,6 +80,13 @@
   --sidebar-accent-foreground: oklch(0.216 0.006 56.043);
   --sidebar-border: oklch(0.923 0.003 48.717);
   --sidebar-ring: oklch(0.709 0.01 56.259);
+
+  /* 全局设置（由 SettingsProvider 动态注入） */
+  --app-font-size: 14px;
+  --app-font-scale: 1;
+  --app-bg: none;
+  --app-bg-opacity: 0.55;
+  --app-bg-blur: 6px;
 }
 
 .dark {
@@ -116,6 +123,73 @@
   --sidebar-ring: oklch(0.553 0.013 58.071);
 }
 
+/* ============================================================
+   字体大小：仅缩放文字，不改变组件与布局
+   —— body 的 font-size 由 JS 直接设置（style.fontSize）
+   —— 其他文本类通过 --app-font-scale 派生
+   ============================================================ */
+body {
+  position: relative;
+  isolation: isolate;
+  background-color: var(--background);
+  transition: background-color 0.3s ease;
+  /* 基准字号由 JS 动态写入 style.fontSize */
+}
+
+/* 标题：按比例缩放 */
+h1 { font-size: calc(2rem * var(--app-font-scale)); }
+h2 { font-size: calc(1.5rem * var(--app-font-scale)); }
+h3 { font-size: calc(1.25rem * var(--app-font-scale)); }
+h4 { font-size: calc(1.125rem * var(--app-font-scale)); }
+
+/* Tailwind text-* 类 —— 通过 CSS 变量派生，确保跟随字体缩放 */
+.text-xs    { font-size: calc(0.75rem * var(--app-font-scale)) !important; }
+.text-sm    { font-size: calc(0.875rem * var(--app-font-scale)) !important; }
+.text-base  { font-size: calc(1rem * var(--app-font-scale)) !important; }
+.text-lg    { font-size: calc(1.125rem * var(--app-font-scale)) !important; }
+.text-xl    { font-size: calc(1.25rem * var(--app-font-scale)) !important; }
+.text-2xl   { font-size: calc(1.5rem * var(--app-font-scale)) !important; }
+.text-3xl   { font-size: calc(1.875rem * var(--app-font-scale)) !important; }
+.text-4xl   { font-size: calc(2.25rem * var(--app-font-scale)) !important; }
+
+/* ============================================================
+   背景图片：通过 body::before 渲染在最底层
+   — 当有背景图片时，body 背景变透明以让图片可见
+   ============================================================ */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  background-image: var(--app-bg);
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  filter: blur(var(--app-bg-blur));
+  opacity: var(--app-bg-opacity);
+  pointer-events: none;
+  transition: opacity 0.25s ease, filter 0.25s ease, background-image 0.25s ease;
+}
+
+/* 有背景图片时 —— body 变透明让图片透出，卡片、侧栏使用半透明 */
+body[data-app-bg="active"] {
+  background-color: transparent;
+}
+body[data-app-bg="active"] [data-slot="card"] {
+  background-color: color-mix(in oklch, var(--card) 78%, transparent);
+  backdrop-filter: blur(8px) saturate(140%);
+  -webkit-backdrop-filter: blur(8px) saturate(140%);
+}
+body[data-app-bg="active"] aside {
+  background-color: color-mix(in oklch, var(--sidebar) 75%, transparent);
+  backdrop-filter: blur(8px) saturate(140%);
+  -webkit-backdrop-filter: blur(8px) saturate(140%);
+}
+body[data-app-bg="active"] [data-settings-content] + * [data-slot="card"] {
+  backdrop-filter: blur(8px) saturate(140%);
+  -webkit-backdrop-filter: blur(8px) saturate(140%);
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;
@@ -126,85 +200,27 @@
 }
 
 /* ============================================================
-   分辨率响应式缩放 (Resolution-Responsive Scaling)
-   通过调整 html font-size 对所有 rem 单位等比缩放
-
-   Mobile/Compact: 13px — 移动设备优化
-   720P          : 12px — 紧凑布局
-   1080P (基准)  : 14px — 标准布局
-   Tablet/Laptop : 15px — 中等屏幕
-   2K/QHD        : 18px — 宽松布局 (优化密度)
-   4K/UHD        : 24px — 超大布局 (优化密度)
-   Ultra-wide    : 动态缩放
+   Tauri Custom Titlebar Drag Region
    ============================================================ */
-
-/* 基准：1080P Full HD — 使用 WebView 原生默认值，与未适配时完全一致 */
-html {
-  font-size: 100%;
-}
-
-/* Mobile / Small tablets (portrait) - 移动设备/小平板竖屏 */
-@media screen and (max-width: 640px) {
-  html {
-    font-size: 13px; /* 稍微紧凑，适合移动设备 */
-  }
-}
-
-/* Compact displays (720p height) - 紧凑显示器 */
-@media screen and (max-height: 720px) {
-  html {
-    font-size: 12px; /* 更紧凑 */
-  }
-}
-
-/* Large tablets / Small laptops - 大平板/小笔记本 */
-@media screen and (min-width: 1024px) and (min-height: 900px) {
-  html {
-    font-size: 15px; /* 中等缩放 */
-  }
-}
-
-/* 2K / 2.7K / QHD (≥ 1440px height) - 2K 显示器 */
-@media screen and (min-height: 1440px) {
-  html {
-    font-size: 18px; /* 从 20px 减少到 18px，提升密度 */
-  }
-}
-
-/* 4K / UHD (≥ 2160px height) - 4K 显示器 */
-@media screen and (min-height: 2160px) {
-  html {
-    font-size: 24px; /* 从 28px 减少到 24px，提升密度 */
-  }
-}
-
-/* Ultra-wide displays - 超宽屏显示器 */
-@media screen and (min-aspect-ratio: 21/9) {
-  html {
-    font-size: max(14px, 0.65vw); /* 基于宽度的动态缩放 */
-  }
-}
-
-/* Tauri Custom Titlebar Drag Region */
 *[data-tauri-drag-region] {
   app-region: drag;
   -webkit-app-region: drag;
 }
 
-/* Elements that should not be draggable (buttons, inputs, etc) */
 .no-drag,
 .no-drag * {
   app-region: no-drag !important;
   -webkit-app-region: no-drag !important;
 }
 
-/* Prevent text selection in title bar */
 *[data-tauri-drag-region] {
   user-select: none;
   -webkit-user-select: none;
 }
 
-/* Custom scrollbar for the app — 使用 rem 随分辨率缩放 */
+/* ============================================================
+   自定义滚动条
+   ============================================================ */
 ::-webkit-scrollbar {
   width: 0.5rem;
   height: 0.5rem;
@@ -230,4 +246,15 @@ html {
 .no-scrollbar {
   -ms-overflow-style: none;
   scrollbar-width: none;
+}
+
+/* ============================================================
+   滑块 range 样式补充（与主题色 accent-primary 一致）
+   ============================================================ */
+input[type="range"].accent-primary {
+  accent-color: var(--primary);
+}
+input[type="range"]:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }

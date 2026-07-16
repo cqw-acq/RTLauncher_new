@@ -16,11 +16,6 @@ import { motion } from "framer-motion"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import {
-  Avatar,
-  AvatarFallback,
-  AvatarImage,
-} from "@/components/ui/avatar"
-import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
@@ -47,8 +42,10 @@ const topNavItems: NavItem[] = [
   { icon: <Wrench className="size-4" />, label: "工具", href: "/tools" },
 ]
 
-// 底部导航项（已移除设置和个人按钮）
-const bottomNavItems: NavItem[] = []
+// 底部导航项 —— 设置
+const bottomNavItems: NavItem[] = [
+  { icon: <Settings className="size-4" />, label: "设置", href: "/settings" },
+]
 
 // 导航按钮
 function NavButton({ item, isActive }: { item: NavItem; isActive: boolean }) {

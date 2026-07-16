@@ -3,6 +3,7 @@ import "./globals.css";
 import { TitleBar } from "@/components/title-bar";
 import { Sidebar } from "@/components/sidebar";
 import { ThemeProvider } from "@/components/theme-provider";
+import { SettingsProvider } from "@/components/settings/settings-provider";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { AccountProvider } from "@/components/accounts/account-provider";
 import { DownloadProvider } from "@/components/download/download-provider";
@@ -30,26 +31,28 @@ export default function RootLayout({
           enableSystem
           disableTransitionOnChange
         >
-          <AccountProvider>
-            <LaunchProvider>
-            <MultiplayerProvider>
-            <DownloadProvider>
-              <TooltipProvider>
-                <TitleBar />
+          <SettingsProvider>
+            <AccountProvider>
+              <LaunchProvider>
+                <MultiplayerProvider>
+                  <DownloadProvider>
+                    <TooltipProvider>
+                      <TitleBar />
 
-                <div className="flex flex-1 overflow-hidden">
-                  <Sidebar />
-                  <main className="flex-1 overflow-hidden">
-                    <PageTransition>{children}</PageTransition>
-                  </main>
-                </div>
+                      <div className="flex flex-1 overflow-hidden">
+                        <Sidebar />
+                        <main className="flex-1 overflow-hidden">
+                          <PageTransition>{children}</PageTransition>
+                        </main>
+                      </div>
 
-                <DownloadTaskList />
-              </TooltipProvider>
-            </DownloadProvider>
-            </MultiplayerProvider>
-            </LaunchProvider>
-          </AccountProvider>
+                      <DownloadTaskList />
+                    </TooltipProvider>
+                  </DownloadProvider>
+                </MultiplayerProvider>
+              </LaunchProvider>
+            </AccountProvider>
+          </SettingsProvider>
         </ThemeProvider>
       </body>
     </html>

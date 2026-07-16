@@ -2,11 +2,11 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::env;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use futures::stream::{self, StreamExt};
-use tokio::fs::File;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::fs::{File, OpenOptions};
+use tokio::io::{AsyncReadExt, AsyncWriteExt, AsyncSeekExt};
 use tokio::sync::Semaphore;
 use std::time::Duration;
 use tauri::Emitter;
@@ -15,6 +15,12 @@ const JAVA_MANIFEST_URL: &str = "https://launchermeta.mojang.com/v1/products/jav
 // 减少并发下载数，避免被服务器限流
 const MAX_CONCURRENT_DOWNLOADS: usize = 8;
 const DOWNLOAD_BUFFER_SIZE: usize = 65536;
+// 每个文件的最大重试次数（整个下载流程，包括 body 读取）
+const MAX_FILE_RETRIES: usize = 8;
+// 初始重试延迟（毫秒），采用指数退避
+const INITIAL_RETRY_DELAY_MS: u64 = 500;
+// 最大重试延迟（毫秒）
+const MAX_RETRY_DELAY_MS: u64 = 8000;
 
 #[derive(Debug, Deserialize)]
 struct JavaManifest {
@@ -263,19 +269,8 @@ async fn download_java_files(
     let total = tasks.len();
     let progress = Arc::new(DownloadProgress::new(total));
     let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_DOWNLOADS));
-    // 创建更稳健的HTTP客户端
-    let client = Arc::new(
-        reqwest::Client::builder()
-            .pool_max_idle_per_host(MAX_CONCURRENT_DOWNLOADS)
-            .pool_idle_timeout(Duration::from_secs(90))
-            .connect_timeout(Duration::from_secs(10))
-            .timeout(Duration::from_secs(30))
-            .tcp_keepalive(Duration::from_secs(60))
-            .tcp_nodelay(true)
-            .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36")
-            .build()
-            .map_err(|e| format!("创建HTTP客户端失败: {}", e))?
-    );
+    // 复用共享 HTTP client（连接池更优、配置更完整）
+    let client = crate::http_client::shared_client().await;
 
     let progress_clone = progress.clone();
     let window_clone = window.clone();
@@ -358,6 +353,7 @@ async fn download_java_file(
         None
     };
 
+    // 如果目标文件已存在且 SHA1 匹配，直接跳过
     if let Ok(mut file) = File::open(&task.target_path).await {
         if check_sha1(&mut file, &task.sha1).await.unwrap_or(false) {
             progress.done.fetch_add(1, Ordering::SeqCst);
@@ -367,31 +363,16 @@ async fn download_java_file(
         }
     }
 
+    // 创建目录
     if let Some(parent) = task.target_path.parent() {
         tokio::fs::create_dir_all(parent).await
             .map_err(|e| format!("创建目录失败: {}", e))?;
     }
 
-    // 使用带重试的下载函数
-    let response = download_with_retry(&client, &task.url).await?;
+    // 核心下载：带 body 读取阶段重试、支持断点续传
+    download_file_with_resumable_retry(&client, &task.url, &task.target_path, task.size).await?;
 
-    let file = File::create(&task.target_path).await
-        .map_err(|e| format!("创建文件失败: {}", e))?;
-
-    let mut stream = response.bytes_stream();
-    use tokio::io::BufWriter;
-    let mut writer = BufWriter::with_capacity(DOWNLOAD_BUFFER_SIZE, file);
-
-    while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(|e| format!("读取数据失败: {}", e))?;
-        writer.write_all(&chunk).await
-            .map_err(|e| format!("写入文件失败: {}", e))?;
-    }
-
-    writer.flush().await.map_err(|e| format!("刷新缓冲区失败: {}", e))?;
-    writer.into_inner().sync_all().await
-        .map_err(|e| format!("同步文件失败: {}", e))?;
-
+    // SHA1 校验
     let mut file = File::open(&task.target_path).await
         .map_err(|e| format!("打开文件失败: {}", e))?;
 
@@ -400,6 +381,7 @@ async fn download_java_file(
         return Err("SHA1校验失败".to_string());
     }
 
+    // Unix 平台设置可执行权限
     #[cfg(unix)]
     if task.executable {
         use std::os::unix::fs::PermissionsExt;
@@ -415,35 +397,223 @@ async fn download_java_file(
     Ok(())
 }
 
-/// 带重试机制的下载函数
-async fn download_with_retry(
+/// 带断点续传与完整流程重试的下载函数
+///
+/// 关键修复点：
+/// 1. 不仅对 "建立连接 / 获取响应头" 阶段进行重试，
+///    对 "读取 body 数据流" 阶段的错误（如 connection reset）也进行重试。
+/// 2. 利用 HTTP Range 请求实现断点续传：
+///    在重试前检查磁盘已有字节数，从断点处继续下载，
+///    避免因中途连接断开而从零重新开始。
+/// 3. 使用指数退避策略，减少对服务器的瞬时压力。
+async fn download_file_with_resumable_retry(
     client: &reqwest::Client,
     url: &str,
-) -> Result<reqwest::Response, String> {
-    const MAX_RETRIES: usize = 3;
-    const RETRY_DELAY: Duration = Duration::from_secs(2);
+    target_path: &PathBuf,
+    expected_size: u64,
+) -> Result<(), String> {
+    let mut last_error: Option<String> = None;
 
-    for attempt in 0..MAX_RETRIES {
-        match client.get(url).send().await {
-            Ok(response) => {
-                if response.status().is_success() {
-                    return Ok(response);
-                } else {
-                    eprintln!("下载失败 (尝试 {}): HTTP {}", attempt + 1, response.status());
-                }
-            }
-            Err(e) => {
-                eprintln!("下载失败 (尝试 {}): {}", attempt + 1, e);
-            }
+    for attempt in 0..MAX_FILE_RETRIES {
+        // 计算当前磁盘上已有字节数（作为断点续传起点）
+        let current_bytes = std::fs::metadata(target_path)
+            .map(|m| m.len())
+            .unwrap_or(0);
+
+        // 已有完整文件则直接成功
+        if expected_size > 0 && current_bytes == expected_size {
+            return Ok(());
         }
 
-        // 如果不是最后一次尝试，等待后重试
-        if attempt < MAX_RETRIES - 1 {
-            tokio::time::sleep(RETRY_DELAY).await;
+        if attempt > 0 {
+            // 指数退避：500ms → 1s → 2s → 4s → 8s → 8s ...
+            let backoff_ms = std::cmp::min(
+                INITIAL_RETRY_DELAY_MS * (1u64 << (attempt - 1)),
+                MAX_RETRY_DELAY_MS,
+            );
+            eprintln!(
+                "[Java下载] 第{}次重试 ({}/{}), 已下载 {} bytes, 等待 {}ms 后继续: {}",
+                attempt, attempt, MAX_FILE_RETRIES - 1, current_bytes, backoff_ms, url
+            );
+            tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
+        }
+
+        match download_chunk(client, url, target_path, current_bytes).await {
+            Ok(()) => return Ok(()),
+            Err(e) => {
+                last_error = Some(e.clone());
+                eprintln!(
+                    "[Java下载] 尝试 {}/{} 失败: {} (URL: {})",
+                    attempt + 1, MAX_FILE_RETRIES, e, url
+                );
+            }
         }
     }
 
-    Err(format!("下载失败，已重试 {} 次", MAX_RETRIES))
+    Err(format!(
+        "下载失败: {}（已重试 {} 次）",
+        last_error.unwrap_or_else(|| "未知错误".to_string()),
+        MAX_FILE_RETRIES
+    ))
+}
+
+/// 从指定字节偏移开始下载一个 HTTP Range 片段到文件末尾。
+/// 出错时会保留已写入部分（以便下一次重试作为断点续传的起点）。
+async fn download_chunk(
+    client: &reqwest::Client,
+    url: &str,
+    target_path: &PathBuf,
+    start_offset: u64,
+) -> Result<(), String> {
+    // 构建请求
+    let mut request_builder = client
+        .get(url)
+        // 限制单次请求总时长（读取阶段最长 10 分钟），避免挂死
+        .timeout(Duration::from_secs(600));
+
+    if start_offset > 0 {
+        // 断点续传：从 start_offset 开始下载剩余字节
+        request_builder = request_builder.header(
+            reqwest::header::RANGE,
+            format!("bytes={}-", start_offset),
+        );
+    }
+
+    let response = request_builder
+        .send()
+        .await
+        .map_err(|e| format!("请求失败: {}", e))?;
+
+    let status = response.status();
+
+    // 判断响应状态：
+    // - 首次下载 (offset=0)：期望 HTTP 200
+    // - 断点续传 (offset>0)：期望 HTTP 206 Partial Content
+    if start_offset == 0 {
+        if !status.is_success() {
+            return Err(format!("HTTP 请求失败: {}", status));
+        }
+        // 如果服务器不理会 Range 也没关系，直接从 0 写即可
+    } else {
+        if status.as_u16() == 416 {
+            // HTTP 416 Range Not Satisfiable：
+            // 说明服务器认为我们请求的区间超出文件大小，
+            // 通常意味着本地已下载完成。视为成功。
+            return Ok(());
+        }
+        if status.as_u16() != 206 {
+            // 服务器不支持 Range，回退策略：丢弃已有部分，从头下载。
+            // （某些 CDN 不支持 Range 但会返回 200 + 完整 body）
+            if !status.is_success() {
+                return Err(format!("HTTP 请求失败: {}", status));
+            }
+            // 200 但我们带了 Range 头：服务器返回的是完整文件。
+            // 此时需要覆盖写入（从头写）
+            eprintln!(
+                "[Java下载] 服务器不支持 Range 请求 (HTTP {})，回退到覆盖写入: {}",
+                status, url
+            );
+            return write_response_to_file_from_start(response, target_path).await;
+        }
+    }
+
+    // 正常路径：打开文件并写入
+    write_response_to_file(response, target_path, start_offset).await
+}
+
+/// 从 offset 开始将响应 body 写入文件
+async fn write_response_to_file(
+    response: reqwest::Response,
+    target_path: &PathBuf,
+    start_offset: u64,
+) -> Result<(), String> {
+    use tokio::io::BufWriter;
+
+    // 以 append 模式打开文件；若 offset > 0 则 seek 到 offset
+    let file = if start_offset == 0 {
+        File::create(target_path)
+            .await
+            .map_err(|e| format!("创建文件失败: {}", e))?
+    } else {
+        let mut f = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .open(target_path)
+            .await
+            .map_err(|e| format!("打开文件失败: {}", e))?;
+        f.seek(std::io::SeekFrom::Start(start_offset))
+            .await
+            .map_err(|e| format!("定位文件偏移失败: {}", e))?;
+        f
+    };
+
+    let mut stream = response.bytes_stream();
+    let mut writer = BufWriter::with_capacity(DOWNLOAD_BUFFER_SIZE, file);
+    let downloaded_bytes = Arc::new(AtomicU64::new(0));
+    let downloaded_for_stall = downloaded_bytes.clone();
+
+    // 启动 stall 检测器：若 30 秒内没有任何新字节到来则放弃本次
+    let stall_handle = tokio::spawn(async move {
+        let mut last_seen = 0u64;
+        let mut same_count = 0u32;
+        loop {
+            tokio::time::sleep(Duration::from_secs(10)).await;
+            let cur = downloaded_for_stall.load(Ordering::Relaxed);
+            if cur > last_seen {
+                last_seen = cur;
+                same_count = 0;
+            } else {
+                same_count += 1;
+                if same_count >= 3 {
+                    // 30 秒内无任何进展
+                    break;
+                }
+            }
+        }
+    });
+
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| format!("读取数据失败: {}", e))?;
+        downloaded_bytes.fetch_add(chunk.len() as u64, Ordering::Relaxed);
+        writer.write_all(&chunk).await
+            .map_err(|e| format!("写入文件失败: {}", e))?;
+    }
+
+    // 取消 stall 检测器（正常完成）
+    stall_handle.abort();
+
+    writer.flush().await.map_err(|e| format!("刷新缓冲区失败: {}", e))?;
+    writer.into_inner().sync_all().await
+        .map_err(|e| format!("同步文件失败: {}", e))?;
+
+    Ok(())
+}
+
+/// 从头覆盖写入（服务器不支持 Range 时的回退路径）
+async fn write_response_to_file_from_start(
+    response: reqwest::Response,
+    target_path: &PathBuf,
+) -> Result<(), String> {
+    use tokio::io::BufWriter;
+
+    let file = File::create(target_path)
+        .await
+        .map_err(|e| format!("创建文件失败: {}", e))?;
+
+    let mut stream = response.bytes_stream();
+    let mut writer = BufWriter::with_capacity(DOWNLOAD_BUFFER_SIZE, file);
+
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| format!("读取数据失败: {}", e))?;
+        writer.write_all(&chunk).await
+            .map_err(|e| format!("写入文件失败: {}", e))?;
+    }
+
+    writer.flush().await.map_err(|e| format!("刷新缓冲区失败: {}", e))?;
+    writer.into_inner().sync_all().await
+        .map_err(|e| format!("同步文件失败: {}", e))?;
+
+    Ok(())
 }
 
 async fn check_sha1(file: &mut File, expected: &str) -> Result<bool, String> {

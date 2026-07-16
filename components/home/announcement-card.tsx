@@ -23,13 +23,13 @@ export function AnnouncementCard() {
     setCurrent((i) => (i + 1) % ANNOUNCEMENTS.length);
 
   return (
-    <Card className="h-full shadow-sm">
-      <CardHeader>
-        <CardTitle>公告栏</CardTitle>
-        <CardDescription>最新消息和更新</CardDescription>
+    <Card className="aspect-square shadow-sm flex flex-col">
+      <CardHeader className="pb-3">
+        <CardTitle className="text-base">公告栏</CardTitle>
+        <CardDescription className="text-xs">最新消息和更新</CardDescription>
       </CardHeader>
-      <CardContent className="flex flex-col items-center justify-center gap-4">
-        <div className="w-full rounded-xl border p-4 overflow-hidden">
+      <CardContent className="flex flex-1 flex-col items-center justify-between gap-3 pt-0">
+        <div className="flex flex-1 items-center justify-center w-full rounded-lg border p-3 overflow-hidden">
           <AnimatePresence mode="wait">
             <motion.div
               key={current}
@@ -38,8 +38,8 @@ export function AnnouncementCard() {
               animate="animate"
               exit="exit"
             >
-              <h3 className="font-semibold">{ANNOUNCEMENTS[current].title}</h3>
-              <p className="mt-1 text-sm text-muted-foreground">
+              <h3 className="font-medium text-sm">{ANNOUNCEMENTS[current].title}</h3>
+              <p className="mt-1 text-xs text-muted-foreground leading-relaxed">
                 {ANNOUNCEMENTS[current].content}
               </p>
             </motion.div>

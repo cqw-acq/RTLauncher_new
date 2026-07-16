@@ -250,7 +250,12 @@ impl LittleSkinClient {
                             .unwrap_or("")
                             .to_string();
                         let tid_skin = first.get("tid_skin").and_then(|t| t.as_i64());
-                        let avatar_url = format!("https://littleskin.cn/avatar/player/{}", name);
+
+                        // 下载真实皮肤 PNG 到本地 (供 3D 展示)
+                        let _ = crate::auth::official::download_skin_blocking(
+                            &uuid,
+                            "https://littleskin.cn/api/yggdrasil",
+                        );
 
                         upsert_player(
                             &conn,
@@ -263,10 +268,10 @@ impl LittleSkinClient {
 
                         return Ok(super::AccountInfo {
                             name,
-                            uuid,
+                            uuid: uuid.clone(),
                             auth_type: "littleskin".to_string(),
                             access_token: token_response.access_token,
-                            skin_url: Some(avatar_url),
+                            skin_url: Some(uuid),
                         });
                     }
                 }
@@ -397,32 +402,37 @@ pub fn authenticate_with_credentials(
     if parsed.available_profiles.is_empty() {
         // 如果没有可用角色，使用 selectedProfile 或 user 信息
         if let Some(sp) = &parsed.selected_profile {
-            let skin_url = format!("https://littleskin.cn/avatar/player/{}", sp.name);
+            let _ = crate::auth::official::download_skin_blocking(
+                &format_uuid(&sp.id),
+                YGGDRASIL_AUTH_BASE,
+            );
             results.push(LittleSkinAccountResult {
                 name: sp.name.clone(),
                 uuid: format_uuid(&sp.id),
                 access_token: parsed.accessToken.clone(),
-                skin_url: Some(skin_url),
+                skin_url: Some(format_uuid(&sp.id)),
             });
         } else if let Some(user) = &parsed.user {
-            let skin_url = format!("https://littleskin.cn/avatar/player/{}", user.id);
             results.push(LittleSkinAccountResult {
                 name: user.username.clone().unwrap_or_else(|| "Player".to_string()),
                 uuid: format_uuid(&user.id),
                 access_token: parsed.accessToken.clone(),
-                skin_url: Some(skin_url),
+                skin_url: Some(format_uuid(&user.id)),
             });
         } else {
             return Err("账户未创建玩家角色，请先在 LittleSkin 创建角色".to_string());
         }
     } else {
         for profile in &parsed.available_profiles {
-            let skin_url = format!("https://littleskin.cn/avatar/player/{}", profile.name);
+            let _ = crate::auth::official::download_skin_blocking(
+                &format_uuid(&profile.id),
+                YGGDRASIL_AUTH_BASE,
+            );
             results.push(LittleSkinAccountResult {
                 name: profile.name.clone(),
                 uuid: format_uuid(&profile.id),
                 access_token: parsed.accessToken.clone(),
-                skin_url: Some(skin_url),
+                skin_url: Some(format_uuid(&profile.id)),
             });
         }
     }
