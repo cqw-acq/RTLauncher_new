@@ -594,17 +594,12 @@ fn curseforge_file_download_url(file: &serde_json::Value) -> Option<String> {
 
     let file_id = file.get("id")?.as_i64()?;
     let file_name = json_string(file, "fileName")?;
-    let id = file_id.to_string();
-    let (prefix, suffix) = if id.len() > 4 {
-        (&id[..4], &id[4..])
-    } else {
-        (&id[..], "")
-    };
-    let suffix = suffix.trim_start_matches('0');
+    let first4 = file_id / 1000;
+    let last3 = file_id % 1000;
     Some(format!(
-        "https://edge.forgecdn.net/files/{}/{}/{}",
-        prefix,
-        if suffix.is_empty() { "0" } else { suffix },
+        "https://edge.forgecdn.net/files/{}/{:03}/{}",
+        first4,
+        last3,
         urlencoding(&file_name),
     ))
 }
