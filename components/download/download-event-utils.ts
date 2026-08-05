@@ -33,7 +33,7 @@ export function makeStartDownloadFn(
 
     setTasks((prev) => {
       const isDownloading = prev.some(
-        (t) => t.label === label && t.status === "downloading"
+        (t) => t.label === label && (t.status === "downloading" || t.status === "success")
       );
       if (isDownloading) return prev;
 
@@ -42,7 +42,6 @@ export function makeStartDownloadFn(
         label,
         mcVersion,
         status: "downloading",
-        progress: 0,
         startedAt: Date.now(),
       };
       return [task, ...prev];

@@ -82,7 +82,9 @@ pub struct LevelDatInfo {
 /// 根据 mainClass 推断加载器类型
 fn detect_loader_from_main_class(main_class: &str) -> &'static str {
     let mc = main_class.to_lowercase();
-    if mc.contains("quiltmc") || mc.contains("quilt") {
+    if mc.contains("optifine") {
+        "OptiFine"
+    } else if mc.contains("quiltmc") || mc.contains("quilt") {
         "Quilt"
     } else if mc.contains("fabricmc") || mc.contains("knot") {
         "Fabric"
@@ -103,7 +105,9 @@ fn detect_loader_from_main_class(main_class: &str) -> &'static str {
 /// 从版本文件夹名中快速推断加载器（备用方案）
 fn detect_loader_from_name(name: &str) -> &'static str {
     let lower = name.to_lowercase();
-    if lower.contains("neoforge") {
+    if lower.contains("optifine") {
+        "OptiFine"
+    } else if lower.contains("neoforge") {
         "NeoForge"
     } else if lower.contains("fabric") {
         "Fabric"
@@ -256,6 +260,9 @@ fn build_instance_data(instance_dir: &Path, minecraft_path: &Path) -> Option<Ins
                         let loader = if from_main == "Forge" && from_name == "NeoForge" {
                             // mainClass 误判为 Forge，但文件夹名明确是 NeoForge → 以文件夹名为准
                             "NeoForge"
+                        } else if from_main == "Forge" && from_name == "OptiFine" {
+                            // OptiFine 继承 Forge 的 mainClass，但文件夹名明确是 OptiFine → 以文件夹名为准
+                            "OptiFine"
                         } else if from_main == "Vanilla" {
                             // mainClass 无法判断 → 用文件夹名
                             from_name
@@ -631,6 +638,18 @@ mod tests {
         assert_eq!(
             detect_loader_from_main_class("net.fabricmc.loader.impl.launch.knot.KnotClient"),
             "Fabric"
+        );
+    }
+
+    #[test]
+    fn detects_optifine_loader() {
+        assert_eq!(
+            detect_loader_from_name("26.1.2-OptiFine-HD_U_K1_pre2"),
+            "OptiFine"
+        );
+        assert_eq!(
+            detect_loader_from_name("1.21.1-OptiFine-HD_U_I7"),
+            "OptiFine"
         );
     }
 }

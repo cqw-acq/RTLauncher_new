@@ -6,7 +6,6 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { useAccountContext } from "@/components/accounts/account-provider";
-import { LoginDialog } from "@/components/accounts/login-dialog";
 import { SkinCapeManager } from "@/components/accounts/skin-cape-manager";
 import { X, Check, Plus, Trash2, Shirt, RefreshCw } from "lucide-react";
 import { cn, getAvatarColor, getAvatarInitials } from "@/lib/utils";
@@ -25,8 +24,13 @@ export function AccountSwitcher({
   onClose,
   onSelect,
 }: AccountSwitcherProps) {
-  const { profiles, selectedProfile, removeProfile, updateProfile } = useAccountContext();
-  const [loginOpen, setLoginOpen] = useState(false);
+  const {
+    profiles,
+    selectedProfile,
+    removeProfile,
+    updateProfile,
+    setManualLoginOpen,
+  } = useAccountContext();
   const [deleteTarget, setDeleteTarget] = useState<Account | null>(null);
   const [skinManagerAccount, setSkinManagerAccount] = useState<Account | null>(null);
   const [refreshingSkinId, setRefreshingSkinId] = useState<string | null>(null);
@@ -62,7 +66,7 @@ export function AccountSwitcher({
                       variant="ghost"
                       size="icon-sm"
                       className="touch-manipulation"
-                      onClick={() => setLoginOpen(true)}
+                      onClick={() => setManualLoginOpen(true)}
                       title="添加账户"
                     >
                       <Plus className="size-4" />
@@ -250,9 +254,6 @@ export function AccountSwitcher({
           onClose={() => setSkinManagerAccount(null)}
         />
       )}
-
-      {/* 登录对话框 */}
-      <LoginDialog open={loginOpen} onClose={() => setLoginOpen(false)} />
     </>
   );
 }

@@ -1,0 +1,20 @@
+鈻?Next.js 16.1.6 (Turbopack)
+- Experiments (use with caution):
+  路 optimizePackageImports
+
+  Creating an optimized production build ...
+鉁?Compiled successfully in 14.6s
+  Running TypeScript ...
+Failed to compile.
+
+./app/game-settings/schematics/page.tsx:26:17
+Type error: Type 'unknown' is not assignable to type 'string | null'.
+
+  24 |           absPath = (file as any).path;
+  25 |         } else if (file.name) {
+> 26 |           const cacheRoot: string | null = await invoke("get_mod_cache_dir_cmd", {
+     |                 ^
+  27 |             kind: "world",
+  28 |             mcVersion: "",
+  29 |             modLoader: "",
+Next.js build worker exited with code: 1 and signal: null

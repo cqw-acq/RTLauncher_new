@@ -14,6 +14,7 @@ import {
   Info,
   Folder,
   ChevronLeft,
+  Eye,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -115,6 +116,10 @@ export interface ResourcePanelProps {
   simplifyName?: (name: string) => string;
   // 文件副标题（可选回调）- 从文件名或其他信息生成的描述
   getFileSubtitle?: (file: FileItem) => string;
+  // 预览（查看器）回调 - 点击眼睛图标时触发（如投影预览）
+  onOpenViewer?: (file: FileItem, side: "left" | "right") => void;
+  // 启用预览按钮的文件扩展名（小写不含点，如 ["litematic", "schem", "schematic", "nbt"]）
+  viewerExtensions?: string[];
 }
 
 export default function ResourcePanel({
@@ -151,6 +156,8 @@ export default function ResourcePanel({
   onUploadFiles,
   simplifyName,
   getFileSubtitle,
+  onOpenViewer,
+  viewerExtensions,
 }: ResourcePanelProps) {
   const { t } = useI18n();
   // 先做 URL decode（%20 -> 空格 等），再应用用户自定义的 simplifyName
@@ -226,6 +233,14 @@ export default function ResourcePanel({
     canRename: boolean,
     modInfoMap?: Map<string, ModInfo>,
   ) => {
+    const canViewer = !!onOpenViewer;
+    const matchViewer = (name: string) => {
+      if (!viewerExtensions || viewerExtensions.length === 0) return true;
+      const dot = name.lastIndexOf(".");
+      if (dot < 0) return false;
+      const ext = name.slice(dot + 1).toLowerCase();
+      return viewerExtensions.includes(ext);
+    };
     if (loading) {
       return (
         <div className="space-y-2 px-1">
@@ -353,6 +368,22 @@ export default function ResourcePanel({
                       title={t("panel.viewDetails")}
                     >
                       <Info className="size-3.5" />
+                    </Button>
+                  )}
+
+                  {/* 预览（查看器，如投影预览）- 眼睛图标 */}
+                  {canViewer && !file.isDir && matchViewer(file.name) && (
+                    <Button
+                      variant="secondary"
+                      size="icon"
+                      className="size-7 shrink-0"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onOpenViewer!(file, side);
+                      }}
+                      title="预览"
+                    >
+                      <Eye className="size-3.5" />
                     </Button>
                   )}
 

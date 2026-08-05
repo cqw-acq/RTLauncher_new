@@ -243,11 +243,28 @@ export default function WorldsPage() {
   const [view, setView] = useState<"list" | "detail">("list");
   const [selectedWorld, setSelectedWorld] = useState<string | null>(null);
 
-  if (!loadingState.configLoaded || !loadingState.minecraftPath) {
+  // 准备中状态：configLoaded=true 但 instances 还在扫描 / minecraftPath 待定
+  const [preparingTimeout, setPreparingTimeout] = useState(false);
+  useEffect(() => {
+    if (!loadingState.configLoaded) return;
+    const t = window.setTimeout(() => setPreparingTimeout(true), 1200);
+    return () => window.clearTimeout(t);
+  }, [loadingState.configLoaded]);
+
+  if (!loadingState.configLoaded || (loadingState.configLoaded && !preparingTimeout && (loadingState.instancesScanning || !loadingState.minecraftPath))) {
     return (
       <ResourcePageFallback
-        title={!loadingState.configLoaded ? "pageFactory.loadingConfiguration" : "pageFactory.gameDirectoryIsNotConfigured"}
-        subtitle={!loadingState.configLoaded ? "pageFactory.pleaseWait" : "pageFactory.configureTheMinecraftGameDirectoryOnTheLaunchPage"}
+        title="pageFactory.loadingConfiguration"
+        subtitle="pageFactory.pleaseWait"
+      />
+    );
+  }
+
+  if (!loadingState.minecraftPath) {
+    return (
+      <ResourcePageFallback
+        title="pageFactory.gameDirectoryIsNotConfigured"
+        subtitle="pageFactory.configureTheMinecraftGameDirectoryOnTheLaunchPage"
       />
     );
   }

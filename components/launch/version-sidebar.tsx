@@ -16,6 +16,7 @@ import { cn } from "@/lib/utils";
 import type { InstanceData } from "@/types";
 import { useLaunchContext } from "./launch-provider";
 import { useI18n } from "@/components/i18n/use-i18n";
+import { LoaderIcon, inferLoaderKind } from "@/components/launch/loader-icon";
 
 interface VersionSidebarProps {
   className?: string;
@@ -151,21 +152,27 @@ export function VersionSidebar({ className }: VersionSidebarProps) {
                   whileHover={{ scale: 1.02 }}
                   whileTap={{ scale: 0.98 }}
                 >
-                  {/* 选中指示器 */}
-                  {isExpanded ? (
-                    isSelected ? (
-                      <CheckCircle2 className="size-4 shrink-0 text-primary" />
+                  {/* 选中指示器 + Loader 图标 */}
+                  <div className="flex shrink-0 items-center gap-1.5">
+                    {isExpanded ? (
+                      isSelected ? (
+                        <CheckCircle2 className="size-4 shrink-0 text-primary" />
+                      ) : (
+                        <Circle className="size-4 shrink-0 opacity-40" />
+                      )
                     ) : (
-                      <Circle className="size-4 shrink-0 opacity-40" />
-                    )
-                  ) : (
-                    <div
-                      className={cn(
-                        "size-2 rounded-full shrink-0",
-                        isSelected ? "bg-primary" : "bg-muted-foreground/40"
-                      )}
+                      <div
+                        className={cn(
+                          "size-2 rounded-full shrink-0",
+                          isSelected ? "bg-primary" : "bg-muted-foreground/40"
+                        )}
+                      />
+                    )}
+                    <LoaderIcon
+                      kind={inferLoaderKind(instance.loader)}
+                      className="size-6"
                     />
-                  )}
+                  </div>
 
                   {/* 版本信息 */}
                   <AnimatePresence mode="wait">

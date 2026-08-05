@@ -26,6 +26,7 @@ import {
   formatTimestamp,
 } from "@/components/modpack/modpack-api";
 import { useI18n } from "@/components/i18n/use-i18n";
+import type { AppLanguage } from "@/components/settings/settings-provider";
 
 interface NewPackDialogState {
   open: boolean;
@@ -36,7 +37,8 @@ interface NewPackDialogState {
 
 export default function ToolsPage() {
   const router = useRouter();
-  const { t } = useI18n();
+  const { t, language } = useI18n();
+  const L = <T extends { [k in AppLanguage]: string }>(obj: T): string => obj[language] ?? obj["zh-CN"] ?? obj["en-US"];
 
   // 整合包实例
   const { instances, loading: instLoading, reload: reloadInstances } =
@@ -98,7 +100,7 @@ export default function ToolsPage() {
   };
 
   return (
-    <div className="flex flex-col h-full overflow-hidden bg-background">
+    <div className="flex flex-col h-full bg-background overflow-y-auto">
       {/* 顶部标题栏 */}
       <div className="shrink-0 border-b border-border p-4">
         <div className="flex items-center gap-3">
@@ -112,7 +114,7 @@ export default function ToolsPage() {
         </div>
       </div>
 
-      <div className="flex-1 overflow-auto p-4 md:p-6">
+      <div className="flex-1 p-4 md:p-6">
         <div className="max-w-4xl mx-auto space-y-6">
           {/* 两个整合包制作大卡片 */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -132,7 +134,7 @@ export default function ToolsPage() {
                 </div>
                 <h3 className="font-semibold text-base">{t("tools.createAModrinthModpack")}</h3>
                 <p className="text-xs text-muted-foreground mt-1 leading-relaxed">
-                  {t({ "zh-CN": "通过 Modrinth API 搜索并添加文件，自动收集 path、SHA-1、SHA-512、fileSize 与下载地址，并导出标准 .mrpack。", "en-US": "Search and add files with the Modrinth API, collect path, SHA-1, SHA-512, fileSize, and download URL, and export a standard .mrpack." })}
+                  {L({ "zh-CN": "通过 Modrinth API 搜索并添加文件，自动收集 path、SHA-1、SHA-512、fileSize 与下载地址，并导出标准 .mrpack。", "en-US": "Search and add files with the Modrinth API, collect path, SHA-1, SHA-512, fileSize, and download URL, and export a standard .mrpack." })}
                 </p>
                 <Button
                   className="mt-4 w-full gap-2"
@@ -160,7 +162,7 @@ export default function ToolsPage() {
                 </div>
                 <h3 className="font-semibold text-base">{t("tools.createACurseForgeModpack")}</h3>
                 <p className="text-xs text-muted-foreground mt-1 leading-relaxed">
-                  {t({ "zh-CN": "通过 CurseForge API 搜索，收集 projectID 与 fileID，生成标准 manifest.json 并导出 ZIP。", "en-US": "Search with the CurseForge API, collect projectID and fileID, generate a standard manifest.json, and export a ZIP." })}
+                  {L({ "zh-CN": "通过 CurseForge API 搜索，收集 projectID 与 fileID，生成标准 manifest.json 并导出 ZIP。", "en-US": "Search with the CurseForge API, collect projectID and fileID, generate a standard manifest.json, and export a ZIP." })}
                 </p>
                 <Button
                   className="mt-4 w-full gap-2"

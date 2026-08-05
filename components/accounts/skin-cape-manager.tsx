@@ -10,6 +10,7 @@ import {
   msActivateSkin,
   msDeleteSkin,
   msSetActiveCape,
+  microsoftProbeAccountLogin,
   type MCSkinInfo,
   type MCCapeInfo,
 } from "@/lib/auth";
@@ -37,22 +38,18 @@ export function SkinCapeManager({ account, onClose }: SkinCapeManagerProps) {
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // 加载皮肤/披风列表
+  // 加载皮肤/披风列表 —— 调用【公共函数 microsoftProbeAccountLogin】
+  // 保证和 AccountProvider 启动时的账号有效性检测逻辑 100% 一致
   const loadProfile = async () => {
-    if (!account.accessToken) {
-      setErrorMsg("账户 access_token 不存在，请重新登录");
-      setLoading(false);
-      return;
-    }
     setLoading(true);
     setErrorMsg(null);
-    try {
-      const data = await msGetSkinsAndCapes(account.accessToken);
-      setSkins(data.skins || []);
-      setCapes(data.capes || []);
-    } catch (e: unknown) {
-      setErrorMsg(e instanceof Error ? e.message : String(e));
-    } finally {
+    const probe = await microsoftProbeAccountLogin(account.accessToken);
+    if (probe.ok) {
+      setSkins(probe.profile.skins || []);
+      setCapes(probe.profile.capes || []);
+      setLoading(false);
+    } else {
+      setErrorMsg(probe.error); // 错误消息原封不动返回（和启动时检测的错误消息完全一样）
       setLoading(false);
     }
   };

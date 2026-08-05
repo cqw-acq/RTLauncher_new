@@ -103,7 +103,7 @@ const NAV_LABELS: Record<string, TranslationKey> = {
   settings: "sidebar.settings",
 }
 
-function NavButton({ item, isActive }: { item: NavItem; isActive: boolean }) {
+function NavButton({ item, isActive, isExactActive }: { item: NavItem; isActive: boolean; isExactActive: boolean }) {
   const router = useRouter()
 
   const handleNavigation = (event: React.MouseEvent<HTMLAnchorElement>) => {
@@ -118,7 +118,7 @@ function NavButton({ item, isActive }: { item: NavItem; isActive: boolean }) {
       return
     }
 
-    if (isActive) {
+    if (isExactActive) {
       event.preventDefault()
       return
     }
@@ -208,6 +208,10 @@ function isNavItemActive(pathname: string, href: string) {
   return pathname === href || pathname.startsWith(`${href}/`)
 }
 
+function isNavItemExactActive(pathname: string, href: string) {
+  return pathname === href
+}
+
 export function Sidebar({ className }: SidebarProps) {
   const pathname = usePathname()
   const { config, configLoaded } = useUIConfigContext()
@@ -218,6 +222,7 @@ export function Sidebar({ className }: SidebarProps) {
   }))
 
   const isActive = (href: string) => isNavItemActive(pathname, href)
+  const isExactActive = (href: string) => isNavItemExactActive(pathname, href)
 
   // 根据配置过滤可见的导航项
   const visibleNavItems = configLoaded
@@ -241,13 +246,13 @@ export function Sidebar({ className }: SidebarProps) {
     >
       <nav className="flex flex-1 flex-col items-center gap-2 p-2">
         {topNavItems.map((item) => (
-          <NavButton key={item.href} item={item} isActive={isActive(item.href)} />
+          <NavButton key={item.href} item={item} isActive={isActive(item.href)} isExactActive={isExactActive(item.href)} />
         ))}
       </nav>
 
       <div className="flex flex-col items-center gap-2 border-t border-border p-2">
         {bottomNavItems.map((item) => (
-          <NavButton key={item.href} item={item} isActive={isActive(item.href)} />
+          <NavButton key={item.href} item={item} isActive={isActive(item.href)} isExactActive={isExactActive(item.href)} />
         ))}
       </div>
     </aside>
