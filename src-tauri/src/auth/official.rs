@@ -1093,6 +1093,54 @@ pub fn get_skin_base64(uuid: String) -> Result<String, String> {
 
     Err(last_error.unwrap_or_else(|| "皮肤文件不存在".to_string()))
 }
+
+/// 删除本地磁盘上的玩家皮肤缓存文件（当账号从 official.rs 数据库中移除时调用，清理残留文件）
+/// 会尝试多种 UUID 格式（带/不带连字符），返回成功删除的文件数量
+#[tauri::command]
+pub fn delete_cached_skin(uuid: String) -> Result<usize, String> {
+    let profile_dir = format!("{}/skins", super::config_dir());
+
+    // 生成多个可能的文件名尝试（和 get_skin_base64 保持一致）
+    let uuid_with_hyphens = format_uuid_with_hyphens(&uuid);
+    let uuid_without_hyphens = format_uuid_without_hyphens(&uuid);
+
+    let mut candidate_paths = vec![format!("{}/{}.png", profile_dir, uuid)];
+    if uuid != uuid_with_hyphens {
+        candidate_paths.push(format!("{}/{}.png", profile_dir, uuid_with_hyphens));
+    }
+    if uuid != uuid_without_hyphens {
+        candidate_paths.push(format!("{}/{}.png", profile_dir, uuid_without_hyphens));
+    }
+
+    let mut deleted_count: usize = 0;
+    for path in &candidate_paths {
+        match std::fs::remove_file(path) {
+            Ok(()) => {
+                eprintln!("[正版检测-清理] 已删除残留皮肤文件: {}", path);
+                deleted_count += 1;
+            }
+            Err(ref e) if e.kind() == std::io::ErrorKind::NotFound => {
+                // 文件不存在，正常情况，不打印错误
+            }
+            Err(e) => {
+                eprintln!("[正版检测-清理] 删除皮肤文件失败 {}: {}", path, e);
+            }
+        }
+    }
+
+    if deleted_count > 0 {
+        eprintln!(
+            "[正版检测-清理] UUID={} 的皮肤缓存清理完毕，共删除 {} 个文件",
+            uuid, deleted_count
+        );
+    } else {
+        eprintln!(
+            "[正版检测-清理] UUID={} 没有找到残留的皮肤文件（可能从未下载过）",
+            uuid
+        );
+    }
+    Ok(deleted_count)
+}
 async fn add_new_account(
     client: &Client,
     connection: &Connection,
@@ -1207,12 +1255,17 @@ fn friendly_net_err(e: impl std::fmt::Display) -> String {
 /// 第一步：请求设备代码，前端展示 user_code 和 verification_uri
 #[tauri::command]
 pub async fn ms_request_device_code() -> Result<DeviceCodeInfo, String> {
+    eprintln!("[正版检测] 步骤4：⟡ 进入强制重新登录流程！请求设备授权码...");
     // 重置取消标志（新的一次登录流程开始）
     MS_LOGIN_CANCELLED.store(false, Ordering::SeqCst);
     let client = build_http_client()?;
     let resp = get_device_code(&client, CLIENT_ID)
         .await
         .map_err(|e| friendly_net_err(e))?;
+    eprintln!(
+        "[正版检测] 步骤4：✓ 设备码获取成功！user_code={}, verification_uri={}, 有效期={}秒",
+        resp.user_code, resp.verification_uri, resp.expires_in
+    );
     // 自动打开浏览器让用户授权
     let _ = webbrowser::open(&resp.verification_uri);
     Ok(DeviceCodeInfo {
@@ -1227,17 +1280,21 @@ pub async fn ms_request_device_code() -> Result<DeviceCodeInfo, String> {
 /// 第二步：轮询等待用户授权，完成后走完整认证链并返回 AccountInfo
 #[tauri::command]
 pub async fn ms_poll_and_login(device_code: String, interval: u64) -> Result<AccountInfo, String> {
+    eprintln!("[正版检测] 步骤4：开始轮询微软登录授权（间隔={}秒，超时=300秒）", interval);
     let client = build_http_client()?;
     let start_time = Instant::now();
     let timeout = Duration::from_secs(300); // 5 分钟超时
+    let mut poll_count: u32 = 0;
 
     loop {
         // 检查用户是否已取消登录
         if MS_LOGIN_CANCELLED.load(Ordering::SeqCst) {
+            eprintln!("[正版检测] 步骤4：✗ 用户取消了登录");
             return Err("已取消登录".to_string());
         }
 
         if start_time.elapsed() >= timeout {
+            eprintln!("[正版检测] 步骤4：✗ 登录超时（超过5分钟）");
             return Err("登录超时，请重试".to_string());
         }
 
@@ -1245,7 +1302,13 @@ pub async fn ms_poll_and_login(device_code: String, interval: u64) -> Result<Acc
 
         // sleep 之后再次检查取消状态
         if MS_LOGIN_CANCELLED.load(Ordering::SeqCst) {
+            eprintln!("[正版检测] 步骤4：✗ 用户取消了登录");
             return Err("已取消登录".to_string());
+        }
+
+        poll_count += 1;
+        if poll_count % 10 == 1 {
+            eprintln!("[正版检测] 步骤4：轮询中... 第{}次请求（已等待约{}秒）", poll_count, poll_count * interval as u32);
         }
 
         // 单次轮询尝试
@@ -1265,12 +1328,15 @@ pub async fn ms_poll_and_login(device_code: String, interval: u64) -> Result<Acc
             continue; // 用户尚未授权，继续轮询
         }
 
+        eprintln!("[正版检测] 步骤4：✓ 用户已授权！Microsoft Token 获取成功（第{}次轮询）", poll_count);
+
         let token: TokenResponse = response
             .json()
             .await
             .map_err(|e| format!("解析 Token 失败: {}", e))?;
 
         // Xbox Live 认证
+        eprintln!("[正版检测] 步骤4：正在进行 Xbox Live 认证...");
         let xbox = authenticate_with_xbox_live(&client, &token.access_token)
             .await
             .map_err(|e| {
@@ -1286,16 +1352,20 @@ pub async fn ms_poll_and_login(device_code: String, interval: u64) -> Result<Acc
                     format!("Xbox Live 认证失败: {}", msg)
                 }
             })?;
+        eprintln!("[正版检测] 步骤4：✓ Xbox Live 认证成功");
 
         // XSTS Token
+        eprintln!("[正版检测] 步骤4：正在获取 XSTS Token...");
         let xsts = get_xsts_token(&client, &xbox.token)
             .await
             .map_err(|e| format!("XSTS 认证失败: {}", e))?;
+        eprintln!("[正版检测] 步骤4：✓ XSTS Token 获取成功");
 
         // Minecraft 认证
         let uhs = xbox.display_claims.xui.first()
             .map(|x| x.uhs.clone())
             .ok_or_else(|| "Xbox Live 认证返回的 xui 为空".to_string())?;
+        eprintln!("[正版检测] 步骤4：正在进行 Minecraft 服务端认证...");
         let mc_login = authenticate_with_minecraft(
             &client,
             &uhs,
@@ -1303,19 +1373,25 @@ pub async fn ms_poll_and_login(device_code: String, interval: u64) -> Result<Acc
         )
         .await
         .map_err(|e| format!("Minecraft 认证失败: {}", e))?;
+        eprintln!("[正版检测] 步骤4：✓ Minecraft 认证成功");
 
         // 检查是否拥有 Minecraft
+        eprintln!("[正版检测] 步骤4：正在检查 Minecraft 购买状态...");
         let purchase = check_mc_purchase(&client, &mc_login.access_token)
             .await
             .map_err(|e| format!("检查购买状态失败: {}", e))?;
         if purchase.contains("还没有购买") {
+            eprintln!("[正版检测] 步骤4：✗ 该微软账号尚未购买 Minecraft");
             return Err(purchase);
         }
+        eprintln!("[正版检测] 步骤4：✓ 购买状态正常");
 
         // 获取 Minecraft 个人资料
+        eprintln!("[正版检测] 步骤4：正在获取 Minecraft 个人资料...");
         let profile = get_minecraft_profile(&client, &mc_login.access_token)
             .await
             .map_err(|e| format!("获取 Minecraft 资料失败: {}", e))?;
+        eprintln!("[正版检测] 步骤4：✓ 获取个人资料成功！玩家名={}, UUID={}", profile.name, profile.id);
 
         // 构造返回值（先于数据库/皮肤操作，确保即使后续失败也能返回）
         let account_info = AccountInfo {
@@ -1339,17 +1415,18 @@ pub async fn ms_poll_and_login(device_code: String, interval: u64) -> Result<Acc
         })
         .await;
         match db_result {
-            Ok(Ok(())) => {}
+            Ok(Ok(())) => eprintln!("[正版检测] 步骤4：✓ 账号信息已保存到数据库"),
             Ok(Err(e)) => eprintln!("[MS登录] 数据库保存失败(非致命): {}", e),
             Err(e) => eprintln!("[MS登录] 数据库任务崩溃(非致命): {}", e),
         }
 
         // 下载皮肤（非致命）
         match download_player_skin(&client, &profile.id).await {
-            Ok(()) => {}
+            Ok(()) => eprintln!("[正版检测] 步骤4：✓ 玩家皮肤下载完成"),
             Err(e) => eprintln!("[MS登录] 皮肤下载失败(非致命): {}", e),
         }
 
+        eprintln!("[正版检测] 步骤4：✅ 强制重新登录流程完成！玩家={} 登录成功", profile.name);
         return Ok(account_info);
     }
 }
@@ -1414,22 +1491,59 @@ struct MCFullCape {
 /// 获取 Minecraft 完整资料（皮肤列表 + 披风列表）
 #[tauri::command]
 pub async fn ms_get_skins_and_capes(access_token: String) -> Result<MCSkinCapeProfile, String> {
+    eprintln!("[正版检测] 步骤2：调用皮肤披风模块试探 access_token 有效性");
+    if access_token.trim().is_empty() {
+        eprintln!("[正版检测] 步骤2：✗ access_token 为空字符串！直接返回失败");
+        return Err("账户 access_token 不存在，请重新登录".to_string());
+    }
+    // 打印 token 的前8位和后4位，方便调试但不泄露完整 token
+    let token_len = access_token.len();
+    let token_preview = if token_len >= 12 {
+        format!(
+            "{}...{} (长度={})",
+            &access_token[0..8],
+            &access_token[token_len - 4..],
+            token_len
+        )
+    } else {
+        format!("(长度={})", token_len)
+    };
+    eprintln!("[正版检测] 步骤2：正在请求 Minecraft Services API，token={}", token_preview);
+
     let client = build_http_client()?;
     let resp = client
         .get("https://api.minecraftservices.com/minecraft/profile")
         .bearer_auth(&access_token)
         .send()
         .await
-        .map_err(|e| friendly_net_err(e))?;
+        .map_err(|e| {
+            let err = friendly_net_err(e);
+            eprintln!("[正版检测] 步骤2：✗ 网络请求失败 -> {}", err);
+            err
+        })?;
 
     if !resp.status().is_success() {
-        return Err(format!("获取皮肤资料失败 (HTTP {})", resp.status()));
+        let status = resp.status();
+        let err_msg = format!("获取皮肤资料失败 (HTTP {})", status);
+        if status.as_u16() == 401 {
+            eprintln!("[正版检测] 步骤2：✗ HTTP 401 Unauthorized -> access_token 已过期或无效，需要重新登录");
+        } else {
+            eprintln!("[正版检测] 步骤2：✗ HTTP {} -> {}", status, err_msg);
+        }
+        return Err(err_msg);
     }
 
     let profile: MCFullProfileResponse = resp
         .json()
         .await
         .map_err(|e| format!("解析皮肤资料失败: {}", e))?;
+
+    let skins_count = profile.skins.as_ref().map(|s| s.len()).unwrap_or(0);
+    let capes_count = profile.capes.as_ref().map(|c| c.len()).unwrap_or(0);
+    eprintln!(
+        "[正版检测] 步骤2：✓ 皮肤披风获取成功！玩家={}, 皮肤数={}, 披风数={} -> 账号正常，无需重新登录",
+        profile.name, skins_count, capes_count
+    );
 
     let skins: Vec<MCSkinInfo> = profile
         .skins
@@ -1619,4 +1733,142 @@ pub async fn ms_set_active_cape(access_token: String, cape_id: String) -> Result
         return Err(format!("设置披风失败 (HTTP {}): {}", status, text));
     }
     Ok(())
+}
+
+/// 尝试通过数据库中的 refresh_token 静默刷新微软账号
+/// 成功：返回更新后的 AccountInfo（包含新的 access_token、name、uuid、skin_url）
+/// 失败：返回错误（例如 "NO_REFRESH_TOKEN"、"REFRESH_FAILED" 等），表示必须重新走设备码授权流程
+#[tauri::command]
+pub async fn ms_silent_refresh_account(uuid: String) -> Result<AccountInfo, String> {
+    eprintln!("[正版检测] 步骤3：尝试用 refresh_token 静默刷新账号 UUID={}", uuid);
+    // ── 第一步：从数据库中取出 refresh_token（同步块内完成，避免非 Send 的 SQLite Statement/Connection 跨 await）──
+    let (db_uuid, db_refresh_token): (String, String) = {
+        let connection = setup_database().map_err(|e| format!("打开账户数据库失败: {}", e))?;
+        let query = format!(
+            "SELECT uuid, username, refresh_token, access_token, time FROM accounts WHERE uuid = '{}'",
+            uuid.replace('\'', "''")
+        );
+        let mut stmt = connection.prepare(query).map_err(|e| e.to_string())?;
+
+        if let State::Row = stmt.next().map_err(|e| e.to_string())? {
+            let u: String = stmt.read::<String, _>(0).map_err(|e| e.to_string())?;
+            let n: String = stmt.read::<String, _>(1).map_err(|e| e.to_string())?;
+            let rt: String = stmt.read::<String, _>(2).map_err(|e| e.to_string())?;
+            if rt.trim().is_empty() {
+                eprintln!("[正版检测] 步骤3：✗ 数据库中 refresh_token 为空，无法静默刷新");
+                return Err("NO_REFRESH_TOKEN".to_string());
+            }
+            eprintln!("[正版检测] 步骤3：从数据库读取到玩家名={}, refresh_token 存在 (长度={})", n, rt.len());
+            (u, rt)
+        } else {
+            eprintln!("[正版检测] 步骤3：✗ 数据库中没有该 UUID 的账号记录，无法静默刷新");
+            return Err("NO_REFRESH_TOKEN".to_string());
+        }
+        // stmt、connection 在这里离开作用域被 drop，不会保留到 await 之后
+    };
+
+    // ── 第二步：HTTP / await 部分（作用域中不再保留任何 db 相关对象）──
+    let client = build_http_client().map_err(|e| e.to_string())?;
+
+    eprintln!("[正版检测] 步骤3：正在请求 Microsoft Token 刷新接口...");
+    // 2) 调用 Microsoft token endpoint 刷新 access_token
+    let refreshed = refresh_access_token(&client, CLIENT_ID, &db_refresh_token)
+        .await
+        .map_err(|_| {
+            eprintln!("[正版检测] 步骤3：✗ refresh_token 已失效，Microsoft Token 接口返回失败");
+            "REFRESH_FAILED".to_string()
+        })?;
+    eprintln!("[正版检测] 步骤3：✓ Microsoft Token 刷新成功，新 access_token 长度={}", refreshed.access_token.len());
+
+    eprintln!("[正版检测] 步骤3：正在走 Xbox Live / XSTS / Minecraft 完整认证链...");
+    // 3) 走一遍 Xbox Live / XSTS / Minecraft 登录链条，拿到 Minecraft access_token
+    let xbox_token = authenticate_with_xbox_live(&client, &refreshed.access_token)
+        .await
+        .map_err(|_| {
+            eprintln!("[正版检测] 步骤3：✗ Xbox Live 认证失败");
+            "REFRESH_FAILED".to_string()
+        })?;
+    eprintln!("[正版检测] 步骤3：✓ Xbox Live 认证成功");
+
+    let xsts_token = get_xsts_token(&client, &xbox_token.token)
+        .await
+        .map_err(|_| {
+            eprintln!("[正版检测] 步骤3：✗ XSTS 认证失败");
+            "REFRESH_FAILED".to_string()
+        })?;
+    eprintln!("[正版检测] 步骤3：✓ XSTS 认证成功");
+
+    let mc_login = authenticate_with_minecraft(
+        &client,
+        &xsts_token.display_claims.xui[0].uhs,
+        &xsts_token.token,
+    )
+    .await
+    .map_err(|_| {
+        eprintln!("[正版检测] 步骤3：✗ Minecraft 认证失败");
+        "REFRESH_FAILED".to_string()
+    })?;
+    eprintln!("[正版检测] 步骤3：✓ Minecraft 认证成功，新 Minecraft access_token 长度={}", mc_login.access_token.len());
+
+    // 4) 取得玩家资料（玩家名、皮肤等）
+    let mc_profile = get_minecraft_profile(&client, &mc_login.access_token)
+        .await
+        .map_err(|_| {
+            eprintln!("[正版检测] 步骤3：✗ 获取 Minecraft 个人资料失败");
+            "REFRESH_FAILED".to_string()
+        })?;
+    eprintln!("[正版检测] 步骤3：✓ 获取个人资料成功，玩家名={}", mc_profile.name);
+
+    // 5) 把新 token 存回数据库（再次单独开连接，同步块，不跨 await）
+    {
+        let connection = setup_database().map_err(|e| format!("打开账户数据库失败: {}", e))?;
+        save_account_info(
+            &connection,
+            &mc_profile.name,
+            &db_uuid,
+            &refreshed.refresh_token,
+            &mc_login.access_token,
+        )
+        .map_err(|e| format!("保存账号信息失败: {}", e))?;
+        eprintln!("[正版检测] 步骤3：✓ 新凭据已保存到数据库");
+    }
+
+    // 6) 同步下载皮肤（如果需要）
+    let _ = download_player_skin(&client, &db_uuid).await;
+    eprintln!("[正版检测] 步骤3：✅ 静默刷新账号成功！一切正常");
+
+    Ok(AccountInfo {
+        name: mc_profile.name,
+        uuid: db_uuid.clone(),
+        auth_type: "microsoft".to_string(),
+        access_token: mc_login.access_token,
+        skin_url: Some(db_uuid),
+    })
+}
+
+/// 检查数据库中是否存在某个 uuid 的微软账号（有 refresh_token 记录）
+/// 用于启动时判断是否需要"试探正版账号是否正常登录"
+#[tauri::command]
+pub async fn ms_has_account_in_db(uuid: String) -> Result<bool, String> {
+    eprintln!("[正版检测] 步骤1：检查数据库中是否存在账号 UUID={}", uuid);
+    // 整个函数同步完成（没有 await），SQLite 非 Send 对象不会跨 await，Send 安全
+    let connection = setup_database().map_err(|e| format!("打开账户数据库失败: {}", e))?;
+    let query = format!(
+        "SELECT COUNT(*) AS cnt FROM accounts WHERE uuid = '{}'",
+        uuid.replace('\'', "''")
+    );
+    let mut stmt = connection.prepare(query).map_err(|e| e.to_string())?;
+    if let State::Row = stmt.next().map_err(|e| e.to_string())? {
+        let cnt: i64 = stmt.read::<i64, _>(0).unwrap_or(0);
+        let found = cnt > 0;
+        if found {
+            eprintln!("[正版检测] 步骤1：✓ 数据库中存在该账号记录 (count={})", cnt);
+        } else {
+            eprintln!("[正版检测] 步骤1：✗ 数据库中不存在该账号，跳过后续检测");
+        }
+        Ok(found)
+    } else {
+        eprintln!("[正版检测] 步骤1：✗ 数据库查询失败，账号不存在");
+        Ok(false)
+    }
 }

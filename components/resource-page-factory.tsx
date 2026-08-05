@@ -1,8 +1,8 @@
 "use client";
 
-import React from "react";
+import React, { useState, useEffect } from "react";
 import { motion } from "framer-motion";
-import { Package, Folder } from "lucide-react";
+import { Package, Folder, Loader2 } from "lucide-react";
 import ResourcePanel from "@/components/resource-panel";
 import { useInstancePath, getMcVersion, getModLoader } from "@/hooks/use-instance-path";
 import { useResourceManager } from "@/hooks/use-resource-manager";
@@ -48,6 +48,10 @@ export interface ResourcePageConfig {
   rightIcon?: React.ReactNode;
   /** 右列图标背景色 */
   rightIconBg?: string;
+  /** 预览（查看器）回调 - 点击眼睛图标时触发（如投影预览） */
+  onOpenViewer?: (file: { name: string; size: number; isDir?: boolean }, side: "left" | "right") => void;
+  /** 启用预览按钮的文件扩展名（小写不含点） */
+  viewerExtensions?: string[];
 }
 
 /**
@@ -90,12 +94,23 @@ export function createResourcePage(config: ResourcePageConfig): React.FC {
     simplifyName,
     rightIcon,
     rightIconBg = "bg-emerald-500/10",
+    onOpenViewer,
+    viewerExtensions,
   } = config;
 
   const Component: React.FC = () => {
     const { t } = useI18n();
     const { config: launcherConfig } = useLaunchContext();
-    const { instanceDir, selectedInstance, minecraftPath, configLoaded } = useInstancePath();
+    const { instanceDir, selectedInstance, minecraftPath, configLoaded, loading: instancesScanning } = useInstancePath();
+
+    // 「准备中」中间状态：configLoaded=true 但 instancesScanning 或 其他依赖还没到
+    const [preparingTimeout, setPreparingTimeout] = useState(false);
+    useEffect(() => {
+      if (!configLoaded) return;
+      // 如果 1.2s 内依赖仍然缺失（表示真的未配置），才显示「未配置」页
+      const t = window.setTimeout(() => setPreparingTimeout(true), 1200);
+      return () => window.clearTimeout(t);
+    }, [configLoaded]);
 
     // 根据 versionSource 决定版本信息的来源
     const versionName =
@@ -149,7 +164,7 @@ export function createResourcePage(config: ResourcePageConfig): React.FC {
       directoryNavigation,
     );
 
-    if (!configLoaded) {
+    if (!configLoaded || (configLoaded && !preparingTimeout && instancesScanning)) {
       return (
         <motion.div
           variants={fadeSlideUp}
@@ -158,7 +173,7 @@ export function createResourcePage(config: ResourcePageConfig): React.FC {
           className="flex h-full flex-col items-center justify-center gap-3 text-center p-4"
         >
           <div className="size-12 rounded-full bg-muted flex items-center justify-center">
-            <Package className="size-6 text-muted-foreground" />
+            <Loader2 className="size-6 text-muted-foreground animate-spin" />
           </div>
           <p className="text-sm font-medium">{t("pageFactory.loadingConfiguration")}</p>
           <p className="text-xs text-muted-foreground">{t("pageFactory.pleaseWait")}</p>
@@ -233,6 +248,8 @@ export function createResourcePage(config: ResourcePageConfig): React.FC {
         onRefresh={refresh}
         onUploadFiles={uploadFiles}
         simplifyName={simplifyName}
+        onOpenViewer={onOpenViewer}
+        viewerExtensions={viewerExtensions}
       />
     );
   };
@@ -258,7 +275,7 @@ export function useResourcePage(config: ResourcePageConfig): {
     rightIconBg: string;
     rightTitle: string;
   };
-  loadingState: { configLoaded: boolean; minecraftPath: string | undefined; instanceDir: string | undefined };
+  loadingState: { configLoaded: boolean; minecraftPath: string | undefined; instanceDir: string | undefined; instancesScanning: boolean };
   extra: ResourcePageExtra;
 } {
   const { t } = useI18n();
@@ -275,10 +292,12 @@ export function useResourcePage(config: ResourcePageConfig): {
     simplifyName,
     rightIcon,
     rightIconBg = "bg-emerald-500/10",
+    onOpenViewer,
+    viewerExtensions,
   } = config;
 
   const { config: launcherConfig } = useLaunchContext();
-  const { instanceDir, selectedInstance, minecraftPath, configLoaded } = useInstancePath();
+  const { instanceDir, selectedInstance, minecraftPath, configLoaded, loading: instancesScanning } = useInstancePath();
 
   const versionName =
     versionSource === "instance"
@@ -358,8 +377,10 @@ export function useResourcePage(config: ResourcePageConfig): {
       onRefresh: manager.refresh,
       onUploadFiles: manager.uploadFiles,
       simplifyName,
+      onOpenViewer,
+      viewerExtensions,
     },
-    loadingState: { configLoaded, minecraftPath, instanceDir },
+    loadingState: { configLoaded, minecraftPath, instanceDir, instancesScanning },
     extra: {
       instanceModInfo: manager.instanceModInfo,
       cacheModInfo: manager.cacheModInfo,

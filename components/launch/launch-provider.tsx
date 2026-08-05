@@ -14,7 +14,14 @@ import { useAccountContext } from "@/components/accounts/account-provider";
 import { isTauriRuntime } from "@/lib/tauri-runtime";
 import { log4jParser } from "@/components/launch/log4j-progress-parser";
 import { useI18n } from "@/components/i18n/use-i18n";
-import type { LaunchConfig, LaunchLogEntry, LaunchProgress, LaunchStatus } from "@/types";
+import { analyzeLaunchLogs } from "@/components/launch/launch-analyzer";
+import type {
+  LaunchAnalysisReport,
+  LaunchConfig,
+  LaunchLogEntry,
+  LaunchProgress,
+  LaunchStatus,
+} from "@/types";
 
 /** 默认启动配置 */
 const DEFAULT_LAUNCH_CONFIG: LaunchConfig = {
@@ -36,30 +43,23 @@ const DEFAULT_LAUNCH_CONFIG: LaunchConfig = {
 };
 
 interface LaunchContextValue {
-  /** 启动配置 */
   config: LaunchConfig;
-  /** 更新启动配置 */
   updateConfig: (patch: Partial<LaunchConfig>) => void;
-  /** 当前启动状态 */
   status: LaunchStatus;
-  /** 启动日志 */
   logs: LaunchLogEntry[];
-  /** 错误信息 */
   errorMessage: string | null;
-  /** 启动游戏 */
   launchGame: (overrides?: Partial<LaunchConfig>) => Promise<void>;
-  /** 终止/取消启动中的游戏进程 */
   cancelLaunch: () => Promise<void>;
-  /** 清空日志 */
   clearLogs: () => void;
-  /** 最后一次启动的完整命令参数（调试用） */
   lastCommandArgs: string | null;
-  /** 上次启动时间 */
   lastLaunchTime: string | null;
-  /** 配置是否已加载完成 */
   configLoaded: boolean;
-  /** 启动进度 */
   progress: LaunchProgress | null;
+  launchStartedAt: number | null;
+  launchEndedAt: number | null;
+  lastExitCode: number | null;
+  generateReport: () => LaunchAnalysisReport;
+  exportLaunchReport: () => Promise<string>;
 }
 
 const LaunchContext = createContext<LaunchContextValue | null>(null);
@@ -73,7 +73,7 @@ export function useLaunchContext() {
 }
 
 export function LaunchProvider({ children }: { children: React.ReactNode }) {
-  const { t } = useI18n();
+  const { t, language } = useI18n();
   const [config, setConfig] = useState<LaunchConfig>(DEFAULT_LAUNCH_CONFIG);
   const [configLoaded, setConfigLoaded] = useState(false);
   const [status, setStatus] = useState<LaunchStatus>("idle");
@@ -82,6 +82,9 @@ export function LaunchProvider({ children }: { children: React.ReactNode }) {
   const [lastCommandArgs, setLastCommandArgs] = useState<string | null>(null);
   const [lastLaunchTime, setLastLaunchTime] = useState<string | null>(null);
   const [progress, setProgress] = useState<LaunchProgress | null>(null);
+  const [launchStartedAt, setLaunchStartedAt] = useState<number | null>(null);
+  const [launchEndedAt, setLaunchEndedAt] = useState<number | null>(null);
+  const [lastExitCode, setLastExitCode] = useState<number | null>(null);
   const logIdRef = useRef(0);
 
 
@@ -95,11 +98,26 @@ export function LaunchProvider({ children }: { children: React.ReactNode }) {
       const savedTime = localStorage.getItem("rtl-last-launch-time");
       if (savedTime) setLastLaunchTime(savedTime);
     } catch { /* ignore */ }
+
+    let nativePathsResolved = false;
+    let localConfigApplied = false;
+
+    const tryMarkLoaded = () => {
+      // 两个阶段都完成后才标记 configLoaded=true：
+      // 1) localStorage 配置应用
+      // 2) Tauri 原生返回的路径配置应用（或失败也视为完成）
+      if (!cancelled && localConfigApplied && nativePathsResolved) {
+        setConfigLoaded(true);
+      }
+    };
+
     queueMicrotask(() => {
       if (cancelled) return;
       setConfig((prev) => ({ ...prev, ...savedConfig }));
-      setConfigLoaded(true);
+      localConfigApplied = true;
+      tryMarkLoaded();
     });
+
     void invoke<{
       selected_java_path: string;
       selected_minecraft_path: string;
@@ -112,7 +130,11 @@ export function LaunchProvider({ children }: { children: React.ReactNode }) {
           ...(pathsCfg.selected_minecraft_path ? { minecraftPath: pathsCfg.selected_minecraft_path } : {}),
         }));
       })
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => {
+        nativePathsResolved = true;
+        tryMarkLoaded();
+      });
     return () => { cancelled = true; };
   }, []);
 
@@ -202,17 +224,20 @@ export function LaunchProvider({ children }: { children: React.ReactNode }) {
     let unlisten: (() => void) | null = null;
     listen<number>("game-exited", (event) => {
       const exitCode = event.payload;
-      const timeStr = new Date().toLocaleString();
+      const now = Date.now();
+      const timeStr = new Date(now).toLocaleString();
       setLastLaunchTime(timeStr);
+      setLaunchEndedAt(now);
+      setLastExitCode(exitCode);
       try { localStorage.setItem("rtl-last-launch-time", timeStr); } catch { /* ignore */ }
-      setStatus("idle");
+      setStatus(exitCode === 0 ? "stopped" : "error");
       setProgress(null); // 清理进度状态
       log4jParser.reset(); // 重置日志解析器
       setLogs((prev) => [
         ...prev,
         {
           id: ++logIdRef.current,
-          timestamp: new Date().toLocaleTimeString(),
+          timestamp: new Date(now).toLocaleTimeString(),
           level: exitCode === 0 ? "info" : "warn",
           message: t("launch.provider.gameExitedWithCodeExitCode", { exitCode: exitCode }),
         },
@@ -308,6 +333,10 @@ export function LaunchProvider({ children }: { children: React.ReactNode }) {
       setErrorMessage(null);
       setProgress(null);
       log4jParser.reset(); // 重置日志解析器
+      const now = Date.now();
+      setLaunchStartedAt(now);
+      setLaunchEndedAt(null);
+      setLastExitCode(null);
       setStatus("preparing");
       addLog("info", t("launch.provider.preparingLaunchArguments"));
 
@@ -344,6 +373,8 @@ export function LaunchProvider({ children }: { children: React.ReactNode }) {
         addLog("info", t("launch.provider.gameLaunched"));
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
+        const endedAt = Date.now();
+        setLaunchEndedAt(endedAt);
         setStatus("error");
         setErrorMessage(msg);
         addLog("error", `${t("launch.provider.launchFailed")}: ${msg}`);
@@ -351,6 +382,51 @@ export function LaunchProvider({ children }: { children: React.ReactNode }) {
     },
     [config, selectedProfile, addLog, t]
   );
+
+  const generateReport = useCallback<() => LaunchAnalysisReport>(
+    () => {
+      const finalStatus: LaunchAnalysisReport["finalStatus"] =
+        status === "running"
+          ? "running"
+          : status === "stopped"
+            ? "stopped"
+            : status === "error"
+              ? "error"
+              : status === "launching" || status === "preparing"
+                ? "in_progress"
+                : "idle";
+      const report = analyzeLaunchLogs(logs, {
+        language,
+        startedAt: launchStartedAt,
+        endedAt: launchEndedAt,
+        exitCode: lastExitCode,
+        finalStatus,
+        accountType: selectedProfile?.authType,
+      });
+      return {
+        ...report,
+        launchParameters: lastCommandArgs ?? undefined,
+      };
+    },
+    [logs, language, launchStartedAt, launchEndedAt, lastExitCode, status, selectedProfile, lastCommandArgs],
+  );
+
+  const exportLaunchReport = useCallback(async () => {
+    try {
+      const report = generateReport();
+      const reportJson = JSON.stringify(report, null, 2);
+      await invoke("export_launch_report", {
+        minecraftPath: config.minecraftPath,
+        versionName: config.versionName,
+        launchParameters: lastCommandArgs ?? "",
+        accountType: selectedProfile?.authType ?? "offline",
+        reportJson,
+      });
+    } catch (err) {
+      console.error("导出启动报告失败:", err);
+      throw err;
+    }
+  }, [config, lastCommandArgs, selectedProfile, generateReport]);
 
   return (
     <LaunchContext.Provider
@@ -367,6 +443,11 @@ export function LaunchProvider({ children }: { children: React.ReactNode }) {
         lastLaunchTime,
         configLoaded,
         progress,
+        launchStartedAt,
+        launchEndedAt,
+        lastExitCode,
+        generateReport,
+        exportLaunchReport,
       }}
     >
       {children}

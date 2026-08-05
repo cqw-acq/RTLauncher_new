@@ -54,6 +54,7 @@ function extractMcVersion(name: string): string {
 /** 从文件夹名中推断加载器类型（返回前端可显示的字符串） */
 function inferLoaderFromFolderName(name: string): string {
   const lower = name.toLowerCase();
+  if (lower.includes("optifine")) return "OptiFine";
   if (lower.includes("neoforge") || lower.includes("neoforged")) return "NeoForge";
   if (lower.includes("fabric")) return "Fabric";
   if (lower.includes("quilt")) return "Quilt";

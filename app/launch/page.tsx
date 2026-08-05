@@ -8,51 +8,47 @@ import { LaunchConsole } from "@/components/launch/launch-console";
 import { fadeSlideUp } from "@/lib/motion";
 import { useI18n } from "@/components/i18n/use-i18n";
 
-/**
- * 启动页面
- * 配置启动参数 → 启动游戏 → 查看日志
- */
 export default function LaunchPage() {
   const { t } = useI18n();
   return (
-    <div className="flex h-full flex-col gap-4 p-4 overflow-y-auto">
-      {/* 页面标题 */}
-      <div className="flex items-center gap-3 shrink-0">
-        <div className="flex size-9 items-center justify-center rounded-xl bg-primary/10">
-          <Rocket className="size-5 text-primary" />
+    <div className="h-full overflow-y-auto p-4">
+      <div className="flex flex-col gap-4 min-h-0">
+        <div className="flex items-center justify-between gap-3 shrink-0">
+          <div className="flex items-center gap-3">
+            <div className="flex size-9 items-center justify-center rounded-xl bg-primary/10">
+              <Rocket className="size-5 text-primary" />
+            </div>
+            <div>
+              <h1 className="text-lg font-semibold leading-none">{t("launch.title")}</h1>
+              <p className="mt-1 text-xs text-muted-foreground">
+                {t("launch.chooseAVersionConfigureLaunchSettingsAndBeginYour")}
+              </p>
+            </div>
+          </div>
         </div>
-        <div>
-          <h1 className="text-lg font-semibold leading-none">{t("launch.title")}</h1>
-          <p className="mt-1 text-xs text-muted-foreground">
-            {t("launch.chooseAVersionConfigureLaunchSettingsAndBeginYour")}
-          </p>
+
+        <div className="flex flex-col lg:flex-row gap-4 lg:items-stretch">
+          <motion.div
+            variants={fadeSlideUp}
+            initial="initial"
+            animate="animate"
+            transition={{ delay: 0 }}
+            className="w-full lg:w-1/2 xl:w-3/5 flex flex-col gap-4 min-h-0"
+          >
+            <LaunchConfigCard />
+          </motion.div>
+
+          <motion.div
+            variants={fadeSlideUp}
+            initial="initial"
+            animate="animate"
+            transition={{ delay: 0.1 }}
+            className="w-full lg:w-1/2 xl:w-2/5 flex flex-col gap-4 min-h-0"
+          >
+            <LaunchPanel />
+            <LaunchConsole />
+          </motion.div>
         </div>
-      </div>
-
-      {/* 主内容区 - 填充页面剩余高度，左右容器等高 */}
-      <div className="flex flex-col lg:flex-row gap-4 flex-1 min-h-0">
-        {/* 左侧 - 启动配置 */}
-        <motion.div
-          variants={fadeSlideUp}
-          initial="initial"
-          animate="animate"
-          transition={{ delay: 0 }}
-          className="w-full lg:w-1/2 xl:w-3/5 flex flex-col min-h-0"
-        >
-          <LaunchConfigCard />
-        </motion.div>
-
-        {/* 右侧 - 启动面板 + 日志 */}
-        <motion.div
-          variants={fadeSlideUp}
-          initial="initial"
-          animate="animate"
-          transition={{ delay: 0.1 }}
-          className="w-full lg:w-1/2 xl:w-2/5 flex flex-col gap-4 min-h-0"
-        >
-          <LaunchPanel />
-          <LaunchConsole />
-        </motion.div>
       </div>
     </div>
   );

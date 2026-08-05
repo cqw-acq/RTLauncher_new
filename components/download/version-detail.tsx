@@ -72,22 +72,21 @@ export function VersionDetail({ version, onBack }: VersionDetailProps) {
       const fetchOptifineVersions = async () => {
         setLoadingOptifine(true);
         try {
-          const result = await invoke<{ id: string; type_: string; mcversion: string; patch: string; filename: string; forge: string }[]>(
+          const result = await invoke<{ id: string; filename: string; self_version: string; full_version: string; download_url: string; official_url: string; is_pre: boolean }[]>(
             "get_optifine_versions",
             { mcVersion: version.id }
           );
-          // 将后端返回的数据转换为前端需要的格式
           const versions: LoaderVersion[] = result.map(v => ({
-            id: v.id,
-            version: v.filename.replace(/\.jar$/, ''), // 使用filename去掉.jar后缀作为版本号
-            filename: v.filename, // 保存完整的文件名
-            releaseDate: "", // 后端没有提供发布日期
-            isRecommended: false // 后端没有提供推荐标记
+            id: v.download_url,
+            version: v.self_version,
+            filename: v.download_url,
+            official_url: v.official_url,
+            releaseDate: "",
+            isRecommended: !v.is_pre
           }));
           setOptifineVersions(versions);
         } catch (err) {
           console.error("获取Optifine版本列表失败:", err);
-          // 如果获取失败，使用默认值
           setOptifineVersions(LOADER_VERSIONS.optifine ?? []);
         } finally {
           setLoadingOptifine(false);
@@ -284,7 +283,7 @@ export function VersionDetail({ version, onBack }: VersionDetailProps) {
     try {
       if (loaderType === "optifine") {
         const optifineVersion = loaderVersion.filename || `${loaderVersion.version}.jar`;
-        const taskId = await startOptifineDownload(optifineVersion, version.id, instanceName);
+        const taskId = await startOptifineDownload(optifineVersion, version.id, instanceName, loaderVersion.official_url);
         console.log(`OptiFine 下载任务已启动，任务ID: ${taskId}`);
       } else if (loaderType === "fabric") {
         const taskId = await startFabricDownload(version.id, loaderVersion.version, undefined, instanceName);

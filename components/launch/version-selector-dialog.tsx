@@ -16,7 +16,6 @@ import {
   Search,
   Loader2,
   CheckCircle2,
-  Circle,
   ChevronDown,
   ChevronLeft,
 } from "lucide-react";
@@ -24,6 +23,7 @@ import { motion } from "framer-motion";
 import { cn } from "@/lib/utils";
 import { useI18n, type TranslationKey } from "@/components/i18n/use-i18n";
 import { useLaunchContext } from "./launch-provider";
+import { LoaderIcon, inferLoaderKind, type LoaderKind } from "@/components/launch/loader-icon";
 
 /** 解析后的版本信息 */
 interface ParsedVersion {
@@ -445,7 +445,7 @@ export function VersionSelectorDialog({ open: controlledOpen, onOpenChange, comp
                       whileHover={{ scale: 1.01 }}
                       whileTap={{ scale: 0.99 }}
                     >
-                      <Circle className="size-4 shrink-0 opacity-40" />
+                      <LoaderIcon kind="vanilla" className="size-6 shrink-0" />
 
                       <div className="flex-1 min-w-0 overflow-hidden">
                         <div className="font-medium text-sm truncate">
@@ -494,7 +494,7 @@ export function VersionSelectorDialog({ open: controlledOpen, onOpenChange, comp
                       whileHover={count > 0 ? { scale: 1.01 } : {}}
                       whileTap={count > 0 ? { scale: 0.99 } : {}}
                     >
-                      <Circle className="size-4 shrink-0 opacity-40" />
+                      <LoaderIcon kind={inferLoaderKind(item.type) as LoaderKind} className="size-7 shrink-0" />
 
                       <div className="flex-1 min-w-0 overflow-hidden">
                         <div className="flex items-center gap-2">
@@ -555,9 +555,14 @@ export function VersionSelectorDialog({ open: controlledOpen, onOpenChange, comp
                       whileTap={{ scale: 0.99 }}
                     >
                       {isSelected ? (
-                        <CheckCircle2 className="size-4 shrink-0 text-primary" />
+                        <div className="shrink-0 flex items-center">
+                          <CheckCircle2 className="size-4 shrink-0 text-primary" />
+                        </div>
                       ) : (
-                        <Circle className="size-4 shrink-0 opacity-40" />
+                        <LoaderIcon
+                          kind={inferLoaderKind(version.loaderType) as LoaderKind}
+                          className="size-6 shrink-0"
+                        />
                       )}
 
                       <div className="flex-1 min-w-0 overflow-hidden">

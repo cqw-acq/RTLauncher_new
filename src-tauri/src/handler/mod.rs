@@ -1,6 +1,7 @@
 pub mod cache_paths;
 pub mod chinese_search;
 pub mod config;
+pub mod diagnostics;
 // Tauri command argument names intentionally match the existing frontend API.
 #[allow(dead_code, non_snake_case)]
 pub mod fabric_handler;

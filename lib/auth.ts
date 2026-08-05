@@ -263,3 +263,61 @@ export async function msSetActiveCape(
 ): Promise<void> {
   return safeInvoke<void>("ms_set_active_cape", { accessToken, capeId });
 }
+
+/**
+ * 使用 official.rs 数据库中存储的 refresh_token 尝试静默刷新微软正版账号
+ * 成功：返回包含新 access_token 的 AccountInfo；失败（refresh_token 失效/不存在）：抛出错误 "NO_REFRESH_TOKEN" 或 "REFRESH_FAILED"）
+ */
+export async function msSilentRefreshAccount(
+  uuid: string
+): Promise<AccountInfo> {
+  return safeInvoke<AccountInfo>("ms_silent_refresh_account", { uuid });
+}
+
+/**
+ * 检查 official.rs 数据库中是否存在某个 uuid 的微软账号（有 refresh_token 记录）
+ */
+export async function msHasAccountInDb(uuid: string): Promise<boolean> {
+  return safeInvoke<boolean>("ms_has_account_in_db", { uuid });
+}
+
+/**
+ * 删除本地磁盘上的玩家皮肤缓存文件（当账号从 official.rs 数据库中移除时清理残留）
+ * 会尝试多种 UUID 格式（带/不带连字符），返回成功删除的文件数量
+ */
+export async function deleteCachedSkin(uuid: string): Promise<number> {
+  return safeInvoke<number>("delete_cached_skin", { uuid });
+}
+
+/**
+ * 检查微软正版账号是否可以正常登录 —— 与【皮肤与披风】模块使用的探测逻辑完全一致。
+ *
+ * 探测步骤（和 skin-cape-manager.tsx 的 loadProfile 一模一样）：
+ *   1. 若本地 accessToken 为空 → 立刻返回失败，错误消息为 "账户 access_token 不存在，请重新登录"
+ *      （这一步纯本地判断，零网络开销，和用户手动点进"皮肤与披风"看到的快速错误提示完全一致）
+ *   2. 否则调用 ms_get_skins_and_capes 去微软服务器拉皮肤/披风列表
+ *      - 成功 return { ok: true, profile } 表示 token 仍然有效
+ *      - 失败 return { ok: false, error: string }，error 就是原封不动的后端错误消息
+ *        （比如 HTTP 401、网络错误、token 过期等）
+ *
+ * @param accessToken 当前账号的 access_token
+ */
+export async function microsoftProbeAccountLogin(
+  accessToken: string | undefined | null
+): Promise<{ ok: true; profile: MCSkinCapeProfile } | { ok: false; error: string }> {
+  // Step 1 — 完全对齐 skin-cape-manager 的"快速失败"：
+  //   if (!account.accessToken) { setErrorMsg("账户 access_token 不存在，请重新登录"); return; }
+  if (!accessToken) {
+    return { ok: false, error: "账户 access_token 不存在，请重新登录" };
+  }
+  try {
+    // Step 2 — 和 skin-cape-manager 一样走 msGetSkinsAndCapes：
+    //   const data = await msGetSkinsAndCapes(account.accessToken);
+    const profile = await msGetSkinsAndCapes(accessToken);
+    return { ok: true, profile };
+  } catch (e: unknown) {
+    // Step 3 — 错误消息原样返回（和 skin-cape-manager 的 setErrorMsg 一致）
+    const msg = e instanceof Error ? e.message : String(e);
+    return { ok: false, error: msg };
+  }
+}
