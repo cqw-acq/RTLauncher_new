@@ -41,7 +41,7 @@ interface DownloadContextValue {
   /** 启动 Java 下载（不排队）*/
   startJavaDownload: (runtimeName: string) => Promise<number>;
   /** 启动 OptiFine 下载（不排队）*/
-  startOptifineDownload: (optifineVersion: string, mcVersion: string, instanceName?: string) => Promise<number>;
+  startOptifineDownload: (optifineVersion: string, mcVersion: string, instanceName?: string, optifineFallbackUrl?: string) => Promise<number>;
   /** 启动 Fabric 下载（不排队）*/
   startFabricDownload: (mcVersion: string, loaderVersion: string, apiVersion?: string, instanceName?: string) => Promise<number>;
   /** 启动 Quilt 下载（不排队）*/

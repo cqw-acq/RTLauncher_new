@@ -13,7 +13,7 @@ import {
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { useLaunchContext } from "@/components/launch/launch-provider";
-import { useI18n } from "@/components/i18n/use-i18n";
+import { useI18n, type TranslationKey } from "@/components/i18n/use-i18n";
 import {
   AlertTriangle,
   BarChart3,
@@ -370,7 +370,7 @@ export function LaunchReportButton() {
   );
 }
 
-function Log4jLogsSection({ logs, t }: { logs: Log4jLogEntry[]; t: (key: string) => string }) {
+function Log4jLogsSection({ logs, t }: { logs: Log4jLogEntry[]; t: (key: TranslationKey, values?: Record<string, string | number>) => string }) {
   const levelColor = (level: string) => {
     const l = level.toUpperCase();
     if (l === "ERROR" || l === "FATAL") return "text-destructive";

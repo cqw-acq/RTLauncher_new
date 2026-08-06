@@ -415,7 +415,7 @@ export function LaunchProvider({ children }: { children: React.ReactNode }) {
     try {
       const report = generateReport();
       const reportJson = JSON.stringify(report, null, 2);
-      await invoke("export_launch_report", {
+      return await invoke<string>("export_launch_report", {
         minecraftPath: config.minecraftPath,
         versionName: config.versionName,
         launchParameters: lastCommandArgs ?? "",

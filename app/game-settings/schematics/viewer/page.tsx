@@ -685,7 +685,7 @@ if (typeof assets !== "undefined") { window.assets = assets; }`);
                   style={{
                     writingMode: "vertical-lr",
                     direction: "rtl",
-                    appearance: "slider-vertical",
+                    appearance: "slider-vertical" as any,
                     width: "20px",
                   }}
                   title={L({ "zh-CN": "最大层", "en-US": "Max Layer" })}
@@ -703,7 +703,7 @@ if (typeof assets !== "undefined") { window.assets = assets; }`);
                   style={{
                     writingMode: "vertical-lr",
                     direction: "rtl",
-                    appearance: "slider-vertical",
+                    appearance: "slider-vertical" as any,
                     width: "20px",
                   }}
                   title={L({ "zh-CN": "最小层", "en-US": "Min Layer" })}
