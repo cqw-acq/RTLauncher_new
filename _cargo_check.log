@@ -1,0 +1,131 @@
+warning: struct `YggdrasilAuthenticateRequest` is never constructed
+  --> src\auth\littleskinLoader.rs:34:8
+   |
+34 | struct YggdrasilAuthenticateRequest {
+   |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: struct `YggdrasilAgent` is never constructed
+  --> src\auth\littleskinLoader.rs:43:8
+   |
+43 | struct YggdrasilAgent {
+   |        ^^^^^^^^^^^^^^
+
+warning: function `downloadInjecter` is never used
+   --> src\auth\yissadrail.rs:168:8
+    |
+168 | pub fn downloadInjecter() {
+    |        ^^^^^^^^^^^^^^^^
+
+warning: function `poll_for_token` is never used
+   --> src\auth\official.rs:122:10
+    |
+122 | async fn poll_for_token(
+    |          ^^^^^^^^^^^^^^
+
+warning: function `check_account_time` is never used
+   --> src\auth\official.rs:321:10
+    |
+321 | async fn check_account_time(
+    |          ^^^^^^^^^^^^^^^^^^
+
+warning: function `extract_texture_url_from_html` is never used
+   --> src\auth\official.rs:534:4
+    |
+534 | fn extract_texture_url_from_html(html: &str) -> Option<String> {
+    |    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `is_uuid_format` is never used
+   --> src\auth\official.rs:782:4
+    |
+782 | fn is_uuid_format(s: &str) -> bool {
+    |    ^^^^^^^^^^^^^^
+
+warning: function `add_new_account` is never used
+    --> src\auth\official.rs:1144:10
+     |
+1144 | async fn add_new_account(
+     |          ^^^^^^^^^^^^^^^
+
+warning: variant `Unknown` is never constructed
+   --> src\downloader\original_dwl.rs:739:5
+    |
+731 | enum LoaderKind {
+    |      ---------- variant in this enum
+...
+739 |     Unknown,
+    |     ^^^^^^^
+    |
+    = note: `LoaderKind` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: function `cache_root_dir` is never used
+   --> src\handler\cache_paths.rs:100:8
+    |
+100 | pub fn cache_root_dir() -> Result<PathBuf, String> {
+    |        ^^^^^^^^^^^^^^
+
+warning: struct `ModpackInstallResult` is never constructed
+  --> src\handler\modpack_installer_handler.rs:14:12
+   |
+14 | pub struct ModpackInstallResult {
+   |            ^^^^^^^^^^^^^^^^^^^^
+
+warning: function `parse_string_value` is never used
+  --> src\version_management\resource_checker.rs:25:4
+   |
+25 | fn parse_string_value(value: &Value) -> Option<String> {
+   |    ^^^^^^^^^^^^^^^^^^
+
+warning: function `parse_long_value` is never used
+  --> src\version_management\resource_checker.rs:39:4
+   |
+39 | fn parse_long_value(value: &Value) -> Option<i64> {
+   |    ^^^^^^^^^^^^^^^^
+
+warning: struct `LevelInfo` is never constructed
+  --> src\version_management\resource_checker.rs:51:12
+   |
+51 | pub struct LevelInfo {
+   |            ^^^^^^^^^
+
+warning: struct `RootCompound` is never constructed
+   --> src\version_management\resource_checker.rs:102:8
+    |
+102 | struct RootCompound {
+    |        ^^^^^^^^^^^^
+
+warning: function `scan_instances` is never used
+   --> src\version_management\resource_checker.rs:224:8
+    |
+224 | pub fn scan_instances(instances_path: &Path) -> Vec<String> {
+    |        ^^^^^^^^^^^^^^
+
+warning: function `modify_nbt_param` is never used
+   --> src\version_management\resource_checker.rs:464:8
+    |
+464 | pub fn modify_nbt_param(
+    |        ^^^^^^^^^^^^^^^^
+
+warning: function `modify_value_recursive` is never used
+   --> src\version_management\resource_checker.rs:646:4
+    |
+646 | fn modify_value_recursive(
+    |    ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: enum `NBTValue` is never used
+   --> src\version_management\resource_checker.rs:689:10
+    |
+689 | pub enum NBTValue {
+    |          ^^^^^^^^
+
+warning: method `to_value` is never used
+   --> src\version_management\resource_checker.rs:701:8
+    |
+700 | impl NBTValue {
+    | ------------- method in this implementation
+701 |     fn to_value(&self) -> Value {
+    |        ^^^^^^^^
+
+warning: `app` (lib) generated 20 warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.51s

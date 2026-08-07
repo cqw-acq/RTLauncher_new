@@ -202,6 +202,8 @@ export type LaunchConfig = {
   yggdrasilApi: string;
   /** 预取数据 */
   prefetchedData: string;
+  /** 用户自定义 JVM 参数：空格/换行分隔，支持引号包裹；将被插入到默认 JVM 参数之后、主类之前 */
+  customJvmArgs: string;
 };
 
 /**

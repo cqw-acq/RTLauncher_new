@@ -4,7 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
-import { useLaunchContext } from "@/components/launch/launch-provider";
+import { useLaunchContext, DEFAULT_INITIAL_JVM_ARGS } from "@/components/launch/launch-provider";
 import { useAccountContext } from "@/components/accounts/account-provider";
 import { VersionSelectorDialog } from "@/components/launch/version-selector-dialog";
 import {
@@ -20,6 +20,8 @@ import {
   Circle,
   Download,
   Search,
+  RotateCcw,
+  ChevronRight,
 } from "lucide-react";
 import { useState, useEffect, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
@@ -148,6 +150,22 @@ export function LaunchConfigCard() {
     [updateConfig]
   );
 
+  const handleResetJvmArgs = useCallback(() => {
+    updateConfig({ customJvmArgs: DEFAULT_INITIAL_JVM_ARGS });
+    // 轻量提示
+    try {
+      // @ts-expect-error 浏览器原生提示
+      if (window.__rt_toast) {
+        // @ts-expect-error 自定义 toast hook
+        window.__rt_toast(t("launch.config.jvmArgsResetTip"));
+      } else {
+        alert(t("launch.config.jvmArgsResetTip"));
+      }
+    } catch {
+      alert(t("launch.config.jvmArgsResetTip"));
+    }
+  }, [t, updateConfig]);
+
   const openDialog = async (mode: "java" | "minecraft") => {
     try {
       const mod = await import("@tauri-apps/plugin-dialog" as string);
@@ -234,6 +252,7 @@ export function LaunchConfigCard() {
         loadName: config.loadName,
         windowWidth: config.windowWidth || "873",
         windowHeight: config.windowHeight || "486",
+        customJvmArgs: config.customJvmArgs || "",
       });
 
       const exportData = `# Minecraft 启动命令
@@ -569,10 +588,48 @@ ${result}
           </div>
         </div>
 
+        {/* JVM 参数编辑器（可折叠） */}
+        <details className="group">
+          <summary className="cursor-pointer text-xs text-muted-foreground hover:text-foreground transition-colors select-none flex items-center justify-between list-none">
+            <span className="inline-flex items-center gap-1">
+              <ChevronRight className="size-3 -translate-x-0.5 transition-transform duration-200 group-open:rotate-90 text-muted-foreground/80" />
+              <Cpu className="size-3" />
+              {t("launch.config.jvmArguments")}
+            </span>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                handleResetJvmArgs();
+              }}
+              className="h-6 px-2 py-0 text-[11px] gap-1 text-muted-foreground hover:text-foreground"
+            >
+              <RotateCcw className="size-3" />
+              {t("launch.config.resetJvmArgs")}
+            </Button>
+          </summary>
+          <div className="mt-3 space-y-2 border-l-2 border-border pl-3">
+            <textarea
+              spellCheck={false}
+              value={config.customJvmArgs}
+              onChange={(e) => updateConfig({ customJvmArgs: e.target.value })}
+              placeholder="-XX:+UseG1GC -Xmn768m -Duser.language=zh"
+              className="w-full min-h-[180px] rounded-md border border-input bg-background px-3 py-2 text-xs font-mono leading-relaxed text-foreground shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring resize-y"
+            />
+            <p className="text-[11px] leading-tight text-muted-foreground/80 whitespace-pre-line">
+              {t("launch.config.jvmArgsDescription")}
+            </p>
+          </div>
+        </details>
+
         {/* 玩家身份（可折叠） */}
         <details className="group">
-          <summary className="cursor-pointer text-xs text-muted-foreground hover:text-foreground transition-colors select-none">
-            {t("launch.config.advancedPlayerIdentity")}
+          <summary className="cursor-pointer text-xs text-muted-foreground hover:text-foreground transition-colors select-none flex items-center list-none">
+            <ChevronRight className="size-3 -translate-x-0.5 transition-transform duration-200 group-open:rotate-90 text-muted-foreground/80" />
+            <span className="inline-flex items-center">{t("launch.config.advancedPlayerIdentity")}</span>
           </summary>
           <div className="mt-3 space-y-3 border-l-2 border-border pl-3">
             <div className="space-y-1.5">
@@ -621,8 +678,9 @@ ${result}
 
         {/* 第三方验证（可折叠） */}
         <details className="group">
-          <summary className="cursor-pointer text-xs text-muted-foreground hover:text-foreground transition-colors select-none">
-            {t("launch.config.advancedThirdPartyAuthentication")}
+          <summary className="cursor-pointer text-xs text-muted-foreground hover:text-foreground transition-colors select-none flex items-center list-none">
+            <ChevronRight className="size-3 -translate-x-0.5 transition-transform duration-200 group-open:rotate-90 text-muted-foreground/80" />
+            <span className="inline-flex items-center">{t("launch.config.advancedThirdPartyAuthentication")}</span>
           </summary>
           <div className="mt-3 space-y-3 border-l-2 border-border pl-3">
             <div className="space-y-1.5">

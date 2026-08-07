@@ -43,14 +43,5 @@
     ],
     "category": "Game",
     "targets": ["appimage", "deb", "nsis", "msi", "dmg", "app"]
-  },
-  "plugins": {
-    "updater": {
-      "active": true,
-      "endpoints": [
-        "https://gitcode.com/bubulaladdi/RTLauncher/releases/download/%E5%B7%A5%E5%85%B7/latest.json"
-      ],
-      "pubkey": "RWSUdzbR0TRn/H799eUvXxXQ5YOhzaYpk6gdbrvJtVb4yO6gwsH3Whiy"
-    }
   }
 }

@@ -25,21 +25,33 @@ function makeProgressHandler(
     const { task_id, percent } = event.payload;
     if (typeof percent !== "number" || Number.isNaN(percent)) return;
     const isCompleted = percent >= 99.99;
-    setTasks((prev) =>
-      prev.map((task) => {
-        if (task.taskId !== task_id) return task;
-        if (task.status === "cancelled" || task.status === "success" || task.status === "error" || task.status === "warning") {
-          return isCompleted && task.status !== "cancelled" && task.status !== "error"
-            ? { ...task, progress: 100 }
-            : task;
-        }
-        return {
-          ...task,
-          progress: isCompleted ? 100 : percent,
-          status: (isCompleted ? "success" : "downloading") as DownloadTaskStatus,
-        };
-      })
-    );
+    setTasks((prev) => {
+      const existing = prev.find((t) => t.taskId === task_id);
+      if (existing) {
+        return prev.map((task) => {
+          if (task.taskId !== task_id) return task;
+          if (task.status === "cancelled" || task.status === "success" || task.status === "error" || task.status === "warning") {
+            return isCompleted && task.status !== "cancelled" && task.status !== "error"
+              ? { ...task, progress: 100 }
+              : task;
+          }
+          return {
+            ...task,
+            progress: isCompleted ? 100 : percent,
+            status: (isCompleted ? "success" : "downloading") as DownloadTaskStatus,
+          };
+        });
+      }
+      const newTask: DownloadTask = {
+        taskId: task_id,
+        label: "Java 运行时",
+        mcVersion: "Java",
+        status: "downloading",
+        progress: isCompleted ? 100 : percent,
+        startedAt: Date.now(),
+      };
+      return [newTask, ...prev];
+    });
   };
 }
 
@@ -51,19 +63,33 @@ function makeFinishedHandler(
   return (event: { payload: FinishedPayload }) => {
     if (cancelledRef.current) return;
     const { task_id, success, error, failed_count = 0 } = event.payload;
-    setTasks((prev) =>
-      prev.map((task) => {
-        if (task.taskId !== task_id || task.status === "cancelled") return task;
-        const isWarning = success && failed_count > 0;
-        return {
-          ...task,
-          status: (isWarning ? "warning" : success ? "success" : "error") as DownloadTaskStatus,
-          progress: success ? 100 : task.progress,
-          error: error ?? undefined,
-          failedCount: failed_count > 0 ? failed_count : undefined,
-        };
-      })
-    );
+    setTasks((prev) => {
+      const existing = prev.find((t) => t.taskId === task_id);
+      if (existing) {
+        return prev.map((task) => {
+          if (task.taskId !== task_id || task.status === "cancelled") return task;
+          const isWarning = success && failed_count > 0;
+          return {
+            ...task,
+            status: (isWarning ? "warning" : success ? "success" : "error") as DownloadTaskStatus,
+            progress: success ? 100 : task.progress,
+            error: error ?? undefined,
+            failedCount: failed_count > 0 ? failed_count : undefined,
+          };
+        });
+      }
+      const newTask: DownloadTask = {
+        taskId: task_id,
+        label: "Java 运行时",
+        mcVersion: "Java",
+        status: (success ? "success" : "error") as DownloadTaskStatus,
+        progress: success ? 100 : 0,
+        error: error ?? undefined,
+        failedCount: failed_count > 0 ? failed_count : undefined,
+        startedAt: Date.now(),
+      };
+      return [newTask, ...prev];
+    });
     onEnd?.();
   };
 }

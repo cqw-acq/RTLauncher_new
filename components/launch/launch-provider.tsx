@@ -24,6 +24,19 @@ import type {
 } from "@/types";
 
 /** 默认启动配置 */
+export const DEFAULT_INITIAL_JVM_ARGS = `-XX:+UnlockExperimentalVMOptions
+-XX:+AlwaysPreTouch
+-XX:+DisableExplicitGC
+-XX:MaxGCPauseMillis=200
+-Dfml.ignorePatchDiscrepancies=true
+-Dfml.ignoreInvalidMinecraftCertificates=true
+-Duser.language=zh
+-Duser.country=CN
+-Dminecraft.api.env=production
+-Dminecraft.api.location=https://api.minecraftservices.com/
+-Dfml.readTimeout=180
+-Dio.netty.allocator.type=unpooled`;
+
 const DEFAULT_LAUNCH_CONFIG: LaunchConfig = {
   minecraftPath: "",
   javaPath: "",
@@ -40,6 +53,7 @@ const DEFAULT_LAUNCH_CONFIG: LaunchConfig = {
   authlibInjectorPath: "",
   yggdrasilApi: "",
   prefetchedData: "",
+  customJvmArgs: DEFAULT_INITIAL_JVM_ARGS,
 };
 
 interface LaunchContextValue {
@@ -366,6 +380,7 @@ export function LaunchProvider({ children }: { children: React.ReactNode }) {
           loadName: merged.loadName,
           windowWidth: merged.windowWidth || "873",
           windowHeight: merged.windowHeight || "486",
+          customJvmArgs: merged.customJvmArgs || "",
         });
 
         setLastCommandArgs(result);

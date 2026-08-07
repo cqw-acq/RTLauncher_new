@@ -144,7 +144,11 @@
       "advancedThirdPartyAuthentication": "高级：第三方验证设置",
       "authlibInjectorPath": "Authlib Injector 路径",
       "authlibInjectorJarPath": "authlib-injector.jar 路径",
-      "prefetchedData": "预取数据"
+      "prefetchedData": "预取数据",
+      "jvmArguments": "JVM 参数",
+      "jvmArgsDescription": "支持空格或换行分隔，引号包裹可保留空格（如 -Dfoo=\"hello world\"）。参数将被追加到默认 JVM 参数之后、主类之前。",
+      "resetJvmArgs": "恢复默认 JVM 参数",
+      "jvmArgsResetTip": "已恢复到初始 JVM 参数"
     },
     "versionSelector": {
       "vanilla": "原版",
@@ -591,5 +595,30 @@
     "pleaseClickTheTitleAboveToSelectAGame": "请先点击上方标题选择游戏版本",
     "afterConfigurationYouCanManageModsResourcePacksAnd": "配置完成后即可管理当前版本的模组、资源包等内容",
     "goToModpackManagement": "进入整合包管理"
+  },
+  "checkUpdate": {
+    "title": "检查更新",
+    "subtitle": "检查 RTLauncher 是否有新版本可用",
+    "idle": "待检查",
+    "checking": "正在检查更新...",
+    "available": "有新版本可用",
+    "downloading": "正在下载更新",
+    "downloaded": "下载完成",
+    "installing": "正在安装",
+    "upToDate": "已是最新版本",
+    "error": "检查失败",
+    "currentVersion": "当前版本",
+    "newVersionAvailable": "发现新版本",
+    "downloadedReady": "更新已下载完成，点击立即安装",
+    "upToDateMessage": "启动器已在最新版本，无需更新。",
+    "checkFailed": "检查更新失败",
+    "checkForUpdates": "检查更新",
+    "downloadUpdate": "下载更新",
+    "installNow": "立即安装",
+    "downloadingUpdate": "正在下载更新包，请勿关闭应用...",
+    "installingUpdate": "正在安装更新，应用即将重启...",
+    "updateIntervalNotice": "为保证服务稳定，更新检查间隔至少为 24 小时。",
+    "lastCheckTime": "上次检查时间",
+    "checkUpdateButton": "检查更新"
   }
 }

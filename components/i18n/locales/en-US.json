@@ -144,7 +144,11 @@
       "advancedThirdPartyAuthentication": "Advanced: third-party authentication",
       "authlibInjectorPath": "Authlib Injector path",
       "authlibInjectorJarPath": "authlib-injector.jar path",
-      "prefetchedData": "Prefetched data"
+      "prefetchedData": "Prefetched data",
+      "jvmArguments": "JVM Arguments",
+      "jvmArgsDescription": "Space or newline separated; use quotes to preserve spaces (e.g. -Dfoo=\"hello world\"). Appended after default JVM args and before the main class.",
+      "resetJvmArgs": "Reset to default JVM args",
+      "jvmArgsResetTip": "JVM arguments have been reset to defaults"
     },
     "versionSelector": {
       "vanilla": "Vanilla",
@@ -591,5 +595,30 @@
     "pleaseClickTheTitleAboveToSelectAGame": "Please click the title above to select a game version",
     "afterConfigurationYouCanManageModsResourcePacksAnd": "After configuration, you can manage mods, resource packs, and more for the current version",
     "goToModpackManagement": "Go to Modpack Management"
+  },
+  "checkUpdate": {
+    "title": "Check for Updates",
+    "subtitle": "Check if a new version of RTLauncher is available",
+    "idle": "Idle",
+    "checking": "Checking for updates...",
+    "available": "Update available",
+    "downloading": "Downloading update",
+    "downloaded": "Download complete",
+    "installing": "Installing",
+    "upToDate": "Up to date",
+    "error": "Check failed",
+    "currentVersion": "Current version",
+    "newVersionAvailable": "New version available",
+    "downloadedReady": "Update downloaded. Click Install now to proceed.",
+    "upToDateMessage": "The launcher is up to date. No updates needed.",
+    "checkFailed": "Update check failed",
+    "checkForUpdates": "Check for updates",
+    "downloadUpdate": "Download update",
+    "installNow": "Install now",
+    "downloadingUpdate": "Downloading update package. Please do not close the app...",
+    "installingUpdate": "Installing update. The app will restart...",
+    "updateIntervalNotice": "To ensure service stability, update checks are limited to at least 24-hour intervals.",
+    "lastCheckTime": "Last check time",
+    "checkUpdateButton": "Check Updates"
   }
 }

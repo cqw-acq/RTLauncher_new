@@ -10,6 +10,7 @@ import {
   Download,
   Gamepad2,
   Loader2,
+  Package,
   Play,
   Rocket,
   Shirt,
@@ -25,7 +26,6 @@ import { AnnouncementCard } from "@/components/home/announcement-card";
 import { LaunchStatusBadge } from "@/components/launch/launch-status-badge";
 import { useLaunchContext } from "@/components/launch/launch-provider";
 import { VersionSelectorDialog } from "@/components/launch/version-selector-dialog";
-import { AppUpdateSection } from "@/components/settings/app-updater";
 import { useSettings } from "@/components/settings/settings-provider";
 import { useI18n } from "@/components/i18n/use-i18n";
 import { Badge } from "@/components/ui/badge";
@@ -130,7 +130,20 @@ export default function Home() {
                 {t("home.manageYourGameVersionsResourcesAndLaunchStatusHere")}
               </p>
             </div>
-            <LaunchStatusBadge status={status} className="mt-1" />
+            <div className="flex items-center gap-2">
+              <Button
+                variant="ghost"
+                size="icon"
+                asChild
+                className="size-8"
+                title={t("checkUpdate.checkUpdateButton")}
+              >
+                <Link href="/check-update">
+                  <Package className="size-4" />
+                </Link>
+              </Button>
+              <LaunchStatusBadge status={status} className="mt-1" />
+            </div>
           </header>
         )}
 
@@ -192,8 +205,18 @@ export default function Home() {
                           {t("home.skinsAndCapes")}
                         </Button>
                       )}
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="w-full gap-2"
+                        asChild
+                      >
+                        <Link href="/check-update">
+                          <Package className="size-3.5" />
+                          {t("checkUpdate.checkUpdateButton")}
+                        </Link>
+                      </Button>
                     </div>
-                    <AppUpdateSection />
                   </CardContent>
                 </div>
               </Card>
@@ -372,8 +395,18 @@ export default function Home() {
                           {t("home.skinsAndCapes")}
                         </Button>
                       )}
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="w-full gap-2"
+                        asChild
+                      >
+                        <Link href="/check-update">
+                          <Package className="size-3.5" />
+                          {t("checkUpdate.checkUpdateButton")}
+                        </Link>
+                      </Button>
                     </div>
-                    <AppUpdateSection />
                   </CardContent>
                 </div>
               </Card>

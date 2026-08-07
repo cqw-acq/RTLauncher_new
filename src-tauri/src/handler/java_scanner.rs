@@ -589,3 +589,16 @@ pub fn validate_java_path(java_path: String) -> Result<JavaInstallation, String>
     get_java_version(java_str)
         .ok_or_else(|| "无法获取 Java 版本信息，请确保这是有效的 Java 安装".to_string())
 }
+
+/// 根据 major version 查找匹配的 Java 安装路径
+pub fn find_java_by_major_version(target_major: u32) -> Option<JavaInstallation> {
+    let candidates = collect_candidates();
+    for path in candidates {
+        if let Some(validated) = get_java_version_full(&path) {
+            if validated.installation.major_version == target_major as i32 {
+                return Some(validated.installation);
+            }
+        }
+    }
+    None
+}

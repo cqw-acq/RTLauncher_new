@@ -165,34 +165,94 @@ pub mod curseforge_class_ids {
     pub const TYPE_DATAPACK: &str = "datapack";
     pub const TYPE_WORLD: &str = "world";
     pub fn candidates_for_type(type_name: &str) -> Vec<u32> {
-        match type_name {
-            n if n == TYPE_MOD => vec![MOD],
-            n if n == TYPE_MODPACK => MODPACK_CANDIDATES.to_vec(),
-            n if n == TYPE_RESOURCE_PACK => vec![RESOURCE_PACK],
-            n if n == TYPE_SHADER => SHADER_CANDIDATES.to_vec(),
-            n if n == TYPE_DATAPACK => DATAPACK_CANDIDATES.to_vec(),
-            n if n == TYPE_WORLD => vec![WORLD],
+        let t = type_name.to_lowercase();
+        match t.as_str() {
+            n if n == TYPE_MOD || n == "mods" => vec![MOD],
+            n if n == TYPE_MODPACK || n == "modpacks" => MODPACK_CANDIDATES.to_vec(),
+            n if n == TYPE_RESOURCE_PACK
+                || n == "resource_pack"
+                || n == "resource-pack"
+                || n == "resourcepacks"
+                || n == "resource_packs"
+                || n == "resource-packs"
+                || n == "texturepack"
+                || n == "texture_pack"
+                || n == "texture-pack"
+                || n == "texturepacks"
+                || n == "texture_packs"
+                || n == "texture-packs" =>
+            {
+                vec![RESOURCE_PACK]
+            }
+            n if n == TYPE_SHADER
+                || n == "shaders"
+                || n == "shaderpack"
+                || n == "shader_pack"
+                || n == "shader-pack"
+                || n == "shaderpacks"
+                || n == "shader_packs"
+                || n == "shader-packs" => SHADER_CANDIDATES.to_vec(),
+            n if n == TYPE_DATAPACK
+                || n == "data_pack"
+                || n == "data-pack"
+                || n == "datapacks"
+                || n == "data_packs"
+                || n == "data-packs" => DATAPACK_CANDIDATES.to_vec(),
+            n if n == TYPE_WORLD || n == "worlds" || n == "map" || n == "maps" => vec![WORLD],
             _ => all(),
         }
     }
     pub fn matches_type(class_id: Option<u32>, website_url: &str, type_name: &str) -> bool {
+        let t = type_name.to_lowercase();
         if let Some(cid) = class_id {
-            let candidates = candidates_for_type(type_name);
+            let candidates = candidates_for_type(&t);
             if candidates.contains(&cid) {
                 return true;
             }
         }
         let url = website_url.to_lowercase();
-        match type_name {
-            n if n == TYPE_MODPACK => url.contains("/modpacks/"),
-            n if n == TYPE_RESOURCE_PACK => {
-                url.contains("/texture-packs/") || url.contains("/resource-packs/")
-            }
-            n if n == TYPE_SHADER => url.contains("/shaders/"),
-            n if n == TYPE_DATAPACK => url.contains("/data-packs/"),
-            n if n == TYPE_WORLD => url.contains("/worlds/"),
-            n if n == TYPE_MOD => url.contains("/mc-mods/") || url.contains("/mods/"),
-            _ => false,
+        if t == TYPE_MODPACK
+            || t == "modpacks"
+        {
+            url.contains("/modpacks/")
+        } else if t == TYPE_RESOURCE_PACK
+            || t == "resource_pack"
+            || t == "resource-pack"
+            || t == "resourcepacks"
+            || t == "resource_packs"
+            || t == "resource-packs"
+            || t == "texturepack"
+            || t == "texture_pack"
+            || t == "texture-pack"
+            || t == "texturepacks"
+            || t == "texture_packs"
+            || t == "texture-packs"
+        {
+            url.contains("/texture-packs/") || url.contains("/resource-packs/")
+        } else if t == TYPE_SHADER
+            || t == "shaders"
+            || t == "shaderpack"
+            || t == "shader_pack"
+            || t == "shader-pack"
+            || t == "shaderpacks"
+            || t == "shader_packs"
+            || t == "shader-packs"
+        {
+            url.contains("/shaders/")
+        } else if t == TYPE_DATAPACK
+            || t == "data_pack"
+            || t == "data-pack"
+            || t == "datapacks"
+            || t == "data_packs"
+            || t == "data-packs"
+        {
+            url.contains("/data-packs/")
+        } else if t == TYPE_WORLD || t == "worlds" || t == "map" || t == "maps" {
+            url.contains("/worlds/")
+        } else if t == TYPE_MOD || t == "mods" {
+            url.contains("/mc-mods/") || url.contains("/mods/")
+        } else {
+            false
         }
     }
     pub fn all() -> Vec<u32> {
