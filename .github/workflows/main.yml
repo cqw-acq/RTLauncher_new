@@ -20,7 +20,7 @@ jobs:
           - platform: 'ubuntu-22.04' # for Tauri v1 you could replace this with ubuntu-20.04.
             args: ''
           - platform: 'windows-latest'
-            args: ''
+            args: '--no-bundle'
 
     runs-on: ${{ matrix.platform }}
     steps:
@@ -54,11 +54,45 @@ jobs:
 
       # If tagName and releaseId are omitted tauri-action will only build the app and won't try to upload any assets.
       - uses: tauri-apps/tauri-action@v1
-        id: tauri-build  # 添加 id 以便后续引用
+        id: tauri-build
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           args: ${{ matrix.args }}
+
+      # ===== Windows 数字签名 =====
+      - name: Sign Windows Executable
+        if: matrix.platform == 'windows-latest'
+        env:
+          CERT_BASE64: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}
+          CERT_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          if (-not $env:CERT_BASE64) {
+            Write-Host "[WARN] WINDOWS_CERTIFICATE_BASE64 secret not set, skipping signature"
+            exit 0
+          }
+          $certBytes = [Convert]::FromBase64String($env:CERT_BASE64)
+          $certPath = Join-Path $env:RUNNER_TEMP "signing-cert.pfx"
+          [System.IO.File]::WriteAllBytes($certPath, $certBytes)
+          $signArgs = @(
+            "sign",
+            "/fd", "SHA256",
+            "/f", $certPath,
+            "/tr", "http://timestamp.digicert.com",
+            "/td", "SHA256",
+            "src-tauri/target/release/rtlauncher.exe"
+          )
+          if ($env:CERT_PASSWORD) {
+            $signArgs = @("sign", "/fd", "SHA256", "/f", $certPath, "/p", $env:CERT_PASSWORD, "/tr", "http://timestamp.digicert.com", "/td", "SHA256", "src-tauri/target/release/rtlauncher.exe")
+          }
+          & signtool $signArgs
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "[ERROR] Signing failed with exit code $LASTEXITCODE"
+            exit 1
+          }
+          Write-Host "[OK] rtlauncher.exe signed successfully"
+          Remove-Item $certPath -ErrorAction SilentlyContinue
 
       # ===== 上传构建产物 =====
       - name: upload artifacts (macOS)
@@ -89,7 +123,6 @@ jobs:
         with:
           name: tauri-app-windows
           path: |
-            src-tauri/target/release/bundle/**/*.msi
-            src-tauri/target/release/bundle/**/*.exe
+            src-tauri/target/release/rtlauncher.exe
           if-no-files-found: warn
           retention-days: 7
