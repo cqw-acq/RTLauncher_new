@@ -9,7 +9,7 @@ use zip::ZipArchive;
 
 use crate::downloader::concurrent_download;
 use crate::downloader::shared_utils::{
-    parse_library_path_for_fs, sanitize_instance_name,
+    parse_library_path_for_fs, sanitize_file_name, sanitize_instance_name,
 };
 use crate::http_client::shared_client;
 
@@ -156,34 +156,44 @@ fn derive_filename_from_url(url: &str) -> String {
     let path = url.split('?').next().unwrap_or(url);
     let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
 
+    let mut candidate: Option<String> = None;
+
     if let Some(idx) = segments.iter().position(|s| *s == "optifine") {
         let after = &segments[idx + 1..];
         if after.len() >= 3 {
-            return format!(
+            candidate = Some(format!(
                 "OptiFine_{}_{}_{}.jar",
                 after[0], after[1], after[2]
-            );
+            ));
         }
     }
 
-    if let Some(last) = segments.last() {
-        if !last.is_empty() && last.contains('.') {
-            return last.to_string();
+    if candidate.is_none() {
+        if let Some(last) = segments.last() {
+            if !last.is_empty() && last.contains('.') {
+                candidate = Some(last.to_string());
+            }
         }
     }
 
-    if let Some(query_part) = url.split('?').nth(1) {
-        for param in query_part.split('&') {
-            if let Some(val) = param.strip_prefix("f=") {
-                let decoded = val.replace("%2F", "/").replace("%20", " ");
-                if !decoded.is_empty() {
-                    return decoded;
+    if candidate.is_none() {
+        if let Some(query_part) = url.split('?').nth(1) {
+            for param in query_part.split('&') {
+                if let Some(val) = param.strip_prefix("f=") {
+                    let decoded = val.replace("%20", " ");
+                    if !decoded.is_empty() {
+                        candidate = Some(decoded);
+                    }
+                    break;
                 }
             }
         }
     }
 
-    format!("optifine-installer.jar")
+    candidate
+        .map(|c| sanitize_file_name(c.trim()))
+        .filter(|c| !c.is_empty())
+        .unwrap_or_else(|| "optifine-installer.jar".to_string())
 }
 
 pub async fn download_optifine_installer(

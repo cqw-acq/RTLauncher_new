@@ -236,6 +236,34 @@ pub fn sanitize_instance_name(raw: &str) -> String {
     }
 }
 
+/// 将候选字符串整理成安全的文件名（仅 basename，不含路径分隔符）。
+/// 移除/替换所有无法用于文件名的字符，杜绝 `..`、绝对路径与隐藏文件前缀。
+pub fn sanitize_file_name(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len());
+    for ch in raw.chars() {
+        if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-') {
+            out.push(ch);
+        } else {
+            out.push('_');
+        }
+    }
+    if out.contains("..") {
+        out = out.replace("..", "_");
+    }
+    let trimmed = out.trim_matches('.').trim();
+    if trimmed.is_empty() {
+        format!(
+            "file_{}.bin",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0)
+        )
+    } else {
+        trimmed.to_string()
+    }
+}
+
 fn current_iso_time() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
     let duration = SystemTime::now()

@@ -9,6 +9,8 @@ use std::time::{Duration, Instant};
 use tokio::io::AsyncWriteExt;
 use tokio::sync::{mpsc, Semaphore};
 
+use crate::downloader::shared_utils::sanitize_file_name;
+
 pub const MAX_CONCURRENT_FILES: usize = 24;
 pub const THROTTLE_MS_AFTER_FILE: u64 = 0;
 pub const MAX_TOTAL_CONNECTIONS: usize = 32;
@@ -426,6 +428,17 @@ fn generate_temp_path(target: &Path) -> PathBuf {
     parent.join(format!(".downloading_{}", base_name))
 }
 
+/// 将 DownloadTask 解析出的文件名整理为安全的 basename 后再与目标目录拼接，
+/// 防止 `file_name` 中的路径分隔符 / `..` 造成目录穿越写入。
+fn resolve_target_path(target_dir: &Path, file_name: &str) -> PathBuf {
+    let safe_name = if file_name.is_empty() {
+        sanitize_file_name("unknown.bin")
+    } else {
+        sanitize_file_name(file_name)
+    };
+    target_dir.join(safe_name)
+}
+
 fn verify_sha1(path: &Path, expected: &str) -> bool {
     match fs::read(path) {
         Ok(data) => {
@@ -482,11 +495,7 @@ pub async fn download_file(
                 overall_timeout.as_secs()
             );
             
-            let target = task.target_dir.join(if task.file_name.is_empty() {
-                "unknown.bin"
-            } else {
-                &task.file_name
-            });
+            let target = resolve_target_path(&task.target_dir, &task.file_name);
             let temp_path = generate_temp_path(&target);
             let _ = fs::remove_file(&temp_path);
             let part_path = target.with_extension(format!(
@@ -583,7 +592,7 @@ async fn download_file_internal(
         }
     }
     
-    let target = task.target_dir.join(&resolved_file_name);
+    let target = resolve_target_path(&task.target_dir, &resolved_file_name);
     let cancel_arc = cancel.unwrap_or_else(|| Arc::new(AtomicBool::new(false)));
     
     println!(
