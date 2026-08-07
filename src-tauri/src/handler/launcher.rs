@@ -1,4 +1,5 @@
 use anyhow::Context;
+use log::{debug, error, info, warn};
 use os_info::Type;
 use regex::Regex;
 use serde::{Deserialize, Serialize};

@@ -533,9 +533,15 @@ export function ModpackBuilder({
               ? `${targetMcVersion} (${t("modpack.modpackBuilder.loaderRestrictionRemoved")})`
               : `${targetMcVersion} + ${selectedLoader}`
             : category === "modpack"
+<<<<<<< HEAD
               ? L({ "zh-CN": `关键词“${q}”`, "en-US": `keyword “${q}”` })
         : targetMcVersion;
         setSearchError(L({ "zh-CN": `未找到匹配 ${filterDesc} 的项目`, "en-US": `No projects match ${filterDesc}` }));
+=======
+              ? t("modpack.modpackBuilder.keywordValue", { value: q })
+              : targetMcVersion;
+        setSearchError(t("modpack.modpackBuilder.noProjectsMatchFilterDesc", { filterDesc }));
+>>>>>>> 399e15d3a0e4d7f170973fb3d1234a64946f0f2b
       }
     } catch (e: any) {
       setSearchError(`${t("modpack.modpackBuilder.searchFailed")}: ${e?.message || e}`);
@@ -961,7 +967,11 @@ export function ModpackBuilder({
     if (!trimmed) {
       if (!silent) {
         setSaveStatus("error");
+<<<<<<< HEAD
         setSaveMessage(L({ "zh-CN": "请先填写整合包名称", "en-US": "Enter a modpack name first" }));
+=======
+        setSaveMessage(t("modpack.modpackBuilder.enterAModpackNameFirst"));
+>>>>>>> 399e15d3a0e4d7f170973fb3d1234a64946f0f2b
       }
       return false;
     }
@@ -1144,6 +1154,7 @@ export function ModpackBuilder({
   const total =
     format === "modrinth" ? selectedModrinth.length : selectedCurseforge.length;
   const exportBlockers: string[] = [];
+<<<<<<< HEAD
   if (!name.trim()) exportBlockers.push(L({ "zh-CN": "填写整合包名称", "en-US": "enter a modpack name" }));
   if (!packVersion.trim()) exportBlockers.push(L({ "zh-CN": "填写整合包版本", "en-US": "enter a modpack version" }));
   if (!loaderVersion.trim()) {
@@ -1159,6 +1170,23 @@ export function ModpackBuilder({
   if (crossLoader) exportBlockers.push(L({ "zh-CN": "关闭信雅互联模式", "en-US": "disable cross-loader mode" }));
   if (useOptifine) exportBlockers.push(L({ "zh-CN": "关闭 OptiFine（文件未进入标准清单）", "en-US": "disable OptiFine because it is not in the standard manifest" }));
   if (total === 0) exportBlockers.push(L({ "zh-CN": "至少添加一个文件", "en-US": "add at least one file" }));
+=======
+  if (!name.trim()) exportBlockers.push(t("modpack.modpackBuilder.exportEnterModpackName"));
+  if (!packVersion.trim()) exportBlockers.push(t("modpack.modpackBuilder.exportEnterModpackVersion"));
+  if (!loaderVersion.trim()) {
+    exportBlockers.push(t("modpack.modpackBuilder.exportSelectExactLoaderVersion"));
+  } else if (loaderVersion.trim().toLowerCase() === "latest") {
+    exportBlockers.push(t("modpack.modpackBuilder.exportReplaceLatestLoaderVersion"));
+  }
+  if (!mcVersionValid) exportBlockers.push(t("modpack.modpackBuilder.exportSelectValidMinecraftVersion"));
+  if (format === "curseforge" && !author.trim()) exportBlockers.push(t("modpack.modpackBuilder.exportEnterAuthor"));
+  if (format === "modrinth" && selectedLoader === "liteloader") {
+    exportBlockers.push(t("modpack.modpackBuilder.exportRemoveLiteLoader"));
+  }
+  if (crossLoader) exportBlockers.push(t("modpack.modpackBuilder.exportDisableCrossLoader"));
+  if (useOptifine) exportBlockers.push(t("modpack.modpackBuilder.exportDisableOptiFine"));
+  if (total === 0) exportBlockers.push(t("modpack.modpackBuilder.exportAddAtLeastOneFile"));
+>>>>>>> 399e15d3a0e4d7f170973fb3d1234a64946f0f2b
 
   return (
     <div className="flex flex-col h-full overflow-hidden bg-background">
@@ -1442,7 +1470,11 @@ export function ModpackBuilder({
                 className="gap-1"
               >
                 <Download className="size-4" />
+<<<<<<< HEAD
                 {L({ "zh-CN": "导出标准包", "en-US": "Export standard pack" })}
+=======
+                {t("modpack.modpackBuilder.exportStandardPack")}
+>>>>>>> 399e15d3a0e4d7f170973fb3d1234a64946f0f2b
               </Button>
               <Button
                 size="sm"
@@ -1467,12 +1499,20 @@ export function ModpackBuilder({
                 ) : (
                   <Save className="size-4" />
                 )}
+<<<<<<< HEAD
                 {L({ "zh-CN": "手动保存", "en-US": "Save" })}
+=======
+                {t("modpack.modpackBuilder.save")}
+>>>>>>> 399e15d3a0e4d7f170973fb3d1234a64946f0f2b
               </Button>
             </div>
             {exportBlockers.length > 0 && (
               <div className="max-w-[32rem] text-right text-[11px] text-amber-600">
+<<<<<<< HEAD
                 {L({ "zh-CN": "导出前：", "en-US": "Before export: " })}{exportBlockers.join(L({ "zh-CN": "；", "en-US": "; " }))}
+=======
+                {t("modpack.modpackBuilder.beforeExport")}{exportBlockers.join(t("modpack.modpackBuilder.exportBlockerSeparator"))}
+>>>>>>> 399e15d3a0e4d7f170973fb3d1234a64946f0f2b
               </div>
             )}
           </div>
@@ -1654,8 +1694,13 @@ export function ModpackBuilder({
                   {modrinthVersions.length === 0 ? (
                     <div className="text-xs text-muted-foreground py-2">
                       {category === "modpack"
+<<<<<<< HEAD
                         ? L({ "zh-CN": "该项目暂时没有可下载版本", "en-US": "This project currently has no downloadable versions" })
                         : L({ "zh-CN": `无可用版本（该项目没有适配 MC ${matchedVersion?.id}）`, "en-US": `No versions are available for MC ${matchedVersion?.id}` })}
+=======
+                        ? t("modpack.modpackBuilder.noDownloadableVersions")
+                        : t("modpack.modpackBuilder.noVersionsAreAvailableForMcId", { id: matchedVersion?.id ?? "" })}
+>>>>>>> 399e15d3a0e4d7f170973fb3d1234a64946f0f2b
                     </div>
                   ) : (
                     modrinthVersions.map((version) => {
@@ -1722,8 +1767,13 @@ export function ModpackBuilder({
                   {curseforgeFiles.length === 0 ? (
                     <div className="text-xs text-muted-foreground py-2">
                       {category === "modpack"
+<<<<<<< HEAD
                         ? L({ "zh-CN": "该项目暂时没有可下载文件", "en-US": "This project currently has no downloadable files" })
                         : L({ "zh-CN": `无可用文件（该项目没有适配 MC ${matchedVersion?.id}）`, "en-US": `No files are available for MC ${matchedVersion?.id}` })}
+=======
+                        ? t("modpack.modpackBuilder.noDownloadableFiles")
+                        : t("modpack.modpackBuilder.noFilesAreAvailableForMcId", { id: matchedVersion?.id ?? "" })}
+>>>>>>> 399e15d3a0e4d7f170973fb3d1234a64946f0f2b
                     </div>
                   ) : (
                     curseforgeFiles.map((file) => {
@@ -1749,7 +1799,11 @@ export function ModpackBuilder({
                                 </Badge>
                                 <Badge variant="outline" className="text-[10px]">
                                   {file.releaseType === 1
+<<<<<<< HEAD
                                     ? L({ "zh-CN": "正式版", "en-US": "Release" })
+=======
+                                    ? t("modpack.modpackBuilder.release")
+>>>>>>> 399e15d3a0e4d7f170973fb3d1234a64946f0f2b
                                     : file.releaseType === 2
                                       ? "Beta"
                                       : "Alpha"}
@@ -1832,11 +1886,19 @@ export function ModpackBuilder({
                     <div className="grid grid-cols-2 gap-2 text-xs">
                       <div className="flex items-center gap-2 rounded-md border border-border bg-muted/30 px-2 py-1.5">
                         <Monitor className="size-3 text-muted-foreground" />
+<<<<<<< HEAD
                         <span>{L({ "zh-CN": "客户端：", "en-US": "Client: " })}{environmentRequirementLabel(f.env.client)}</span>
                       </div>
                       <div className="flex items-center gap-2 rounded-md border border-border bg-muted/30 px-2 py-1.5">
                         <Server className="size-3 text-muted-foreground" />
                         <span>{L({ "zh-CN": "服务端：", "en-US": "Server: " })}{environmentRequirementLabel(f.env.server)}</span>
+=======
+                        <span>{t("modpack.modpackBuilder.clientLabel")}{environmentRequirementLabel(f.env.client)}</span>
+                      </div>
+                      <div className="flex items-center gap-2 rounded-md border border-border bg-muted/30 px-2 py-1.5">
+                        <Server className="size-3 text-muted-foreground" />
+                        <span>{t("modpack.modpackBuilder.serverLabel")}{environmentRequirementLabel(f.env.server)}</span>
+>>>>>>> 399e15d3a0e4d7f170973fb3d1234a64946f0f2b
                       </div>
                     </div>
                     <div className="mt-2 text-[10px] text-muted-foreground font-mono truncate">
