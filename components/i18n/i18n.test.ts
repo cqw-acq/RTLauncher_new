@@ -21,6 +21,27 @@ function getSourceFiles(directory: string): string[] {
   });
 }
 
+function isInlineLocalizedMap(node: ts.PropertyAssignment): boolean {
+  const object = node.parent;
+  if (!ts.isObjectLiteralExpression(object)) return false;
+
+  const call = object.parent;
+  if (
+    !ts.isCallExpression(call) ||
+    !ts.isIdentifier(call.expression) ||
+    call.expression.text !== "L"
+  ) {
+    return false;
+  }
+
+  return object.properties.some(
+    (property) =>
+      ts.isPropertyAssignment(property) &&
+      ts.isStringLiteral(property.name) &&
+      property.name.text === "en-US",
+  );
+}
+
 describe("i18n catalogs", () => {
   it("keeps the same translation keys in each locale", () => {
     expect(getLeafKeys(enUS).sort()).toEqual(getLeafKeys(zhCN).sort());
@@ -46,7 +67,8 @@ describe("i18n catalogs", () => {
         if (
           ts.isPropertyAssignment(node) &&
           ts.isStringLiteral(node.name) &&
-          node.name.text === "zh-CN"
+          node.name.text === "zh-CN" &&
+          !isInlineLocalizedMap(node)
         ) {
           lines.push(sourceFile.getLineAndCharacterOfPosition(node.getStart()).line + 1);
         }

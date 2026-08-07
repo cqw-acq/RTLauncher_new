@@ -327,9 +327,21 @@
   },
   "settings": {
     "appearance": {
-      "theme": "Theme",
+      "theme": "Interface Theme",
       "light": "Light",
       "dark": "Dark",
+      "themeStyle": "Color scheme",
+      "themeStyleDescription": "Color schemes only change interface colors; page layout and component radii stay unchanged.",
+      "classicDefault": "Classic",
+      "classicDefaultDescription": "Neutral grays with a customizable accent color",
+      "classicDefaultAudience": "Players who prefer a clean, neutral palette",
+      "redstoneTerminal": "Lava Orange",
+      "redstoneTerminalDescription": "Warm gray surfaces with a lava-orange accent",
+      "redstoneTerminalAudience": "Players who prefer warm, high-contrast colors",
+      "gridCommand": "Glacier Blue",
+      "gridCommandDescription": "Cool gray surfaces with a clear blue accent",
+      "gridCommandAudience": "Players who prefer calm, crisp colors",
+      "forUsers": "Best for",
       "themeColor": "Theme color",
       "reset": "Reset",
       "fontSize": "Font size",
@@ -345,7 +357,7 @@
       "simpleLayoutOnlyAccountRelatedContentIsShown": "Simple layout: only account-related content is shown.",
       "fullLayoutAllFeatureSectionsAreShown": "Full layout: all feature sections are shown.",
       "appearance": "Appearance",
-      "themeColorFontSizeAndPageBackground": "Theme, color, font size, and page background"
+      "themeColorFontSizeAndPageBackground": "Theme mode, color scheme, font size, and page background"
     },
     "sidebarConfig": {
       "resetAllSidebarTabsToTheirDefaultVisibility": "Reset all sidebar tabs to their default visibility?",

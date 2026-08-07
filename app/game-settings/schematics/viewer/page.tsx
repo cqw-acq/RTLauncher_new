@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useRef, useState, useCallback, type CSSProperties } from "react";
 import { Upload, List, Download, Info, FileBox, Settings, X, RotateCcw, Maximize2, Minimize2, ArrowLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -685,7 +685,7 @@ if (typeof assets !== "undefined") { window.assets = assets; }`);
                   style={{
                     writingMode: "vertical-lr",
                     direction: "rtl",
-                    appearance: "slider-vertical",
+                    appearance: "slider-vertical" as CSSProperties["appearance"],
                     width: "20px",
                   }}
                   title={L({ "zh-CN": "最大层", "en-US": "Max Layer" })}
@@ -703,7 +703,7 @@ if (typeof assets !== "undefined") { window.assets = assets; }`);
                   style={{
                     writingMode: "vertical-lr",
                     direction: "rtl",
-                    appearance: "slider-vertical",
+                    appearance: "slider-vertical" as CSSProperties["appearance"],
                     width: "20px",
                   }}
                   title={L({ "zh-CN": "最小层", "en-US": "Min Layer" })}

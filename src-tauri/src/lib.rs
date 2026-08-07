@@ -28,6 +28,7 @@ use handler::cache_paths::{
 use handler::chinese_search::{get_moddata_info, search_moddata};
 use handler::config::{
     get_java_download_dir, get_launcher_paths_config, save_launcher_paths_config,
+    validate_minecraft_path,
 };
 use handler::fabric_handler::{
     cancel_fabric_download, download_and_install_fabric, get_fabric_api_versions,
@@ -178,6 +179,7 @@ pub fn run() {
             check_mod_installed,
             get_launcher_paths_config,
             save_launcher_paths_config,
+            validate_minecraft_path,
             write_file,
             get_java_versions,
             download_java_runtime,

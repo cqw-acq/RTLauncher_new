@@ -155,6 +155,21 @@ pub fn get_launcher_paths_config() -> LauncherPathsConfig {
     }
 }
 
+/// 校验一个目录是否为标准的 .minecraft 游戏目录。
+///
+/// 判断依据是目录结构而不是路径字符串：标准 .minecraft 目录根下一定包含
+/// `versions` 文件夹。HMCL / PCL 等第三方启动器自身的数据目录（如 `.hmcl`）
+/// 根下不会有 `versions`，因此不会被误判；而位于这些启动器目录下的
+/// `.minecraft` 子目录（如 `.hmcl/.minecraft`）结构完整，可以被正常识别。
+#[tauri::command]
+pub fn validate_minecraft_path(path: String) -> bool {
+    let dir = std::path::Path::new(&path);
+    if !dir.is_dir() {
+        return false;
+    }
+    dir.join("versions").is_dir()
+}
+
 /// 获取 Java 下载目录（应用数据目录下的 java 子目录）
 #[tauri::command]
 pub fn get_java_download_dir() -> Result<String, String> {

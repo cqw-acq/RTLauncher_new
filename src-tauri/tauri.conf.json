@@ -42,7 +42,7 @@
       "icons/icon.png"
     ],
     "category": "Game",
-    "targets": ["appimage", "deb", "nsis", "msi", "dmg", "app"]
+    "targets": ["deb", "nsis", "msi", "dmg", "app"]
   },
   "plugins": {
     "updater": {

@@ -17,6 +17,13 @@ function ensureInstanceDirs(instanceDir: string): Promise<void> {
   const pending = pendingInstanceDirEnsures.get(instanceDir);
   if (pending) return pending;
 
+  // Check if running in Tauri environment
+  if (typeof window !== "undefined" &&
+      !(window as typeof window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__) {
+    // Skip in web environment
+    return Promise.resolve();
+  }
+
   const request = invoke("vm_ensure_instance_dirs", { instanceDir })
     .then(() => {
       ensuredInstanceDirs.add(instanceDir);

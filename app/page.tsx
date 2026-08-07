@@ -7,11 +7,8 @@ import { motion } from "framer-motion";
 import {
   ArrowRight,
   Boxes,
-  Download,
-  Gamepad2,
   Loader2,
   Play,
-  Rocket,
   Shirt,
   User,
   UserPlus,
@@ -86,11 +83,6 @@ export default function Home() {
   const profileStatus = selectedProfile?.status
     ? profileStatusMap[selectedProfile.status] ?? selectedProfile.status
     : t("home.addAnAccountToLaunchTheGame");
-  const quickActions = [
-    { href: "/launch", title: t("home.launchSettings"), description: t("home.versionJavaAndMemory"), icon: Rocket, iconClassName: "bg-primary/10 text-primary" },
-    { href: "/download", title: t("home.downloads"), description: t("home.gameLoadersAndResources"), icon: Download, iconClassName: "bg-sky-500/10 text-sky-600 dark:text-sky-400" },
-    { href: "/game-settings", title: t("home.gameManagement"), description: t("home.modsWorldsAndResourcePacks"), icon: Gamepad2, iconClassName: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400" },
-  ];
 
   const handleProfileSelect = (profile: Account) => {
     selectProfile(profile);
@@ -135,12 +127,12 @@ export default function Home() {
         )}
 
         {homeMode === "simple" ? (
-          <div className="flex justify-end">
-            <motion.aside
+          <div className="flex flex-col items-center gap-6 py-8">
+            <motion.div
               initial={{ opacity: 0, y: 8 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: 0.1, duration: 0.3 }}
-              className="lg:sticky lg:top-0 w-[320px]"
+              className="w-full max-w-md"
             >
               <Card className="overflow-hidden border shadow-sm">
                 <CardHeader className="pb-2">
@@ -197,7 +189,7 @@ export default function Home() {
                   </CardContent>
                 </div>
               </Card>
-            </motion.aside>
+            </motion.div>
           </div>
         ) : (
           <div className="grid min-h-0 items-start gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
@@ -261,12 +253,14 @@ export default function Home() {
                           )}
                           {primaryActionLabel}
                         </Button>
-                        <Button variant="outline" size="lg" asChild>
-                          <Link href="/launch" className="gap-2">
-                            {t("home.viewLaunchDetails")}
-                            <ArrowRight className="size-4" />
-                          </Link>
-                        </Button>
+                        {!isLaunchActive && canLaunch && (
+                          <Button variant="outline" size="lg" asChild>
+                            <Link href="/launch" className="gap-2">
+                              {t("home.viewLaunchDetails")}
+                              <ArrowRight className="size-4" />
+                            </Link>
+                          </Button>
+                        )}
                       </div>
 
                       {errorMessage && (
@@ -288,32 +282,6 @@ export default function Home() {
                 </motion.div>
               </div>
 
-              <Card size="sm" className="shadow-sm">
-                <CardHeader className="pb-1">
-                  <CardTitle>{t("home.quickAccess")}</CardTitle>
-                  <CardDescription>{t("home.accessCommonFeaturesWithoutNavigatingMultipleMenus")}</CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <div className="grid gap-2 sm:grid-cols-3">
-                    {quickActions.map(({ href, title, description, icon: Icon, iconClassName }) => (
-                      <Link
-                        key={href}
-                        href={href}
-                        className="group flex min-w-0 items-center gap-3 rounded-xl border border-transparent p-3 transition-colors hover:border-border hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                      >
-                        <span className={`flex size-9 shrink-0 items-center justify-center rounded-xl ${iconClassName}`}>
-                          <Icon className="size-4" />
-                        </span>
-                        <span className="min-w-0 flex-1">
-                          <span className="block text-sm font-medium">{title}</span>
-                          <span className="block truncate text-xs text-muted-foreground">{description}</span>
-                        </span>
-                        <ArrowRight className="size-3.5 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
-                      </Link>
-                    ))}
-                  </div>
-                </CardContent>
-              </Card>
             </section>
 
             <motion.aside
