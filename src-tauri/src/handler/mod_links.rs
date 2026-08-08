@@ -728,13 +728,10 @@ pub async fn download_resource_file(
         );
     }
     let event_name = "mod-download-progress";
-    let _ = app.emit(
-        event_name,
-        ModDownloadProgressPayload {
-            task_id,
-            percent: 0.0,
-        },
-    );
+    // NOTE: 不要在这里立刻发 0% 事件！
+    // 对于已存在且校验通过的文件，modular_download 内部会直接推送 100% 进度，
+    // 如果这里先推送 0%，用户会看到进度条闪一下 0% 再跳到完成，体验不好。
+    // 真正下载时，modular_download 的 try_download_to_temp 会从 0% 开始主动推送进度。
     let task = crate::downloader::modular_download::DownloadTask {
         file_name,
         target_dir: save_dir,
@@ -975,4 +972,64 @@ pub async fn search_curseforge_projects(
         serde_json::Value::Object(pagination),
     );
     serde_json::to_string(&response_data).map_err(|_e| "Failed to serialize JSON".to_string())
+}
+
+#[allow(dependency_on_unit_never_type_fallback)]
+#[tauri::command]
+pub async fn search_modrinth_projects(
+    query: String,
+    project_type: Option<String>,
+    limit: Option<u32>,
+) -> Result<String, String> {
+    let client = modrinth_client().await;
+    let semaphore = global_semaphore().await;
+    let retry_cfg = RetryConfig {
+        max_retries: 3,
+        initial_delay_ms: 500,
+        max_delay_ms: 3000,
+    };
+    let lm = limit.unwrap_or(25);
+    let encoded_query = urlencoding(&query);
+    let mut facets = String::new();
+    if let Some(pt) = project_type {
+        let pt_lower = pt.to_lowercase();
+        facets = format!(
+            "[[\"project_type:{}\"]]",
+            match pt_lower.as_str() {
+                "modpack" => "modpack",
+                "resourcepack" | "texturepack" => "resourcepack",
+                "shaderpack" | "shaders" => "shader",
+                "datapack" => "datapack",
+                "world" | "worlds" => "project:world",
+                _ => "mod",
+            }
+        );
+    }
+    let encoded_facets = urlencoding(&facets);
+    let url = if facets.is_empty() {
+        format!(
+            "https://api.modrinth.com/v2/search?query={}&limit={}",
+            encoded_query, lm
+        )
+    } else {
+        format!(
+            "https://api.modrinth.com/v2/search?query={}&limit={}&facets={}",
+            encoded_query, lm, encoded_facets
+        )
+    };
+    let _permit = semaphore
+        .acquire()
+        .await
+        .map_err(|e| format!("信号量获取失败: {}", e))?;
+    let response = get_with_retry(&client, &url, Some(retry_cfg))
+        .await
+        .map_err(|e| format!("Modrinth API request failed (retried 3 times): {}", e))?;
+    if !response.status().is_success() {
+        return Err(format!("Modrinth API 返回错误状态: {}", response.status()));
+    }
+    let text = response
+        .text()
+        .await
+        .map_err(|e| format!("读取响应失败: {}", e))?;
+    Ok(text)
 }

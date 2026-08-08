@@ -673,10 +673,7 @@ fn build_jvm_arguments_inner(
                         let content = std::fs::read_to_string(&path)
                             .with_context(|| format!("Failed to read {}", path.display()))?;
 
-                        let value: serde_json::Value = serde_json::from_reader(
-                            std::fs::File::open(&path)
-                                .with_context(|| format!("Failed to open {}", path.display()))?,
-                        )?;
+                        let value: serde_json::Value = serde_json::from_str(&content)?;
 
                         println!(
                             "解析后的JSON值: {}",

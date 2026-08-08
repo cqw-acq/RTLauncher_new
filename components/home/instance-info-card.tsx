@@ -1,6 +1,7 @@
 "use client";
 
 import { motion } from "framer-motion";
+import Link from "next/link";
 import {
   Card,
   CardContent,
@@ -64,30 +65,32 @@ export function InstanceInfoCard({ instance }: { instance?: InstanceData | null 
       transition={{ delay: 0.15 }}
       className="h-full"
     >
-      <Card className="h-full relative overflow-hidden shadow-sm hover:shadow-xl transition-all duration-300 cursor-pointer flex flex-col border">
-      <CardHeader className="relative">
-        <div className="w-14 h-14 mb-4 flex items-center justify-center rounded-xl bg-muted">
-          <Cpu className="size-8 text-muted-foreground" />
-        </div>
-        <CardTitle className="text-xl font-bold">实例信息</CardTitle>
-        <CardDescription>查看实例详情</CardDescription>
-      </CardHeader>
+      <Link href="/launch" className="block h-full">
+        <Card className="h-full relative overflow-hidden shadow-sm hover:shadow-xl transition-all duration-300 cursor-pointer flex flex-col border hover:border-primary/40">
+        <CardHeader className="relative">
+          <div className="w-14 h-14 mb-4 flex items-center justify-center rounded-xl bg-muted">
+            <Cpu className="size-8 text-muted-foreground" />
+          </div>
+          <CardTitle className="text-xl font-bold">实例信息</CardTitle>
+          <CardDescription>查看实例详情</CardDescription>
+        </CardHeader>
 
-      <CardContent className="relative flex-1 space-y-3">
-        <InfoItem
-          label="游戏版本"
-          value={mcVersion}
-          tooltip="Minecraft 版本号"
-          icon={<MessageSquare className="size-4" />}
-        />
-        <InfoItem
-          label="加载器"
-          value={loader}
-          tooltip="模组加载器"
-          icon={<BadgeCheck className="size-4" />}
-        />
-      </CardContent>
-    </Card>
+        <CardContent className="relative flex-1 space-y-3">
+          <InfoItem
+            label="游戏版本"
+            value={mcVersion}
+            tooltip="Minecraft 版本号"
+            icon={<MessageSquare className="size-4" />}
+          />
+          <InfoItem
+            label="加载器"
+            value={loader}
+            tooltip="模组加载器"
+            icon={<BadgeCheck className="size-4" />}
+          />
+        </CardContent>
+      </Card>
+      </Link>
     </motion.div>
   );
 }

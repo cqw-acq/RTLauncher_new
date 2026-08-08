@@ -9,6 +9,8 @@ use std::time::{Duration, Instant};
 use tokio::io::AsyncWriteExt;
 use tokio::sync::{mpsc, Semaphore};
 
+use crate::downloader::shared_utils::sanitize_file_name;
+
 pub const MAX_CONCURRENT_FILES: usize = 24;
 pub const THROTTLE_MS_AFTER_FILE: u64 = 0;
 pub const MAX_TOTAL_CONNECTIONS: usize = 32;
@@ -426,6 +428,17 @@ fn generate_temp_path(target: &Path) -> PathBuf {
     parent.join(format!(".downloading_{}", base_name))
 }
 
+/// 将 DownloadTask 解析出的文件名整理为安全的 basename 后再与目标目录拼接，
+/// 防止 `file_name` 中的路径分隔符 / `..` 造成目录穿越写入。
+fn resolve_target_path(target_dir: &Path, file_name: &str) -> PathBuf {
+    let safe_name = if file_name.is_empty() {
+        sanitize_file_name("unknown.bin")
+    } else {
+        sanitize_file_name(file_name)
+    };
+    target_dir.join(safe_name)
+}
+
 fn verify_sha1(path: &Path, expected: &str) -> bool {
     match fs::read(path) {
         Ok(data) => {
@@ -482,11 +495,7 @@ pub async fn download_file(
                 overall_timeout.as_secs()
             );
             
-            let target = task.target_dir.join(if task.file_name.is_empty() {
-                "unknown.bin"
-            } else {
-                &task.file_name
-            });
+            let target = resolve_target_path(&task.target_dir, &task.file_name);
             let temp_path = generate_temp_path(&target);
             let _ = fs::remove_file(&temp_path);
             let part_path = target.with_extension(format!(
@@ -583,7 +592,7 @@ async fn download_file_internal(
         }
     }
     
-    let target = task.target_dir.join(&resolved_file_name);
+    let target = resolve_target_path(&task.target_dir, &resolved_file_name);
     let cancel_arc = cancel.unwrap_or_else(|| Arc::new(AtomicBool::new(false)));
     
     println!(
@@ -612,6 +621,9 @@ async fn download_file_internal(
                     "[Download] ✓ 已存在 (SHA1匹配): {} ({} bytes)",
                     resolved_file_name, size
                 );
+                if let Some(tx) = progress_tx.as_ref() {
+                    let _ = tx.send((size, size)).await;
+                }
                 return SingleDownloadResult::Success {
                     path: target,
                     used_url: "(已存在)".to_string(),
@@ -630,6 +642,9 @@ async fn download_file_internal(
                 "[Download] ✓ 已存在 (无SHA1校验): {} ({} bytes)",
                 resolved_file_name, size
             );
+            if let Some(tx) = progress_tx.as_ref() {
+                let _ = tx.send((size, size)).await;
+            }
             return SingleDownloadResult::Success {
                 path: target,
                 used_url: "(已存在)".to_string(),
@@ -637,6 +652,11 @@ async fn download_file_internal(
                 size,
             };
         }
+    }
+    
+    // 走到这里说明必须真正下载了，先推送一次 0% 让前端显示进度条
+    if let Some(tx) = progress_tx.as_ref() {
+        let _ = tx.try_send((0, 0));
     }
     
     let temp_path = generate_temp_path(&target);
@@ -1580,6 +1600,11 @@ async fn single_threaded_download(
     let total_size = resp.content_length().unwrap_or(0);
     println!("[Download]   文件大小: {} bytes", total_size);
     
+    // 立刻推送一次初始进度，让前端立刻显示进度条而不是等满 3 秒
+    if let Some(ref tx) = progress_tx {
+        let _ = tx.try_send((0, total_size));
+    }
+    
     let mut file = tokio::fs::File::create(temp_path)
         .await
         .with_context(|| format!("创建文件失败: {}", temp_path.display()))?;
@@ -1657,7 +1682,7 @@ async fn single_threaded_download(
                 file.write_all(&data).await.with_context(|| "写入失败")?;
                 received += data.len() as u64;
                 
-                if reporter_tick.elapsed() > Duration::from_millis(3000) {
+                if reporter_tick.elapsed() > Duration::from_millis(500) {
                     if let Some(ref tx) = progress_tx {
                         let _ = tx.try_send((received, total_size));
                     }
@@ -1690,6 +1715,11 @@ async fn single_threaded_download(
     
     file.flush().await.ok();
     drop(file);
+    
+    // 推送最终进度，保证至少到达 100% 一次
+    if let Some(ref tx) = progress_tx {
+        let _ = tx.try_send((received, total_size.max(received)));
+    }
     
     if total_size > 0 && received != total_size {
         return Err(anyhow!(
@@ -1749,6 +1779,11 @@ async fn browser_style_download(
     
     let total_size = resp.content_length().unwrap_or(0);
     println!("[Download]   文件大小: {} bytes", total_size);
+    
+    // 立刻推送一次初始进度
+    if let Some(ref tx) = progress_tx {
+        let _ = tx.try_send((0, total_size));
+    }
     
     let mut file = tokio::fs::File::create(temp_path)
         .await
@@ -1830,7 +1865,7 @@ async fn browser_style_download(
                 file.write_all(&data).await.with_context(|| "写入失败")?;
                 received += data.len() as u64;
                 
-                if reporter_tick.elapsed() > Duration::from_millis(3000) {
+                if reporter_tick.elapsed() > Duration::from_millis(500) {
                     if let Some(ref tx) = progress_tx {
                         let _ = tx.try_send((received, total_size));
                     }
@@ -1863,6 +1898,11 @@ async fn browser_style_download(
     
     file.flush().await.ok();
     drop(file);
+    
+    // 推送最终进度，保证至少到达 100% 一次
+    if let Some(ref tx) = progress_tx {
+        let _ = tx.try_send((received, total_size.max(received)));
+    }
     
     if total_size > 0 && received != total_size {
         return Err(anyhow!(

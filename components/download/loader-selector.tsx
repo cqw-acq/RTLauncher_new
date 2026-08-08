@@ -15,26 +15,22 @@ import { isLoaderCompatible } from "@/lib/utils";
 import { staggerContainer, staggerItem } from "@/lib/motion";
 import type { LoaderType } from "@/types";
 import {
-  Box,
-  Hammer,
-  Ribbon,
-  Feather,
-  Flame,
-  Zap,
-  Sun,
   Download,
   ChevronRight,
 } from "lucide-react";
+import { LoaderIcon, inferLoaderKind, type LoaderKind } from "@/components/launch/loader-icon";
 
 const loaderIcons: Record<LoaderType, React.ReactNode> = {
-  vanilla: <Box className="size-5" />,
-  forge: <Hammer className="size-5" />,
-  fabric: <Ribbon className="size-5" />,
-  quilt: <Feather className="size-5" />,
-  neoforge: <Flame className="size-5" />,
-  liteloader: <Zap className="size-5" />,
-  optifine: <Sun className="size-5" />,
+  vanilla:    <LoaderIcon kind="vanilla"    className="size-full" />,
+  forge:      <LoaderIcon kind="forge"      className="size-full" />,
+  fabric:     <LoaderIcon kind="fabric"     className="size-full" />,
+  quilt:      <LoaderIcon kind="quilt"      className="size-full" />,
+  neoforge:   <LoaderIcon kind="neoforge"   className="size-full" />,
+  liteloader: <LoaderIcon kind="liteloader" className="size-full" />,
+  optifine:   <LoaderIcon kind="optifine"   className="size-full" />,
 };
+
+const _UNUSED: LoaderKind = inferLoaderKind("vanilla") as LoaderKind;
 
 const loaderColors: Record<LoaderType, { bg: string; text: string; border: string }> = {
   vanilla: { bg: "bg-stone-100 dark:bg-stone-800/40", text: "text-stone-600 dark:text-stone-400", border: "hover:border-stone-400 dark:hover:border-stone-500" },
@@ -79,11 +75,11 @@ export function LoaderSelector({ versionId, onSelectLoader }: LoaderSelectorProp
                 <div className="flex items-center justify-between">
                   <div
                     className={cn(
-                      "flex size-10 items-center justify-center rounded-lg transition-transform duration-200 group-hover:scale-110",
+                      "flex size-11 items-center justify-center rounded-xl transition-transform duration-200 group-hover:scale-110 p-1.5",
                       colors.bg
                     )}
                   >
-                    <span className={colors.text}>{loaderIcons[loader.id]}</span>
+                    {loaderIcons[loader.id]}
                   </div>
                   {isVanilla ? (
                     <Button

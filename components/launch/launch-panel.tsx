@@ -11,13 +11,13 @@ import { useAccountContext } from "@/components/accounts/account-provider";
 import { LaunchStatusBadge } from "@/components/launch/launch-status-badge";
 import { LaunchProgress } from "@/components/launch/launch-progress";
 import { LaunchProgressStages } from "@/components/launch/launch-progress-stages";
+import { LaunchReportButton } from "@/components/launch/launch-report-button";
 import { fadeSlideUp } from "@/lib/motion";
 import { cn, getAvatarColor, getAvatarInitials } from "@/lib/utils";
 import {
   Play,
   Loader2,
   AlertCircle,
-  Gamepad2,
   HardDrive,
   Sparkles,
   Square,
@@ -25,6 +25,7 @@ import {
 import { useState, useEffect } from "react";
 import type { LauncherPathsConfig } from "@/types";
 import { useI18n } from "@/components/i18n/use-i18n";
+import { LoaderIcon, inferLoaderKind } from "@/components/launch/loader-icon";
 
 interface MemoryOptimizationReport {
   available_before_mb: number;
@@ -93,8 +94,11 @@ export function LaunchPanel() {
         {/* 状态与版本概览 */}
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="flex size-10 items-center justify-center rounded-xl bg-primary/10">
-              <Gamepad2 className="size-5 text-primary" />
+            <div className="flex size-10 items-center justify-center rounded-xl bg-primary/10 p-1.5">
+              <LoaderIcon
+                kind={inferLoaderKind(config.loadType === "0" ? "vanilla" : config.loadName)}
+                className="size-full"
+              />
             </div>
             <div>
               <p className="text-sm font-medium">
@@ -207,6 +211,9 @@ export function LaunchPanel() {
             </>
           )}
         </Button>
+
+        {/* 启动分析报告 */}
+        <LaunchReportButton />
 
         {/* 内存清理报告 / 错误 */}
         <AnimatePresence>

@@ -48,6 +48,7 @@ fastnbt = "2"
 flate2 = { version = "1.0", default-features = false, features = ["zlib"] }
 sysinfo = "0.33"
 tao = "0.35.3"
+urlencoding = "2.1"
 
 [target."cfg(target_os = \"macos\")".dependencies]
 objc2 = "0.6.2"

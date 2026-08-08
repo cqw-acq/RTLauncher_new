@@ -17,6 +17,13 @@ function ensureInstanceDirs(instanceDir: string): Promise<void> {
   const pending = pendingInstanceDirEnsures.get(instanceDir);
   if (pending) return pending;
 
+  // Check if running in Tauri environment
+  if (typeof window !== "undefined" &&
+      !(window as typeof window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__) {
+    // Skip in web environment
+    return Promise.resolve();
+  }
+
   const request = invoke("vm_ensure_instance_dirs", { instanceDir })
     .then(() => {
       ensuredInstanceDirs.add(instanceDir);
@@ -54,6 +61,7 @@ function extractMcVersion(name: string): string {
 /** 从文件夹名中推断加载器类型（返回前端可显示的字符串） */
 function inferLoaderFromFolderName(name: string): string {
   const lower = name.toLowerCase();
+  if (lower.includes("optifine")) return "OptiFine";
   if (lower.includes("neoforge") || lower.includes("neoforged")) return "NeoForge";
   if (lower.includes("fabric")) return "Fabric";
   if (lower.includes("quilt")) return "Quilt";

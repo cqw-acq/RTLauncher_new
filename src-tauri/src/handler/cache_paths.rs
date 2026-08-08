@@ -33,9 +33,29 @@ impl CacheResourceKind {
 }
 /// Resolve the launcher cache base without creating it.
 ///
+/// Priority:
+///   1. User-configured `selected_minecraft_path` from launcher settings
+///      (this is the game directory chosen on the Launch page).
+///   2. Fall back to the per-platform default directory.
+///
 /// Read-only commands use this path so merely opening a resource page never
 /// mutates the filesystem (and therefore cannot trigger Tauri's dev watcher).
 fn cache_base_dir() -> Result<PathBuf, String> {
+    // 1) Try to use the user-configured Minecraft directory. This makes
+    //    downloads and cache live inside whatever game folder the user
+    //    selected on the Launch page (e.g. %APPDATA%\.minecraft or a
+    //    custom portable location).
+    let user_cfg = super::config::get_launcher_paths_config();
+    let selected = user_cfg.selected_minecraft_path.trim();
+    if !selected.is_empty() {
+        let p = PathBuf::from(selected);
+        // Consider it valid if the path exists OR its parent is writable.
+        if p.exists() || p.parent().map(|par| par.exists()).unwrap_or(false) {
+            return Ok(p);
+        }
+    }
+
+    // 2) Fall back to the platform default location.
     #[cfg(target_os = "windows")]
     {
         let exe_dir = std::env::current_exe()

@@ -227,7 +227,7 @@ export default function DownloadPage() {
 
   // Navigate to mod detail page when clicking result item
   const handleResultClick = (item: { slug: string; chinese_name: string }) => {
-    router.push(`/download/detail?mod=${encodeURIComponent(item.slug)}`);
+    router.push(`/download/detail?mod=${encodeURIComponent(item.slug)}&forceType=mod&returnTo=chinese`);
   };
 
   // English search handling
@@ -568,7 +568,7 @@ export default function DownloadPage() {
                 }`}
                 onClick={() => setTab("chinese")}
               >
-                Chinese Search
+                mcmod上搜索
               </button>
               <button
                 className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
@@ -576,7 +576,7 @@ export default function DownloadPage() {
                 }`}
                 onClick={() => setTab("english")}
               >
-                English Search
+                全部平台搜索
               </button>
             </div>
 

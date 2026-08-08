@@ -1,4 +1,7 @@
 // Platform-specific paths expose a few helpers used by packaging integrations.
+#[macro_use]
+extern crate log;
+
 #[allow(dead_code)]
 mod app_paths;
 mod auth;
@@ -9,9 +12,9 @@ mod mutiplayer;
 mod version_management;
 use auth::littleskinLoader::{useMethod, use_method_with_credentials};
 use auth::official::{
-    get_skin_base64, ms_activate_skin, ms_cancel_login, ms_delete_skin, ms_get_skins_and_capes,
-    ms_poll_and_login, ms_request_device_code, ms_set_active_cape, ms_upload_skin,
-    redownload_littleskin_skin,
+    delete_cached_skin, get_skin_base64, ms_activate_skin, ms_cancel_login, ms_delete_skin,
+    ms_get_skins_and_capes, ms_has_account_in_db, ms_poll_and_login, ms_request_device_code,
+    ms_set_active_cape, ms_silent_refresh_account, ms_upload_skin, redownload_littleskin_skin,
 };
 use auth::yissadrail::{getAccountList, getPlayerSkin, thirdPartyLogin};
 use downloader::decompression::extract_library_paths;
@@ -25,6 +28,7 @@ use handler::cache_paths::{
 use handler::chinese_search::{get_moddata_info, search_moddata};
 use handler::config::{
     get_java_download_dir, get_launcher_paths_config, save_launcher_paths_config,
+    validate_minecraft_path,
 };
 use handler::fabric_handler::{
     cancel_fabric_download, download_and_install_fabric, get_fabric_api_versions,
@@ -44,6 +48,7 @@ use handler::liteloader_handler::{
 use handler::mod_links::{
     cancel_mod_download, download_mod_file, download_resource_file, get_curseforge_mod_files,
     get_mod_files_by_slug, get_mod_links, get_modrinth_mod_files, search_curseforge_projects,
+    search_modrinth_projects,
 };
 use handler::mod_parser::{parse_mod, parse_mods, parse_mods_in_dir, save_incompatible_mods};
 use handler::modpack_builder::{
@@ -68,6 +73,13 @@ use handler::quilt_handler::{
 };
 use handler::system::{
     get_system_memory, open_external, optimize_memory_usage, read_file_base64, write_file,
+};
+use handler::diagnostics::{
+    get_mod_dependencies_analysis, get_system_info, auto_download_missing_dependency,
+    auto_download_all_missing_dependencies, search_missing_dependency,
+    auto_download_with_dependencies, analyze_loader_logs, deep_analyze_with_api,
+    export_launch_report, get_modrinth_required_dependencies, get_curseforge_required_dependencies,
+    check_mod_installed,
 };
 use mutiplayer::{
     ensure_openp2p_stopped, mp_check_openp2p, mp_encode_room_info, mp_get_openp2p_dir,
@@ -129,6 +141,9 @@ pub fn run() {
             ms_activate_skin,
             ms_delete_skin,
             ms_set_active_cape,
+            ms_silent_refresh_account,
+            ms_has_account_in_db,
+            delete_cached_skin,
             mp_check_openp2p,
             mp_install_openp2p,
             mp_start_openp2p_host,
@@ -153,8 +168,18 @@ pub fn run() {
             optimize_memory_usage,
             open_external,
             read_file_base64,
+            get_mod_dependencies_analysis,
+            get_system_info,
+            search_missing_dependency,
+            auto_download_missing_dependency,
+            auto_download_all_missing_dependencies,
+            auto_download_with_dependencies,
+            analyze_loader_logs,
+            deep_analyze_with_api,
+            check_mod_installed,
             get_launcher_paths_config,
             save_launcher_paths_config,
+            validate_minecraft_path,
             write_file,
             get_java_versions,
             download_java_runtime,
@@ -222,6 +247,10 @@ pub fn run() {
             parse_mods_in_dir,
             save_incompatible_mods,
             search_curseforge_projects,
+            search_modrinth_projects,
+            export_launch_report,
+            get_modrinth_required_dependencies,
+            get_curseforge_required_dependencies,
         ])
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())

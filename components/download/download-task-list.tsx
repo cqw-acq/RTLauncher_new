@@ -73,7 +73,7 @@ function TaskRow({ task, onRemove, onCancel }: { task: DownloadTask; onRemove: (
           ) : task.status === "downloading" ? (
             <div className="flex items-center gap-1 shrink-0">
               <span className="text-[11px] text-muted-foreground tabular-nums">
-                {task.progress !== undefined ? task.progress.toFixed(1) : "0.0"}%
+                {task.progress !== undefined ? `${task.progress.toFixed(1)}%` : "校验中..."}
               </span>
               <Button
                 variant="ghost"
@@ -102,7 +102,7 @@ function TaskRow({ task, onRemove, onCancel }: { task: DownloadTask; onRemove: (
 
         {/* 进度条 */}
         {task.status === "downloading" && (
-          <Progress value={task.progress !== undefined ? task.progress : 0} className="h-1" />
+          <Progress value={task.progress} className="h-1" />
         )}
 
         {/* 排队等待 */}

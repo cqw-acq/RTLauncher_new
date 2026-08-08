@@ -7,11 +7,8 @@ import { motion } from "framer-motion";
 import {
   ArrowRight,
   Boxes,
-  Download,
-  Gamepad2,
   Loader2,
   Play,
-  Rocket,
   Shirt,
   User,
   UserPlus,
@@ -22,9 +19,9 @@ import { SkinCapeManager } from "@/components/accounts/skin-cape-manager";
 import { SkinViewer3D } from "@/components/accounts/skin-viewer-3d";
 import { useAccountContext } from "@/components/accounts/account-provider";
 import { AnnouncementCard } from "@/components/home/announcement-card";
-import { InstanceCardGrid } from "@/components/home/instance-card-grid";
 import { LaunchStatusBadge } from "@/components/launch/launch-status-badge";
 import { useLaunchContext } from "@/components/launch/launch-provider";
+import { VersionSelectorDialog } from "@/components/launch/version-selector-dialog";
 import { AppUpdateSection } from "@/components/settings/app-updater";
 import { useSettings } from "@/components/settings/settings-provider";
 import { useI18n } from "@/components/i18n/use-i18n";
@@ -59,7 +56,6 @@ export default function Home() {
     cancelLaunch,
   } = useLaunchContext();
   const {
-    instanceDir,
     selectedInstance,
     loading: instanceLoading,
   } = useInstancePath();
@@ -87,11 +83,6 @@ export default function Home() {
   const profileStatus = selectedProfile?.status
     ? profileStatusMap[selectedProfile.status] ?? selectedProfile.status
     : t("home.addAnAccountToLaunchTheGame");
-  const quickActions = [
-    { href: "/launch", title: t("home.launchSettings"), description: t("home.versionJavaAndMemory"), icon: Rocket, iconClassName: "bg-primary/10 text-primary" },
-    { href: "/download", title: t("home.downloads"), description: t("home.gameLoadersAndResources"), icon: Download, iconClassName: "bg-sky-500/10 text-sky-600 dark:text-sky-400" },
-    { href: "/game-settings", title: t("home.gameManagement"), description: t("home.modsWorldsAndResourcePacks"), icon: Gamepad2, iconClassName: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400" },
-  ];
 
   const handleProfileSelect = (profile: Account) => {
     selectProfile(profile);
@@ -136,12 +127,12 @@ export default function Home() {
         )}
 
         {homeMode === "simple" ? (
-          <div className="flex justify-end">
-            <motion.aside
+          <div className="flex flex-col items-center gap-6 py-8">
+            <motion.div
               initial={{ opacity: 0, y: 8 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: 0.1, duration: 0.3 }}
-              className="lg:sticky lg:top-0 w-[320px]"
+              className="w-full max-w-md"
             >
               <Card className="overflow-hidden border shadow-sm">
                 <CardHeader className="pb-2">
@@ -198,7 +189,7 @@ export default function Home() {
                   </CardContent>
                 </div>
               </Card>
-            </motion.aside>
+            </motion.div>
           </div>
         ) : (
           <div className="grid min-h-0 items-start gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
@@ -209,11 +200,11 @@ export default function Home() {
                   animate={{ opacity: 1, y: 0 }}
                   transition={{ duration: 0.3 }}
                 >
-                  <Card className="relative min-h-[230px] overflow-hidden border-primary/20 bg-gradient-to-br from-primary/12 via-card to-card shadow-sm">
+                  <Card className="relative min-h-[280px] overflow-hidden border-primary/20 bg-gradient-to-br from-primary/12 via-card to-card shadow-sm">
                     <div className="pointer-events-none absolute -right-12 -top-16 size-52 rounded-full bg-primary/10 blur-3xl" />
-                    <CardContent className="relative flex h-full min-h-[230px] flex-col justify-between gap-6 p-5 sm:p-6">
+                    <CardContent className="relative flex h-full min-h-[280px] flex-col justify-between gap-4 p-5 sm:p-6">
                       <div className="flex items-start justify-between gap-3">
-                        <div className="min-w-0">
+                        <div className="min-w-0 flex-1">
                           <div className="mb-3 flex flex-wrap items-center gap-2">
                             {instanceLoading ? (
                               <Badge variant="outline" className="gap-1.5">
@@ -237,6 +228,11 @@ export default function Home() {
                               ? `Minecraft ${versionName} · ${t("home.modsCountModsInstalled", { modsCount: selectedInstance.mods_count })}`
                               : t("home.selectAnInstalledVersionToLaunchTheGameHere")}
                           </p>
+
+                          <div className="mt-4">
+                            <p className="text-xs font-medium text-muted-foreground mb-2">{t("launch.config.gameVersion")}</p>
+                            <VersionSelectorDialog compact />
+                          </div>
                         </div>
                         <div className="flex size-11 shrink-0 items-center justify-center rounded-2xl bg-primary text-primary-foreground shadow-sm">
                           <Boxes className="size-5" />
@@ -257,12 +253,14 @@ export default function Home() {
                           )}
                           {primaryActionLabel}
                         </Button>
-                        <Button variant="outline" size="lg" asChild>
-                          <Link href="/launch" className="gap-2">
-                            {t("home.viewLaunchDetails")}
-                            <ArrowRight className="size-4" />
-                          </Link>
-                        </Button>
+                        {!isLaunchActive && canLaunch && (
+                          <Button variant="outline" size="lg" asChild>
+                            <Link href="/launch" className="gap-2">
+                              {t("home.viewLaunchDetails")}
+                              <ArrowRight className="size-4" />
+                            </Link>
+                          </Button>
+                        )}
                       </div>
 
                       {errorMessage && (
@@ -284,55 +282,6 @@ export default function Home() {
                 </motion.div>
               </div>
 
-              <Card size="sm" className="shadow-sm">
-                <CardHeader className="pb-1">
-                  <CardTitle>{t("home.quickAccess")}</CardTitle>
-                  <CardDescription>{t("home.accessCommonFeaturesWithoutNavigatingMultipleMenus")}</CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <div className="grid gap-2 sm:grid-cols-3">
-                    {quickActions.map(({ href, title, description, icon: Icon, iconClassName }) => (
-                      <Link
-                        key={href}
-                        href={href}
-                        className="group flex min-w-0 items-center gap-3 rounded-xl border border-transparent p-3 transition-colors hover:border-border hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                      >
-                        <span className={`flex size-9 shrink-0 items-center justify-center rounded-xl ${iconClassName}`}>
-                          <Icon className="size-4" />
-                        </span>
-                        <span className="min-w-0 flex-1">
-                          <span className="block text-sm font-medium">{title}</span>
-                          <span className="block truncate text-xs text-muted-foreground">{description}</span>
-                        </span>
-                        <ArrowRight className="size-3.5 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
-                      </Link>
-                    ))}
-                  </div>
-                </CardContent>
-              </Card>
-
-              <section aria-labelledby="resource-overview-title" className="flex min-h-0 flex-col gap-3">
-                <div className="flex items-end justify-between gap-3 px-1">
-                  <div>
-                    <h2 id="resource-overview-title" className="text-base font-semibold">
-                      {t("home.instanceResourceOverview")}
-                    </h2>
-                    <p className="mt-0.5 text-xs text-muted-foreground">
-                      {t("home.resourceDataUpdatesAutomaticallyForTheSelectedGameVersion")}
-                    </p>
-                  </div>
-                  <Button variant="ghost" size="sm" asChild>
-                    <Link href="/game-settings" className="gap-1.5">
-                      {t("home.manageGame")}
-                      <ArrowRight className="size-3.5" />
-                    </Link>
-                  </Button>
-                </div>
-                <InstanceCardGrid
-                  instanceDir={instanceDir}
-                  selectedInstance={selectedInstance}
-                />
-              </section>
             </section>
 
             <motion.aside
@@ -433,18 +382,18 @@ function SkinPreviewLarge({ profile }: { profile: Account | null }) {
     <div className="flex w-full flex-col items-center justify-center gap-3">
       {hasSkin ? (
         <div className="overflow-hidden rounded-2xl bg-muted/40">
-          <SkinViewer3D skinSrc={profile!.skinUrl!} width={250} height={290} />
+          <SkinViewer3D key={`skin-${profile?.id}-${profile?.skinUrl?.slice(-12)}`} skinSrc={profile!.skinUrl!} width={250} height={290} />
         </div>
       ) : profile ? (
         <div className="flex flex-col items-center gap-3 text-center">
-          <div className="flex size-24 items-center justify-center rounded-3xl bg-muted text-3xl font-semibold text-muted-foreground shadow-sm">
+          <div key={`avatar-${profile?.id}`} className="flex size-24 items-center justify-center rounded-3xl bg-muted text-3xl font-semibold text-muted-foreground shadow-sm">
             {displayName.charAt(0).toUpperCase()}
           </div>
           <p className="text-xs text-muted-foreground">{t("home.thisAccountHasNoPreviewableSkin")}</p>
         </div>
       ) : (
         <div className="flex flex-col items-center gap-3 text-center text-muted-foreground">
-          <div className="flex size-24 items-center justify-center rounded-3xl bg-muted shadow-sm">
+          <div key="no-profile-avatar" className="flex size-24 items-center justify-center rounded-3xl bg-muted shadow-sm">
             <UserPlus className="size-10" />
           </div>
           <p className="text-sm">{t("home.signInToPreviewA3DSkin")}</p>

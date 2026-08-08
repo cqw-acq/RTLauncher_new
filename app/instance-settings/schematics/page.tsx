@@ -1,15 +1,52 @@
 "use client";
 
-import React from "react";
+import React, { useCallback } from "react";
 import { motion } from "framer-motion";
 import { Boxes, Folder, Package } from "lucide-react";
+import { useRouter } from "next/navigation";
 import ResourcePanel from "@/components/resource-panel";
 import { useInstancePath } from "@/hooks/use-instance-path";
 import { useResourceManager } from "@/hooks/use-resource-manager";
 import { fadeSlideUp } from "@/lib/motion";
+import { invoke } from "@tauri-apps/api/core";
+import { FileItem } from "@/components/resource-panel";
 
 export default function SchematicsPage() {
+  const router = useRouter();
   const { instanceDir, selectedInstance, minecraftPath, configLoaded } = useInstancePath();
+
+  const viewerExtensions = ["schem", "schematic", "litematic", "nbt"];
+
+  const handleOpenViewer = useCallback(async (file: FileItem, side: "left" | "right") => {
+    if (!file) return;
+    try {
+      let absPath: string | null = null;
+      if (side === "left" && instanceDir) {
+        absPath = `${instanceDir}/schematics/${file.name}`;
+      } else if (side === "right") {
+        if (typeof (file as any).path === "string") {
+          absPath = (file as any).path;
+        } else if (file.name) {
+          const cacheRoot: string | null = await invoke<string>("get_mod_cache_dir_cmd", {
+            kind: "world",
+            mcVersion: selectedInstance?.minecraft_version ?? "",
+            modLoader: "",
+          }).catch(() => null);
+          if (cacheRoot) {
+            absPath = `${cacheRoot.replace(/\\/g, "/")}/${file.name}`;
+          }
+        }
+      }
+      if (!absPath) return;
+
+      const b64 = await invoke<string>("read_file_base64", { path: absPath });
+      const key = `schematic_viewer:${Date.now()}`;
+      sessionStorage.setItem(key, JSON.stringify({ name: file.name, b64 }));
+      router.push(`/game-settings/schematics/viewer?k=${encodeURIComponent(key)}`);
+    } catch (e) {
+      console.error("预览打开失败", e);
+    }
+  }, [instanceDir, router, selectedInstance]);
 
   const {
     filteredInstanceFiles,
@@ -105,6 +142,8 @@ export default function SchematicsPage() {
       onMoveRightToLeft={addToInstance}
       onMoveLeftToRight={removeFromInstance}
       onRefresh={refresh}
+      onOpenViewer={handleOpenViewer}
+      viewerExtensions={viewerExtensions}
     />
   );
 }

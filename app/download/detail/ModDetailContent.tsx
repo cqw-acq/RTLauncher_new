@@ -378,6 +378,10 @@ export default function ModDetailContent({ modId }: { modId: string }) {
   const { startModDownload, startResourceDownload, tasks } = useDownloadManager();
   const { settings } = useSettings();
 
+  const urlParams = typeof window !== "undefined" ? new URLSearchParams(window.location.search) : null;
+  const forceType = urlParams?.get("forceType") || null;
+  const returnTo = urlParams?.get("returnTo") || null;
+
   // 根据 URL 获取下载状态（用 taskId 精确匹配）
   const getDownloadStatus = (url: string) => {
     const taskId = downloadingUrlToTaskId.get(url);
@@ -567,6 +571,7 @@ export default function ModDetailContent({ modId }: { modId: string }) {
       const updated = mrUpdated || cfUpdated;
       const categories = mrCategories.length > 0 ? mrCategories : [];
       // Project type selection logic:
+      // 0. If URL has forceType param (e.g., from mcmod search), always use it (highest priority)
       // 1. If Modrinth's project_type is not "mod" (clearly resourcepack/shader/modpack), prioritize it
       // 2. Otherwise if CurseForge has classId, use type inferred from classId
       // 3. Otherwise use Modrinth's project_type
@@ -574,13 +579,17 @@ export default function ModDetailContent({ modId }: { modId: string }) {
       // Reason: Modrinth marks datapack/world project_type as "mod",
       // need to further identify through CurseForge's classId or loaders/categories
       let projectType: string = 'mod';
-      const cfProjectType = cfClassId ? classIdToProjectType(cfClassId) : undefined;
-      if (mrProjectType && mrProjectType !== 'mod') {
-        projectType = mrProjectType;
-      } else if (cfProjectType) {
-        projectType = cfProjectType;
-      } else if (mrProjectType) {
-        projectType = mrProjectType;
+      if (forceType) {
+        projectType = forceType;
+      } else {
+        const cfProjectType = cfClassId ? classIdToProjectType(cfClassId) : undefined;
+        if (mrProjectType && mrProjectType !== 'mod') {
+          projectType = mrProjectType;
+        } else if (cfProjectType) {
+          projectType = cfProjectType;
+        } else if (mrProjectType) {
+          projectType = mrProjectType;
+        }
       }
 
       const source: 'modrinth' | 'curseforge' | 'both' =
@@ -626,17 +635,28 @@ export default function ModDetailContent({ modId }: { modId: string }) {
     } catch (err) {
       console.error('Failed to get project online information:', err);
       setLiveError(String(err));
+      const fallbackType = forceType || "mod";
+      const cfPathFallback = (() => {
+        const pt = fallbackType.toLowerCase();
+        if (pt.includes("modpack")) return "modpacks";
+        if (pt.includes("resourcepack") || pt.includes("texture")) return "texture-packs";
+        if (pt.includes("shader")) return "shaders";
+        if (pt.includes("datapack")) return "data-packs";
+        if (pt.includes("world")) return "worlds";
+        return "mc-mods";
+      })();
       // At least keep basic URL information after failure
       setLiveInfo({
         slug: modId,
         title: modId,
+        projectType: fallbackType,
         source: 'both',
         sources: {
-          modrinth: { ok: true, url: `https://modrinth.com/mod/${modId}` },
-          curseforge: { ok: true, url: `https://www.curseforge.com/minecraft/mc-mods/${modId}` },
+          modrinth: { ok: true, url: `https://modrinth.com/${fallbackType}/${modId}` },
+          curseforge: { ok: true, url: `https://www.curseforge.com/minecraft/${cfPathFallback}/${modId}` },
         },
-        modrinthUrl: `https://modrinth.com/mod/${modId}`,
-        curseforgeUrl: `https://www.curseforge.com/minecraft/mc-mods/${modId}`,
+        modrinthUrl: `https://modrinth.com/${fallbackType}/${modId}`,
+        curseforgeUrl: `https://www.curseforge.com/minecraft/${cfPathFallback}/${modId}`,
       });
     }
   };
@@ -786,7 +806,8 @@ export default function ModDetailContent({ modId }: { modId: string }) {
     // - datapack -> "datapack"
     // - world / map -> "world"
     // - modpack / mod pack -> "modpack"
-    const projectType = (liveInfo?.projectType || "mod").toLowerCase();
+    // If forceType is set (e.g. from mcmod search), use it directly to avoid misclassification
+    const projectType = (forceType || liveInfo?.projectType || "mod").toLowerCase();
     let resourceKind = "mod";
     if (projectType.includes("resourcepack") || projectType.includes("resource pack") || projectType.includes("texture pack")) {
       resourceKind = "resourcepack";
@@ -905,10 +926,15 @@ export default function ModDetailContent({ modId }: { modId: string }) {
     <div className="flex h-full flex-col p-4">
       <Button variant="ghost" size="sm" className="w-fit mb-4" onClick={() => {
         const params = new URLSearchParams(window.location.search);
-        if (params.get("returnTo") === "english") {
+        const returnTarget = params.get("returnTo");
+        if (returnTarget === "english") {
           const query = params.get("query") || "";
           const category = params.get("category") || "mod";
           router.push(`/download?tab=english&query=${encodeURIComponent(query)}&category=${encodeURIComponent(category)}`);
+          return;
+        }
+        if (returnTarget === "chinese") {
+          router.push("/download?tab=chinese");
           return;
         }
         router.push("/download");

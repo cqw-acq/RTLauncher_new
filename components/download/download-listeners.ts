@@ -24,12 +24,18 @@ function makeProgressHandler(
     if (cancelledRef.current) return;
     const { task_id, percent } = event.payload;
     if (typeof percent !== "number" || Number.isNaN(percent)) return;
+    const progress = Math.min(100, Math.max(0, percent));
     setTasks((prev) =>
-      prev.map((task) =>
-        task.taskId === task_id && task.status === "downloading"
-          ? { ...task, progress: percent }
-          : task
-      )
+      prev.map((task) => {
+        if (task.taskId !== task_id) return task;
+        if (task.status === "cancelled" || task.status === "success" || task.status === "error" || task.status === "warning") {
+          return task;
+        }
+        return {
+          ...task,
+          progress,
+        };
+      })
     );
   };
 }

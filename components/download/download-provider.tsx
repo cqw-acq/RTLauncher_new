@@ -26,7 +26,7 @@ export interface DownloadTask {
   label: string;
   mcVersion: string;
   status: DownloadTaskStatus;
-  progress: number;
+  progress?: number;
   error?: string;
   /** 部分失败的文件数量 */
   failedCount?: number;
@@ -41,7 +41,7 @@ interface DownloadContextValue {
   /** 启动 Java 下载（不排队）*/
   startJavaDownload: (runtimeName: string) => Promise<number>;
   /** 启动 OptiFine 下载（不排队）*/
-  startOptifineDownload: (optifineVersion: string, mcVersion: string, instanceName?: string) => Promise<number>;
+  startOptifineDownload: (optifineVersion: string, mcVersion: string, instanceName?: string, optifineFallbackUrl?: string) => Promise<number>;
   /** 启动 Fabric 下载（不排队）*/
   startFabricDownload: (mcVersion: string, loaderVersion: string, apiVersion?: string, instanceName?: string) => Promise<number>;
   /** 启动 Quilt 下载（不排队）*/
@@ -195,7 +195,6 @@ export function DownloadProvider({ children }: { children: React.ReactNode }) {
             label,
             mcVersion,
             status: "downloading",
-            progress: 0,
             startedAt: Date.now(),
           };
           setTasks((prev) => [task, ...prev]);
@@ -212,7 +211,6 @@ export function DownloadProvider({ children }: { children: React.ReactNode }) {
           label,
           mcVersion,
           status: "queued",
-          progress: 0,
           startedAt: Date.now(),
         };
         setTasks((prev) => [task, ...prev]);
@@ -236,7 +234,7 @@ export function DownloadProvider({ children }: { children: React.ReactNode }) {
     const taskId = taskIdCounterRef.current++;
     setTasks((prev) => {
       const isDownloading = prev.some(
-        (t) => t.label === runtimeName && t.status === "downloading"
+        (t) => t.label === runtimeName && (t.status === "downloading" || t.status === "success")
       );
       if (isDownloading) return prev;
       const task: DownloadTask = {
@@ -244,7 +242,6 @@ export function DownloadProvider({ children }: { children: React.ReactNode }) {
         label: runtimeName,
         mcVersion: "Java",
         status: "downloading",
-        progress: 0,
         startedAt: Date.now(),
       };
       return [task, ...prev];
@@ -254,12 +251,12 @@ export function DownloadProvider({ children }: { children: React.ReactNode }) {
 
   /** OptiFine */
   const startOptifineDownload = useCallback(
-    async (optifineVersion: string, mcVersion: string, instanceName?: string) => {
+    async (optifineVersion: string, mcVersion: string, instanceName?: string, optifineFallbackUrl?: string) => {
       return startModLoaderDownload({
         label: optifineVersion,
         mcVersion,
         tauriCommand: "download_and_install_optifine",
-        params: { optifineVersion, mcVersion, instanceName: instanceName ?? null },
+        params: { optifineVersion, mcVersion, instanceName: instanceName ?? null, optifineFallbackUrl: optifineFallbackUrl ?? null },
       });
     },
     [startModLoaderDownload]
@@ -400,6 +397,12 @@ export function DownloadProvider({ children }: { children: React.ReactNode }) {
         await Promise.allSettled([
           invoke("cancel_download", { taskId }),
           invoke("cancel_mod_download", { taskId }),
+          invoke("cancel_optifine_download", { taskId }),
+          invoke("cancel_fabric_download", { taskId }),
+          invoke("cancel_quilt_download", { taskId }),
+          invoke("cancel_forge_download", { taskId }),
+          invoke("cancel_neoforge_download", { taskId }),
+          invoke("cancel_liteloader_download", { taskId }),
         ]);
       } catch (e) {
         console.error("取消下载失败:", e);
