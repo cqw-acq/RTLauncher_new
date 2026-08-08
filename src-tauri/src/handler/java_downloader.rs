@@ -174,7 +174,7 @@ pub async fn download_java_runtime(
     runtime_name: String,
     base_path: String,
     task_id: u64,
-    window: tauri::Window,
+    window: tauri::WebviewWindow,
 ) -> Result<DownloadResult, String> {
     let client = crate::http_client::shared_client().await;
     let response = client
@@ -305,7 +305,7 @@ pub async fn download_java_runtime(
 async fn download_java_files(
     tasks: Vec<DownloadTask>,
     task_id: u64,
-    window: tauri::Window,
+    window: tauri::WebviewWindow,
 ) -> Result<(), String> {
     let total = tasks.len();
     let progress = Arc::new(DownloadProgress::new());

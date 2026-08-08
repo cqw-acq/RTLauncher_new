@@ -109,25 +109,7 @@ export function PathsSection() {
         multiple: false,
         directory: true,
       });
-      if (res && typeof res === "string") {
-        setNewMcPath(res);
-
-        // 自动验证选择的路径
-        try {
-          const { invoke } = await import("@tauri-apps/api/core");
-          const isValid = await invoke<boolean>("validate_minecraft_path", {
-            path: res
-          });
-
-          if (!isValid) {
-            setError(`"${res}" 不是有效的Minecraft游戏目录。请确保目录包含 "versions" 文件夹。`);
-          } else {
-            setError(null);
-          }
-        } catch (e) {
-          console.warn("路径验证失败", e);
-        }
-      }
+      if (res && typeof res === "string") setNewMcPath(res);
     } catch (e) {
       console.warn("无法打开目录选择器", e);
     }
@@ -154,34 +136,15 @@ export function PathsSection() {
     });
   };
 
-  const addMc = async () => {
-    if (!config) return;
-    const path = newMcPath.trim();
-    if (!path) return;
-    if (config.minecraft_paths.includes(path)) return;
-
-    // 验证路径是否为有效的Minecraft目录
-    try {
-      const { invoke } = await import("@tauri-apps/api/core");
-      const isValid = await invoke<boolean>("validate_minecraft_path", {
-        path
-      });
-
-      if (!isValid) {
-        setError(`"${path}" 不是有效的Minecraft游戏目录。请确保目录包含 "versions" 文件夹。`);
-        return;
-      }
-    } catch (e) {
-      console.warn("路径验证失败，继续添加", e);
-    }
-
+  const addMc = () => {
+    if (!newMcPath.trim() || !config) return;
+    if (config.minecraft_paths.includes(newMcPath.trim())) return;
     setConfig({
       ...config,
-      minecraft_paths: [...config.minecraft_paths, path],
-      selected_minecraft_path: path,
+      minecraft_paths: [...config.minecraft_paths, newMcPath.trim()],
+      selected_minecraft_path: newMcPath.trim(),
     });
     setNewMcPath("");
-    setError(null);
   };
 
   const removeMc = (p: string) => {
@@ -381,14 +344,9 @@ export function PathsSection() {
                     ))}
                   </div>
                 )}
-                <div className="space-y-1">
-                  <p className="text-xs text-muted-foreground">
-                    默认目录：<span className="font-mono">{config.default_minecraft_path}</span>
-                  </p>
-                  <p className="text-xs text-muted-foreground">
-                    ⚠️ 请选择标准的 .minecraft 目录（根目录包含 versions 文件夹）。如果使用 HMCL、PCL 等启动器，请选择其目录下的 .minecraft 子目录，而非启动器自身的数据目录。
-                  </p>
-                </div>
+                <p className="text-xs text-muted-foreground">
+                  默认目录：<span className="font-mono">{config.default_minecraft_path}</span>
+                </p>
               </div>
             </div>
 

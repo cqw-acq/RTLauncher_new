@@ -19,13 +19,6 @@ function loadInstances(instancesPath: string): Promise<InstanceData[]> {
   const pending = inFlightInstanceScans.get(instancesPath);
   if (pending) return pending;
 
-  // Check if running in Tauri environment
-  if (typeof window !== "undefined" &&
-      !(window as typeof window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__) {
-    // Return empty array for web environment
-    return Promise.resolve([]);
-  }
-
   const request = invoke<InstanceData[]>("vm_scan_instances", {
     instancesPath,
   });

@@ -9,6 +9,7 @@ mod downloader;
 mod handler;
 mod http_client;
 mod mutiplayer;
+mod updater;
 mod version_management;
 use auth::littleskinLoader::{useMethod, use_method_with_credentials};
 use auth::official::{
@@ -28,7 +29,6 @@ use handler::cache_paths::{
 use handler::chinese_search::{get_moddata_info, search_moddata};
 use handler::config::{
     get_java_download_dir, get_launcher_paths_config, save_launcher_paths_config,
-    validate_minecraft_path,
 };
 use handler::fabric_handler::{
     cancel_fabric_download, download_and_install_fabric, get_fabric_api_versions,
@@ -85,6 +85,10 @@ use mutiplayer::{
     ensure_openp2p_stopped, mp_check_openp2p, mp_encode_room_info, mp_get_openp2p_dir,
     mp_get_openp2p_path, mp_install_openp2p, mp_is_openp2p_running, mp_poll_log,
     mp_start_openp2p_host, mp_start_openp2p_join, mp_stop_openp2p,
+};
+use updater::handler::{
+    cancel_update, can_check_update, check_for_updates, create_updater_state, download_update,
+    get_target_version, get_update_status, install_update,
 };
 use version_management::{
     vm_delete_cached_file, vm_delete_file, vm_ensure_instance_dirs, vm_find_resource_packs,
@@ -179,7 +183,6 @@ pub fn run() {
             check_mod_installed,
             get_launcher_paths_config,
             save_launcher_paths_config,
-            validate_minecraft_path,
             write_file,
             get_java_versions,
             download_java_runtime,
@@ -251,8 +254,15 @@ pub fn run() {
             export_launch_report,
             get_modrinth_required_dependencies,
             get_curseforge_required_dependencies,
+            get_update_status,
+            check_for_updates,
+            download_update,
+            install_update,
+            cancel_update,
+            can_check_update,
+            get_target_version,
         ])
-        .plugin(tauri_plugin_updater::Builder::new().build())
+        .manage(create_updater_state())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {

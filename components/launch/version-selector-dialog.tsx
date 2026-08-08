@@ -257,11 +257,26 @@ export function VersionSelectorDialog({ open: controlledOpen, onOpenChange, comp
     return [...vanillaVersions, ...loaderVersions];
   }, [currentMcNode, selectedLoader]);
 
-  // 第一步：过滤 MC 版本
+  // 第一步：过滤 MC 版本（同时搜索子版本实例名）
   const filteredMcTree = useMemo(() => {
-    if (!mcSearchQuery) return mcTree;
     const q = mcSearchQuery.toLowerCase();
-    return mcTree.filter((n) => n.mcVersion.toLowerCase().includes(q));
+    const wrapped = mcTree.map((n) => {
+      const matchingInstances: ParsedVersion[] = [];
+      if (q) {
+        for (const loaderType of Object.keys(n.loaders)) {
+          for (const inst of n.loaders[loaderType]) {
+            if (inst.name.toLowerCase().includes(q)) {
+              matchingInstances.push(inst);
+            }
+          }
+        }
+      }
+      return { node: n, matchingInstances, matchesMc: q ? n.mcVersion.toLowerCase().includes(q) : true };
+    });
+
+    if (!q) return wrapped;
+
+    return wrapped.filter((item) => item.matchesMc || item.matchingInstances.length > 0);
   }, [mcTree, mcSearchQuery]);
 
   // 第二步：过滤 loader
@@ -428,7 +443,8 @@ export function VersionSelectorDialog({ open: controlledOpen, onOpenChange, comp
                   </p>
                 </div>
               ) : (
-                filteredMcTree.map((node) => {
+                filteredMcTree.map((item) => {
+                  const node = item.node;
                   const totalCount = Object.keys(node.loaders).reduce(
                     (sum, k) => sum + (node.loaders[k]?.length || 0),
                     0
@@ -451,9 +467,27 @@ export function VersionSelectorDialog({ open: controlledOpen, onOpenChange, comp
                         <div className="font-medium text-sm truncate">
                           {node.mcVersion}
                         </div>
-                        <div className="text-[11px] text-muted-foreground/70 mt-1">
-                          {t("launch.versionSelector.totalCountSubversions", { totalCount: totalCount })}
-                        </div>
+                        {mcSearchQuery && item.matchingInstances.length > 0 ? (
+                          <div className="text-[11px] text-muted-foreground/70 mt-1 flex flex-wrap gap-1">
+                            {item.matchingInstances.slice(0, 5).map((inst) => (
+                              <span
+                                key={inst.name}
+                                className="inline-block px-1.5 py-0.5 rounded bg-accent/60 text-foreground/80 truncate max-w-[120px]"
+                              >
+                                {inst.name}
+                              </span>
+                            ))}
+                            {item.matchingInstances.length > 5 && (
+                              <span className="text-muted-foreground/50">
+                                +{item.matchingInstances.length - 5}
+                              </span>
+                            )}
+                          </div>
+                        ) : (
+                          <div className="text-[11px] text-muted-foreground/70 mt-1">
+                            {t("launch.versionSelector.totalCountSubversions", { totalCount: totalCount })}
+                          </div>
+                        )}
                       </div>
 
                       <ChevronDown className="size-4 shrink-0 text-muted-foreground rotate-[-90deg]" />

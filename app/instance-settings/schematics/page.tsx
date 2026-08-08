@@ -27,7 +27,7 @@ export default function SchematicsPage() {
         if (typeof (file as any).path === "string") {
           absPath = (file as any).path;
         } else if (file.name) {
-          const cacheRoot: string | null = await invoke<string>("get_mod_cache_dir_cmd", {
+          const cacheRoot = await invoke<string | null>("get_mod_cache_dir_cmd", {
             kind: "world",
             mcVersion: selectedInstance?.minecraft_version ?? "",
             modLoader: "",

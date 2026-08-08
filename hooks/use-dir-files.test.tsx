@@ -13,16 +13,11 @@ const invokeMock = vi.mocked(invoke);
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
-  delete (window as typeof window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
 });
 
 describe("useDirFiles", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    Object.defineProperty(window, "__TAURI_INTERNALS__", {
-      configurable: true,
-      value: {},
-    });
   });
 
   it("does not reload when an inline extension filter keeps the same contents", async () => {

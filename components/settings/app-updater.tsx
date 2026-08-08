@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { useRouter } from "next/navigation";
 import { Download, Check, Loader2, RefreshCw, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -10,6 +11,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { check } from "@tauri-apps/plugin-updater";
+import { invoke } from "@tauri-apps/api/core";
 import { useI18n } from "@/components/i18n/use-i18n";
 import type { AppLanguage } from "@/components/settings/settings-provider";
 
@@ -27,6 +29,14 @@ type UpdateState =
   | { kind: "available"; version: string; notes: string }
   | { kind: "up-to-date" }
   | { kind: "error"; message: string };
+
+interface UpdateCheckResult {
+  needs_check: boolean;
+  update_available: boolean;
+  current_version: string;
+  target_version: string | null;
+  message: string;
+}
 
 // ---- Provider：全局共享更新状态 ----
 
@@ -55,7 +65,6 @@ async function checkInBackground(showError = false, language: AppLanguage = "zh-
     } else {
       setState({ kind: "up-to-date" });
       if (showError) {
-        // 调用方希望显式提示用户
         setTimeout(() => {
           window.alert(updateAlert(language, "当前已是最新版本 ✅", "You're up to date ✅"));
         }, 50);
@@ -69,6 +78,38 @@ async function checkInBackground(showError = false, language: AppLanguage = "zh-
         window.alert(updateAlert(language, "检查更新失败：\n", "Update check failed:\n") + msg);
       }, 50);
     }
+  }
+}
+
+/**
+ * 启动器启动时调用：强制跳过 24 小时限制检查更新。
+ * 如发现新版本 → 自动跳转到 /check-update 页面并触发下载流程。
+ * @param router useRouter() 返回的路由实例，用于跳转子页面
+ * @returns true = 发现更新且已经跳转
+ */
+async function startupCheckAndNavigate(
+  router: ReturnType<typeof import("next/navigation").useRouter>
+): Promise<boolean> {
+  setState({ kind: "checking" });
+  try {
+    const result = await invoke<UpdateCheckResult>("check_for_updates", { force: true });
+
+    if (result.update_available && result.target_version) {
+      setState({
+        kind: "available",
+        version: result.target_version,
+        notes: result.message,
+      });
+      router.push("/check-update?autoStart=1");
+      return true;
+    }
+
+    setState({ kind: "up-to-date" });
+    return false;
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    setState({ kind: "error", message: msg });
+    return false;
   }
 }
 
@@ -335,19 +376,20 @@ function AppUpdateDialogTrigger({
   );
 }
 
-// ---- 启动时的后台检查触发器（不显示 UI，只更新状态）----
+// ---- 启动时的后台检查触发器（发现新版本会跳转至自动更新页面）----
 
 export function useStartupUpdateCheck() {
-  const done = useState(false);
+  const router = useRouter();
+  const [done, setDone] = useState(false);
   useEffect(() => {
-    if (done[0]) return;
-    done[1](true);
+    if (done) return;
+    setDone(true);
     // 延迟 1.5s，等页面加载完，不抢主线程
     const t = setTimeout(() => {
-      checkInBackground(false);
+      startupCheckAndNavigate(router);
     }, 1500);
     return () => clearTimeout(t);
-  }, []);
+  }, [done, router]);
 }
 
 // ---- 用于主页的完整组件：启动后台检查 + 显示提示条 ----

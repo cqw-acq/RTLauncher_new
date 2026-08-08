@@ -157,14 +157,13 @@ export function InstanceCardGrid({
             className="block h-full"
             suppressHydrationWarning
           >
-            <Card className="shadow-sm hover:shadow-xl transition-all duration-300 cursor-pointer h-full flex flex-col border hover:border-primary/40 group">
+            <Card className="shadow-sm hover:shadow-xl transition-all duration-300 cursor-pointer h-full flex flex-col border hover:border-primary/40">
               <CardHeader>
                 {/* 图标 */}
                 <div
                   className={cn(
-                    "mb-3 flex size-11 items-center justify-center rounded-xl transition-colors duration-200",
-                    card.iconBgColor,
-                    "group-hover:scale-110"
+                    "mb-3 flex size-11 items-center justify-center rounded-xl",
+                    card.iconBgColor
                   )}
                 >
                   <svg
@@ -178,7 +177,7 @@ export function InstanceCardGrid({
                     {card.icon}
                   </svg>
                 </div>
-                <CardTitle className="group-hover:text-primary transition-colors duration-200">{t(copy.title)}</CardTitle>
+                <CardTitle>{t(copy.title)}</CardTitle>
                 <CardDescription className="text-xs">{t(copy.description)}</CardDescription>
               </CardHeader>
               <CardContent className="px-4">

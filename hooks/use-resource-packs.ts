@@ -31,16 +31,6 @@ export function useResourcePacks(rootPath?: string): UseResourcePacksReturn {
       setError(null);
       return;
     }
-
-    // Check if running in Tauri environment
-    if (typeof window !== "undefined" &&
-        !(window as typeof window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__) {
-      setPacks([]);
-      setLoading(false);
-      setError(null);
-      return;
-    }
-
     setLoading(true);
     setError(null);
     try {

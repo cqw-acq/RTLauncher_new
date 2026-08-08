@@ -33,7 +33,7 @@ import { formatDuration } from "@/components/launch/launch-analyzer";
 import type { LaunchAnalysisReport, Log4jLogEntry } from "@/types";
 
 type ReportFinalStatus = LaunchAnalysisReport["finalStatus"];
-const FINAL_STATUS_KEYS: Record<ReportFinalStatus, TranslationKey> = {
+const FINAL_STATUS_KEYS: Record<ReportFinalStatus, string> = {
   running: "launch.report.statusRunning",
   stopped: "launch.report.statusStopped",
   error: "launch.report.statusError",
@@ -239,7 +239,7 @@ export function LaunchReportButton() {
                     <Loader2 className="size-4 text-muted-foreground" />
                   )}
                   <span className="text-sm font-semibold">
-                    {t(FINAL_STATUS_KEYS[report.finalStatus])}
+                    {t(FINAL_STATUS_KEYS[report.finalStatus] as any)}
                   </span>
                 </div>
               </CardContent>
@@ -370,13 +370,7 @@ export function LaunchReportButton() {
   );
 }
 
-function Log4jLogsSection({
-  logs,
-  t,
-}: {
-  logs: Log4jLogEntry[];
-  t: (key: TranslationKey, values?: Record<string, string | number>) => string;
-}) {
+function Log4jLogsSection({ logs, t }: { logs: Log4jLogEntry[]; t: (key: TranslationKey, values?: Record<string, string | number>) => string }) {
   const levelColor = (level: string) => {
     const l = level.toUpperCase();
     if (l === "ERROR" || l === "FATAL") return "text-destructive";

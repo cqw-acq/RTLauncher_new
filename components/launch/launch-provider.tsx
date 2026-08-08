@@ -24,6 +24,19 @@ import type {
 } from "@/types";
 
 /** 默认启动配置 */
+export const DEFAULT_INITIAL_JVM_ARGS = `-XX:+UnlockExperimentalVMOptions
+-XX:+AlwaysPreTouch
+-XX:+DisableExplicitGC
+-XX:MaxGCPauseMillis=200
+-Dfml.ignorePatchDiscrepancies=true
+-Dfml.ignoreInvalidMinecraftCertificates=true
+-Duser.language=zh
+-Duser.country=CN
+-Dminecraft.api.env=production
+-Dminecraft.api.location=https://api.minecraftservices.com/
+-Dfml.readTimeout=180
+-Dio.netty.allocator.type=unpooled`;
+
 const DEFAULT_LAUNCH_CONFIG: LaunchConfig = {
   minecraftPath: "",
   javaPath: "",
@@ -40,6 +53,7 @@ const DEFAULT_LAUNCH_CONFIG: LaunchConfig = {
   authlibInjectorPath: "",
   yggdrasilApi: "",
   prefetchedData: "",
+  customJvmArgs: DEFAULT_INITIAL_JVM_ARGS,
 };
 
 interface LaunchContextValue {
@@ -92,11 +106,11 @@ export function LaunchProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     let cancelled = false;
     let savedConfig: Partial<LaunchConfig> = {};
-    let savedLaunchTime: string | null = null;
     try {
       const saved = localStorage.getItem("rtl-launch-config");
       if (saved) savedConfig = JSON.parse(saved);
-      savedLaunchTime = localStorage.getItem("rtl-last-launch-time");
+      const savedTime = localStorage.getItem("rtl-last-launch-time");
+      if (savedTime) setLastLaunchTime(savedTime);
     } catch { /* ignore */ }
 
     let nativePathsResolved = false;
@@ -114,32 +128,27 @@ export function LaunchProvider({ children }: { children: React.ReactNode }) {
     queueMicrotask(() => {
       if (cancelled) return;
       setConfig((prev) => ({ ...prev, ...savedConfig }));
-      if (savedLaunchTime) setLastLaunchTime(savedLaunchTime);
       localConfigApplied = true;
       tryMarkLoaded();
     });
-    if (!isTauriRuntime()) {
-      nativePathsResolved = true;
-      tryMarkLoaded();
-    } else {
-      void invoke<{
-        selected_java_path: string;
-        selected_minecraft_path: string;
-      }>("get_launcher_paths_config")
-        .then((pathsCfg) => {
-          if (cancelled) return;
-          setConfig((prev) => ({
-            ...prev,
-            ...(pathsCfg.selected_java_path ? { javaPath: pathsCfg.selected_java_path } : {}),
-            ...(pathsCfg.selected_minecraft_path ? { minecraftPath: pathsCfg.selected_minecraft_path } : {}),
-          }));
-        })
-        .catch(() => {})
-        .finally(() => {
-          nativePathsResolved = true;
-          tryMarkLoaded();
-        });
-    }
+
+    void invoke<{
+      selected_java_path: string;
+      selected_minecraft_path: string;
+    }>("get_launcher_paths_config")
+      .then((pathsCfg) => {
+        if (cancelled) return;
+        setConfig((prev) => ({
+          ...prev,
+          ...(pathsCfg.selected_java_path ? { javaPath: pathsCfg.selected_java_path } : {}),
+          ...(pathsCfg.selected_minecraft_path ? { minecraftPath: pathsCfg.selected_minecraft_path } : {}),
+        }));
+      })
+      .catch(() => {})
+      .finally(() => {
+        nativePathsResolved = true;
+        tryMarkLoaded();
+      });
     return () => { cancelled = true; };
   }, []);
 
@@ -275,8 +284,6 @@ export function LaunchProvider({ children }: { children: React.ReactNode }) {
 
   // 监听启动进度事件
   useEffect(() => {
-    if (!isTauriRuntime()) return;
-
     let unlisten: (() => void) | null = null;
     listen<{ current_step: number; total_steps: number; current_stage: string; percentage: number }>("launch-progress", (event) => {
       const { current_step, total_steps, current_stage, percentage } = event.payload;
@@ -296,18 +303,16 @@ export function LaunchProvider({ children }: { children: React.ReactNode }) {
         return;
       }
       try {
-        if (isTauriRuntime()) {
-          const result = await invoke<string>("kill_game_process");
-          setLogs((prev) => [
-            ...prev,
-            {
-              id: ++logIdRef.current,
-              timestamp: new Date().toLocaleTimeString(),
-              level: "warn",
-              message: result,
-            },
-          ]);
-        }
+        const result = await invoke<string>("kill_game_process");
+        setLogs((prev) => [
+          ...prev,
+          {
+            id: ++logIdRef.current,
+            timestamp: new Date().toLocaleTimeString(),
+            level: "warn",
+            message: result,
+          },
+        ]);
         setStatus("idle");
         setProgress(null);
       } catch (e) {
@@ -359,27 +364,26 @@ export function LaunchProvider({ children }: { children: React.ReactNode }) {
           addLog("info", t("launch.provider.loaderLoadName", { loadName: merged.loadName }));
         }
 
-        if (isTauriRuntime()) {
-          const result = await invoke<string>("launch_game", {
-            minecraftPath: merged.minecraftPath,
-            javaPath: merged.javaPath,
-            wrapperPath: merged.wrapperPath,
-            maxMemory: merged.maxMemory,
-            versionName: merged.versionName,
-            playerName: merged.playerName || selectedProfile.name,
-            authToken: merged.authToken || selectedProfile.accessToken || "",
-            uuid: merged.uuid || selectedProfile.uuid || selectedProfile.id,
-            authlibInjectorPath: merged.authlibInjectorPath,
-            yggdrasilApi: merged.yggdrasilApi || selectedProfile.yggdrasilUrl || "",
-            prefetchedData: merged.prefetchedData,
-            loadType: merged.loadType,
-            loadName: merged.loadName,
-            windowWidth: merged.windowWidth || "873",
-            windowHeight: merged.windowHeight || "486",
-          });
+        const result = await invoke<string>("launch_game", {
+          minecraftPath: merged.minecraftPath,
+          javaPath: merged.javaPath,
+          wrapperPath: merged.wrapperPath,
+          maxMemory: merged.maxMemory,
+          versionName: merged.versionName,
+          playerName: merged.playerName || selectedProfile.name,
+          authToken: merged.authToken || selectedProfile.accessToken || "",
+          uuid: merged.uuid || selectedProfile.uuid || selectedProfile.id,
+          authlibInjectorPath: merged.authlibInjectorPath,
+          yggdrasilApi: merged.yggdrasilApi || selectedProfile.yggdrasilUrl || "",
+          prefetchedData: merged.prefetchedData,
+          loadType: merged.loadType,
+          loadName: merged.loadName,
+          windowWidth: merged.windowWidth || "873",
+          windowHeight: merged.windowHeight || "486",
+          customJvmArgs: merged.customJvmArgs || "",
+        });
 
-          setLastCommandArgs(result);
-        }
+        setLastCommandArgs(result);
         setStatus("running");
         addLog("info", t("launch.provider.gameLaunched"));
       } catch (err) {

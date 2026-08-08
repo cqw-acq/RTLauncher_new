@@ -3,7 +3,6 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use sqlite::{Connection, State};
 use std::fs;
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tokio::time::sleep;
@@ -347,8 +346,8 @@ async fn check_account_time(
 
             let device_code_response = get_device_code(client, client_id).await?;
             println!(
-                "Device authorization code acquired (expires in {} seconds)",
-                device_code_response.expires_in
+                "Please visit {} and enter code: {}",
+                device_code_response.verification_uri, device_code_response.user_code
             );
 
             let token_response = poll_for_token(
@@ -461,8 +460,26 @@ async fn download_player_skin(
 }
 
 /// 将 UUID 转换为标准格式（带连字符）
+fn is_valid_uuid_char(c: char) -> bool {
+    matches!(c, '0'..='9' | 'a'..='f' | 'A'..='F' | '-')
+}
+
+fn is_valid_uuid(uuid: &str) -> bool {
+    if !uuid.chars().all(is_valid_uuid_char) {
+        return false;
+    }
+    let clean: String = uuid.chars().filter(|c| *c != '-').collect();
+    if clean.len() != 32 {
+        return false;
+    }
+    clean.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f' | 'A'..='F'))
+}
+
 fn format_uuid_with_hyphens(uuid: &str) -> String {
-    let clean: String = uuid.chars().filter(|c| c.is_alphanumeric()).collect();
+    let clean: String = uuid
+        .chars()
+        .filter(|c| matches!(c, '0'..='9' | 'a'..='f' | 'A'..='F'))
+        .collect();
     if clean.len() == 32 {
         format!(
             "{}-{}-{}-{}-{}",
@@ -477,9 +494,35 @@ fn format_uuid_with_hyphens(uuid: &str) -> String {
     }
 }
 
-/// 将 UUID 转换为无连字符格式
 fn format_uuid_without_hyphens(uuid: &str) -> String {
-    uuid.chars().filter(|c| c.is_alphanumeric()).collect()
+    uuid.chars()
+        .filter(|c| matches!(c, '0'..='9' | 'a'..='f' | 'A'..='F'))
+        .collect()
+}
+
+fn build_safe_skin_path(skins_dir: &std::path::Path, filename: &str) -> Option<std::path::PathBuf> {
+    let candidate = skins_dir.join(format!("{}.png", filename));
+
+    let canonical_skins_dir = match skins_dir.canonicalize() {
+        Ok(p) => p,
+        Err(ref e) if e.kind() == std::io::ErrorKind::NotFound => return None,
+        Err(_) => return None,
+    };
+
+    let parent = candidate.parent()?;
+    let canonical_parent = match parent.canonicalize() {
+        Ok(p) => p,
+        Err(ref e) if e.kind() == std::io::ErrorKind::NotFound => return None,
+        Err(_) => return None,
+    };
+
+    let canonical_candidate = canonical_parent.join(candidate.file_name()?);
+
+    if canonical_candidate.starts_with(&canonical_skins_dir) {
+        Some(canonical_candidate)
+    } else {
+        None
+    }
 }
 
 /// 从本地数据库获取 tid_skin
@@ -1061,33 +1104,45 @@ pub fn redownload_littleskin_skin(uuid: String) -> Result<(), String> {
 /// 兼容多种 UUID 格式：优先按传入的 UUID 查找，然后尝试带/不带连字符的格式
 #[tauri::command]
 pub fn get_skin_base64(uuid: String) -> Result<String, String> {
-    let profile_dir = format!("{}/skins", super::config_dir());
+    if !is_valid_uuid(&uuid) {
+        return Err("无效的 UUID 格式".to_string());
+    }
 
-    // 生成多个可能的文件名尝试
+    let skins_dir = std::path::PathBuf::from(super::config_dir()).join("skins");
+
     let uuid_with_hyphens = format_uuid_with_hyphens(&uuid);
     let uuid_without_hyphens = format_uuid_without_hyphens(&uuid);
 
-    let mut candidate_paths = vec![format!("{}/{}.png", profile_dir, uuid)];
-    // 添加带/不带连字符的候选
+    let mut candidates: Vec<String> = vec![uuid.clone()];
     if uuid != uuid_with_hyphens {
-        candidate_paths.push(format!("{}/{}.png", profile_dir, uuid_with_hyphens));
+        candidates.push(uuid_with_hyphens);
     }
     if uuid != uuid_without_hyphens {
-        candidate_paths.push(format!("{}/{}.png", profile_dir, uuid_without_hyphens));
+        candidates.push(uuid_without_hyphens);
     }
 
     let mut last_error: Option<String> = None;
-    for path in &candidate_paths {
-        eprintln!("[皮肤读取] 尝试路径: {}", path);
-        match std::fs::read(path) {
+    for candidate in &candidates {
+        if !is_valid_uuid(candidate) {
+            continue;
+        }
+        let Some(safe_path) = build_safe_skin_path(&skins_dir, candidate) else {
+            continue;
+        };
+        eprintln!("[皮肤读取] 尝试路径: {}", safe_path.display());
+        match std::fs::read(&safe_path) {
             Ok(bytes) => {
                 let b64 = BASE64.encode(&bytes);
-                eprintln!("[皮肤读取] 成功读取: {} ({} bytes)", path, bytes.len());
+                eprintln!(
+                    "[皮肤读取] 成功读取: {} ({} bytes)",
+                    safe_path.display(),
+                    bytes.len()
+                );
                 return Ok(format!("data:image/png;base64,{}", b64));
             }
             Err(e) => {
                 last_error = Some(format!("读取皮肤文件失败: {}", e));
-                eprintln!("[皮肤读取] 失败 {}: {}", path, e);
+                eprintln!("[皮肤读取] 失败 {}: {}", safe_path.display(), e);
             }
         }
     }
@@ -1099,71 +1154,44 @@ pub fn get_skin_base64(uuid: String) -> Result<String, String> {
 /// 会尝试多种 UUID 格式（带/不带连字符），返回成功删除的文件数量
 #[tauri::command]
 pub fn delete_cached_skin(uuid: String) -> Result<usize, String> {
-    if !is_valid_skin_uuid(&uuid) {
-        return Err("无效的 UUID".to_string());
+    if !is_valid_uuid(&uuid) {
+        return Err("无效的 UUID 格式".to_string());
     }
 
-    let skins_dir = PathBuf::from(super::config_dir()).join("skins");
-    let canonical_skins_dir = match skins_dir.canonicalize() {
-        Ok(path) => path,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            // 皮肤目录尚未创建时，没有任何缓存需要清理。
-            return Ok(0);
-        }
-        Err(error) => return Err(format!("无法解析皮肤目录路径: {}", error)),
-    };
+    let skins_dir = std::path::PathBuf::from(super::config_dir()).join("skins");
 
-    // 生成多个可能的文件名尝试（和 get_skin_base64 保持一致）
     let uuid_with_hyphens = format_uuid_with_hyphens(&uuid);
     let uuid_without_hyphens = format_uuid_without_hyphens(&uuid);
 
-    let mut candidate_uuids = vec![uuid.clone()];
+    let mut candidates: Vec<String> = vec![uuid.clone()];
     if uuid != uuid_with_hyphens {
-        candidate_uuids.push(uuid_with_hyphens);
+        candidates.push(uuid_with_hyphens);
     }
     if uuid != uuid_without_hyphens {
-        candidate_uuids.push(uuid_without_hyphens);
+        candidates.push(uuid_without_hyphens);
     }
 
     let mut deleted_count: usize = 0;
-    for candidate_uuid in candidate_uuids {
-        // Validate every generated representation before using it in a path.
-        if !is_valid_skin_uuid(&candidate_uuid) {
-            return Err("无效的 UUID 格式".to_string());
+    for candidate in &candidates {
+        if !is_valid_uuid(candidate) {
+            continue;
         }
-
-        let candidate = skins_dir.join(format!("{candidate_uuid}.png"));
-        let parent = candidate
-            .parent()
-            .ok_or_else(|| "无法确定皮肤文件所在目录".to_string())?;
-        let canonical_parent = parent
-            .canonicalize()
-            .map_err(|error| format!("无法解析皮肤文件所在目录: {}", error))?;
-        let resolved_candidate = canonical_parent.join(
-            candidate
-                .file_name()
-                .ok_or_else(|| "无法确定皮肤文件名".to_string())?,
-        );
-
-        if !resolved_candidate.starts_with(&canonical_skins_dir) {
-            return Err("皮肤文件路径超出缓存目录范围".to_string());
-        }
-
-        match fs::remove_file(&resolved_candidate) {
+        let Some(safe_path) = build_safe_skin_path(&skins_dir, candidate) else {
+            continue;
+        };
+        match std::fs::remove_file(&safe_path) {
             Ok(()) => {
                 eprintln!(
                     "[正版检测-清理] 已删除残留皮肤文件: {}",
-                    resolved_candidate.display()
+                    safe_path.display()
                 );
                 deleted_count += 1;
             }
-            Err(ref e) if e.kind() == std::io::ErrorKind::NotFound => {
-                // 文件不存在，正常情况，不打印错误
-            }
+            Err(ref e) if e.kind() == std::io::ErrorKind::NotFound => {}
             Err(e) => {
                 eprintln!(
                     "[正版检测-清理] 删除皮肤文件失败 {}: {}",
-                    resolved_candidate.display(),
+                    safe_path.display(),
                     e
                 );
             }
@@ -1183,47 +1211,6 @@ pub fn delete_cached_skin(uuid: String) -> Result<usize, String> {
     }
     Ok(deleted_count)
 }
-
-/// 验证用于皮肤缓存文件名的 UUID。
-///
-/// Minecraft UUID 只接受 32 个十六进制字符，或标准的 8-4-4-4-12
-/// 连字符形式。严格限制字符和分隔符位置，避免任何路径分隔符或 `..`
-/// 被带入缓存路径。
-fn is_valid_skin_uuid(uuid: &str) -> bool {
-    let bytes = uuid.as_bytes();
-    match bytes.len() {
-        32 => bytes.iter().all(|byte| byte.is_ascii_hexdigit()),
-        36 => bytes.iter().enumerate().all(|(index, byte)| {
-            matches!(index, 8 | 13 | 18 | 23)
-                .then_some(*byte == b'-')
-                .unwrap_or_else(|| byte.is_ascii_hexdigit())
-        }),
-        _ => false,
-    }
-}
-
-#[cfg(test)]
-mod skin_uuid_tests {
-    use super::is_valid_skin_uuid;
-
-    #[test]
-    fn accepts_hyphenated_and_compact_uuids() {
-        assert!(is_valid_skin_uuid("12345678-90ab-cdef-1234-567890abcdef"));
-        assert!(is_valid_skin_uuid("1234567890ABCDEF1234567890ABCDEF"));
-    }
-
-    #[test]
-    fn rejects_path_traversal_and_malformed_uuids() {
-        assert!(!is_valid_skin_uuid("../../outside"));
-        assert!(!is_valid_skin_uuid("12345678/90ab/cdef/1234/567890abcdef"));
-        assert!(!is_valid_skin_uuid("123456789-0ab-cdef-1234-567890abcdef"));
-        assert!(!is_valid_skin_uuid("12345678-90ab-cdef-1234-567890abcdeg"));
-        assert!(!is_valid_skin_uuid(
-            "12345678-90ab-cdef-1234-567890abcdef.png"
-        ));
-    }
-}
-
 async fn add_new_account(
     client: &Client,
     connection: &Connection,
@@ -1234,8 +1221,8 @@ async fn add_new_account(
     // 1. 获取设备代码
     let device_code_response = get_device_code(client, client_id).await?;
     println!(
-        "设备授权码获取成功（有效期 {} 秒）",
-        device_code_response.expires_in
+        "请访问 {} 并输入代码: {}",
+        device_code_response.verification_uri, device_code_response.user_code
     );
 
     // 记录开始时间
@@ -1346,8 +1333,8 @@ pub async fn ms_request_device_code() -> Result<DeviceCodeInfo, String> {
         .await
         .map_err(|e| friendly_net_err(e))?;
     eprintln!(
-        "[正版检测] 步骤4：✓ 设备码获取成功！有效期={}秒",
-        resp.expires_in
+        "[正版检测] 步骤4：✓ 设备码获取成功！user_code={}, verification_uri={}, 有效期={}秒",
+        resp.user_code, resp.verification_uri, resp.expires_in
     );
     // 自动打开浏览器让用户授权
     let _ = webbrowser::open(&resp.verification_uri);

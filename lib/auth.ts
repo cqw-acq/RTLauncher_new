@@ -119,12 +119,28 @@ async function safeInvoke<T>(cmd: string, args?: Record<string, unknown>): Promi
 }
 
 /**
+ * 严格校验 UUID 格式：
+ *   - 仅允许 0-9、a-f、A-F 和连字符 '-'
+ *   - 去除连字符后必须恰好 32 位十六进制字符
+ * 用于在前端调用后端涉及文件读写的接口前做第一道防线（防御纵深）
+ */
+function isValidUuid(uuid: string): boolean {
+  if (typeof uuid !== "string") return false;
+  if (!/^[0-9a-fA-F-]+$/.test(uuid)) return false;
+  const clean = uuid.replace(/-/g, "");
+  return clean.length === 32 && /^[0-9a-fA-F]{32}$/.test(clean);
+}
+
+/**
  * 获取玩家皮肤 base64（本地存储在 RTL/config/skins/{uuid}.png）
  * 用于前端 3D 皮肤展示
  * @param uuid 玩家 UUID
  * @returns data URI (data:image/png;base64,...)
  */
 export async function getSkinBase64(uuid: string): Promise<string> {
+  if (!isValidUuid(uuid)) {
+    throw new Error("无效的 UUID 格式");
+  }
   return safeInvoke<string>("get_skin_base64", { uuid });
 }
 
@@ -133,6 +149,9 @@ export async function getSkinBase64(uuid: string): Promise<string> {
  * @param uuid 玩家 UUID
  */
 export async function redownloadLittleSkinSkin(uuid: string): Promise<void> {
+  if (!isValidUuid(uuid)) {
+    throw new Error("无效的 UUID 格式");
+  }
   return safeInvoke<void>("redownload_littleskin_skin", { uuid });
 }
 
@@ -286,6 +305,9 @@ export async function msHasAccountInDb(uuid: string): Promise<boolean> {
  * 会尝试多种 UUID 格式（带/不带连字符），返回成功删除的文件数量
  */
 export async function deleteCachedSkin(uuid: string): Promise<number> {
+  if (!isValidUuid(uuid)) {
+    throw new Error("无效的 UUID 格式");
+  }
   return safeInvoke<number>("delete_cached_skin", { uuid });
 }
 

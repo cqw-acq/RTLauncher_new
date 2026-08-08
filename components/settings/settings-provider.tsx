@@ -8,8 +8,6 @@ import * as React from "react";
 export type ThemeMode = "light" | "dark";
 export type HomeMode = "simple" | "full";
 export type AppLanguage = "zh-CN" | "en-US";
-export const THEME_STYLES = ["classic", "redstone-terminal", "grid-command"] as const;
-export type ThemeStyle = (typeof THEME_STYLES)[number];
 
 export interface BackgroundConfig {
   imageDataUrl?: string;
@@ -25,8 +23,6 @@ export type ThemeColor = "default" | string;
 
 export interface AppearanceSettings {
   themeMode: ThemeMode;
-  /** 配色方案：经典默认、红石熔岩或指挥蓝。 */
-  themeStyle: ThemeStyle;
   themeColor: ThemeColor; // "default" 或 oklch 字符串
   fontSize: number; // 12 ~ 18（整数 px，仅影响文字）
   background: BackgroundConfig;
@@ -74,7 +70,6 @@ export const DEFAULT_SETTINGS: LauncherSettings = {
   },
   appearance: {
     themeMode: "light",
-    themeStyle: "classic",
     themeColor: "default",
     fontSize: 14,
     background: {
@@ -101,18 +96,6 @@ const STORAGE_KEY = "rtlauncher:settings:v3";
 
 function isAppLanguage(value: unknown): value is AppLanguage {
   return value === "zh-CN" || value === "en-US";
-}
-
-export function isThemeStyle(value: unknown): value is ThemeStyle {
-  return typeof value === "string" && THEME_STYLES.includes(value as ThemeStyle);
-}
-
-/** 保留旧版默认外观，并迁移开发阶段保存过的草案值。 */
-export function normalizeThemeStyle(value: unknown): ThemeStyle {
-  if (isThemeStyle(value)) return value;
-  if (value === "square") return "grid-command";
-  if (value === "glass") return "redstone-terminal";
-  return "classic";
 }
 
 export function languageFromSystemPreference(preferred: string | undefined): AppLanguage {
@@ -261,27 +244,16 @@ const DEFAULT_DARK = {
   ring: "oklch(0.553 0.013 58.071)",
 };
 
-const SCHEME_PRIMARY: Record<Exclude<ThemeStyle, "classic">, string> = {
-  "redstone-terminal": "oklch(0.65 0.19 48)",
-  "grid-command": "oklch(0.58 0.17 245)",
-};
-
 // ============================================================
 // DOM 应用函数
 // ============================================================
 
 // 应用主题色到 CSS 变量
-function applyThemeColorToDom(
-  themeColor: ThemeColor,
-  effectiveIsDark: boolean,
-  themeStyle: ThemeStyle,
-) {
+function applyThemeColorToDom(themeColor: ThemeColor, effectiveIsDark: boolean) {
   const root = document.documentElement;
 
   let colors;
-  if (themeStyle !== "classic") {
-    colors = derivePalette(SCHEME_PRIMARY[themeStyle], effectiveIsDark);
-  } else if (themeColor === "default") {
+  if (themeColor === "default") {
     colors = effectiveIsDark ? DEFAULT_DARK : DEFAULT_LIGHT;
   } else {
     colors = derivePalette(themeColor, effectiveIsDark);
@@ -397,7 +369,6 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
           appearance: {
             ...DEFAULT_SETTINGS.appearance,
             ...parsed.appearance,
-            themeStyle: normalizeThemeStyle(parsed.appearance?.themeStyle),
             background: { ...DEFAULT_SETTINGS.appearance.background, ...(parsed.appearance?.background ?? {}) },
           },
         };
@@ -424,11 +395,7 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
     const isDark = settings.appearance.themeMode === "dark";
     document.documentElement.lang = settings.general.language;
     applyThemeModeToDom(settings.appearance.themeMode);
-    applyThemeColorToDom(
-      settings.appearance.themeColor,
-      isDark,
-      settings.appearance.themeStyle,
-    );
+    applyThemeColorToDom(settings.appearance.themeColor, isDark);
     applyFontSizeToDom(settings.appearance.fontSize);
     applyBackgroundToDom(settings.appearance.background, isDark);
 
@@ -446,11 +413,7 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
     const root = document.documentElement;
     const observer = new MutationObserver(() => {
       const externalIsDark = root.classList.contains("dark");
-      applyThemeColorToDom(
-        settings.appearance.themeColor,
-        externalIsDark,
-        settings.appearance.themeStyle,
-      );
+      applyThemeColorToDom(settings.appearance.themeColor, externalIsDark);
       applyBackgroundToDom(settings.appearance.background, externalIsDark);
     });
 

@@ -3,12 +3,11 @@
 import { useEffect, useState } from "react";
 import { cn } from "@/lib/utils";
 import { AppearanceSection } from "@/components/settings/section-appearance";
-import { AboutSection } from "@/components/settings/section-about";
 import { SidebarConfigSection } from "@/components/settings/section-sidebar-config";
 import { LanguageSection } from "@/components/settings/section-language";
 import { DownloadSection } from "@/components/settings/section-download";
 import { useI18n, type TranslationKey } from "@/components/i18n/use-i18n";
-import { Settings, Sparkles, Package, Layout, Globe2, Download } from "lucide-react";
+import { Settings, Sparkles, Layout, Globe2, Download } from "lucide-react";
 
 interface NavItem {
   id: string;
@@ -21,7 +20,6 @@ const NAV_ITEMS: NavItem[] = [
   { id: "section-download", label: "settings.download.downloads", icon: <Download className="size-4" /> },
   { id: "section-sidebar-config", label: "settings.sidebar", icon: <Layout className="size-4" /> },
   { id: "section-appearance", label: "settings.appearance.appearance", icon: <Sparkles className="size-4" /> },
-  { id: "section-about", label: "settings.about.updates", icon: <Package className="size-4" /> },
 ];
 
 const PAGE_COPY = {
@@ -126,7 +124,6 @@ export default function SettingsPage() {
             <DownloadSection />
             <SidebarConfigSection />
             <AppearanceSection />
-            <AboutSection />
             <div className="py-3 text-center text-xs text-muted-foreground">
               {t(PAGE_COPY.end)}
             </div>
