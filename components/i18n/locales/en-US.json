@@ -619,6 +619,7 @@
     "installingUpdate": "Installing update. The app will restart...",
     "updateIntervalNotice": "To ensure service stability, update checks are limited to at least 24-hour intervals.",
     "lastCheckTime": "Last check time",
-    "checkUpdateButton": "Check Updates"
+    "checkUpdateButton": "Check Updates",
+    "willRestartShortly": "Once installed, the launcher will automatically close and restart. Please wait..."
   }
 }

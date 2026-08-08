@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import {
   ArrowLeft,
@@ -45,19 +45,66 @@ interface UpdateCheckResult {
   message: string;
 }
 
+function readAutoStartFlag(): boolean {
+  if (typeof window === "undefined") return false;
+  const sp = new URLSearchParams(window.location.search);
+  return sp.get("autoStart") === "1";
+}
+
 export default function CheckUpdatePage() {
   const router = useRouter();
+  const [autoStart] = useState<boolean>(() => readAutoStartFlag());
+  const autoStartedRef = useRef(false);
+
   const { t } = useI18n();
   const [currentVersion, setCurrentVersion] = useState<string>("");
   const [info, setInfo] = useState<UpdateInfo>({
     status: "idle",
     canCheck: true,
   });
+  const [downloadProgress, setDownloadProgress] = useState<number | null>(null);
 
   useEffect(() => {
     loadVersion();
-    handleCheck();
+    handleCheck(autoStart).then(async (hadUpdate) => {
+      if (autoStart && hadUpdate) {
+        // 启动自动下载 → 下载完成自动安装
+        autoStartedRef.current = true;
+        const downloadOk = await handleDownload();
+        if (downloadOk) {
+          // 小延迟让用户看到"已下载"状态
+          setTimeout(() => handleInstall(), 600);
+        }
+      }
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    if (info.status !== "downloading") return;
+    let timer: ReturnType<typeof setInterval>;
+    const poll = async () => {
+      try {
+        const cfg = await invoke<{
+          status: string;
+          download_progress?: number;
+          download_path?: string;
+        }>("get_update_status");
+        if (typeof cfg.download_progress === "number") {
+          setDownloadProgress(cfg.download_progress);
+        }
+        if (cfg.status === "downloaded") {
+          setDownloadProgress(100);
+          clearInterval(timer);
+        }
+      } catch {
+        // 忽略轮询错误
+      }
+    };
+    poll();
+    timer = setInterval(poll, 500);
+    return () => clearInterval(timer);
+  }, [info.status]);
 
   const loadVersion = async () => {
     try {
@@ -68,12 +115,16 @@ export default function CheckUpdatePage() {
     }
   };
 
-  const handleCheck = async () => {
+  /**
+   * @param force 是否强制跳过 24 小时间隔（启动自动跳转时传 true）
+   * @returns 是否发现有新版本可用
+   */
+  const handleCheck = async (force = false): Promise<boolean> => {
     setInfo((prev) => ({ ...prev, status: "checking", errorMessage: undefined }));
     try {
-      const result = await invoke<UpdateCheckResult>("check_for_updates");
-      
-      if (!result.needs_check) {
+      const result = await invoke<UpdateCheckResult>("check_for_updates", { force });
+
+      if (!result.needs_check && !force) {
         setInfo((prev) => ({
           ...prev,
           status: prev.status === "idle" ? "up-to-date" : prev.status,
@@ -81,7 +132,7 @@ export default function CheckUpdatePage() {
           errorMessage: result.message,
           lastCheckTime: Math.floor(Date.now() / 1000),
         }));
-        return;
+        return false;
       }
 
       if (result.update_available && result.target_version) {
@@ -91,12 +142,14 @@ export default function CheckUpdatePage() {
           canCheck: true,
           lastCheckTime: Math.floor(Date.now() / 1000),
         });
+        return true;
       } else {
         setInfo({
           status: "up-to-date",
           canCheck: true,
           lastCheckTime: Math.floor(Date.now() / 1000),
         });
+        return false;
       }
     } catch (e) {
       setInfo({
@@ -104,21 +157,26 @@ export default function CheckUpdatePage() {
         errorMessage: e instanceof Error ? e.message : String(e),
         canCheck: true,
       });
+      return false;
     }
   };
 
-  const handleDownload = async () => {
+  const handleDownload = async (): Promise<boolean> => {
+    setDownloadProgress(0);
     setInfo((prev) => ({ ...prev, status: "downloading", errorMessage: undefined }));
     try {
       const result = await invoke<{ success: boolean; path: string; size: number }>("download_update");
       if (result.success) {
+        setDownloadProgress(100);
         setInfo((prev) => ({ ...prev, status: "downloaded" }));
+        return true;
       } else {
         setInfo({
           status: "error",
           errorMessage: "下载失败",
           canCheck: true,
         });
+        return false;
       }
     } catch (e) {
       setInfo({
@@ -126,19 +184,22 @@ export default function CheckUpdatePage() {
         errorMessage: e instanceof Error ? e.message : String(e),
         canCheck: true,
       });
+      return false;
     }
   };
 
-  const handleInstall = async () => {
+  const handleInstall = async (): Promise<boolean> => {
     setInfo((prev) => ({ ...prev, status: "installing", errorMessage: undefined }));
     try {
       await invoke("install_update");
+      return true;
     } catch (e) {
       setInfo({
         status: "error",
         errorMessage: e instanceof Error ? e.message : String(e),
         canCheck: true,
       });
+      return false;
     }
   };
 
@@ -285,16 +346,41 @@ export default function CheckUpdatePage() {
                 </div>
               )}
 
-              {(info.status === "downloading" || info.status === "installing") && (
-                <div className="rounded-lg border border-primary/30 bg-primary/5 p-4">
+              {info.status === "downloading" && (
+                <div className="rounded-lg border border-sky-500/30 bg-sky-500/5 p-4 space-y-3">
                   <div className="flex items-center gap-2">
-                    <Loader2 className="size-4 animate-spin text-primary" />
-                    <span className="text-sm">
-                      {info.status === "downloading"
-                        ? t("checkUpdate.downloadingUpdate")
-                        : t("checkUpdate.installingUpdate")}
+                    <Loader2 className="size-4 animate-spin text-sky-500" />
+                    <span className="text-sm font-medium">
+                      {t("checkUpdate.downloadingUpdate")}
+                      {typeof downloadProgress === "number" && (
+                        <span className="ml-2 font-mono text-sky-600">
+                          {downloadProgress.toFixed(1)}%
+                        </span>
+                      )}
                     </span>
                   </div>
+                  {typeof downloadProgress === "number" && (
+                    <div className="w-full h-2 rounded-full bg-sky-500/15 overflow-hidden">
+                      <div
+                        className="h-full bg-sky-500 transition-all duration-300"
+                        style={{ width: `${Math.min(100, downloadProgress)}%` }}
+                      />
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {info.status === "installing" && (
+                <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-4">
+                  <div className="flex items-center gap-2">
+                    <Loader2 className="size-4 animate-spin text-emerald-500" />
+                    <span className="text-sm font-medium">
+                      {t("checkUpdate.installingUpdate")}
+                    </span>
+                  </div>
+                  <p className="text-xs text-muted-foreground mt-2">
+                    {t("checkUpdate.willRestartShortly")}
+                  </p>
                 </div>
               )}
 

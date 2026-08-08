@@ -9,6 +9,21 @@ const MIN_CHECK_INTERVAL_SECONDS: i64 = 24 * 3600;
 
 const UPDATE_ENDPOINT: &str = "https://api.gitcode.com/api/v5/repos/bubulaladdi/RTLauncher/releases";
 
+/// 允许的更新下载域名白名单。release URL 或重定向目标必须落在这些域名上。
+pub const TRUSTED_DOWNLOAD_HOSTS: &[&str] = &[
+    "gitcode.com",
+    "assets.gitcode.com",
+    "cdn.gitcode.com",
+    "api.gitcode.com",
+    "release.gitcode.com",
+    "files.gitcode.com",
+];
+
+/// 发布 Release 时，可选地在 Release body 里放一个 SHA-256 清单，匹配格式：
+///   `SHA256 (filename) = hexhash`  或  `hexhash  filename`  或  `hexhash *filename`
+/// 如果找到与下载附件同名的条目，就必须在安装前通过 SHA-256 校验（fail closed）。
+pub const HASH_TAG: &str = "SHA256SUMS";
+
 pub fn get_target_release_name() -> String {
     option_env!("UPDATE_TARGET_RELEASE_NAME")
         .unwrap_or("")
@@ -29,6 +44,10 @@ pub struct UpdateConfig {
     pub download_url: Option<String>,
     #[serde(default)]
     pub file_size: Option<u64>,
+    /// 期望的 SHA-256 校验和（小写 16 进制，64 字符）。从 Release body 解析得到后持久化。
+    /// 如果为 Some，则下载后 **必须** 校验匹配（fail closed）。
+    #[serde(default)]
+    pub expected_sha256: Option<String>,
     #[serde(default)]
     pub download_path: Option<String>,
     #[serde(default)]
@@ -68,11 +87,31 @@ impl Default for UpdateConfig {
             target_os: None,
             download_url: None,
             file_size: None,
+            expected_sha256: None,
             download_path: None,
             download_progress: None,
             status: UpdateStatus::Idle,
         }
     }
+}
+
+/// 严格校验 64 字符小写十六进制 SHA-256 字符串。
+pub fn is_valid_sha256_hex(s: &str) -> bool {
+    s.len() == 64 && s.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f'))
+}
+
+/// 校验 URL 主机名是否落在受信任白名单中。
+pub fn is_trusted_download_url(url: &str) -> bool {
+    let parsed = match url::Url::parse(url) {
+        Ok(u) => u,
+        Err(_) => return false,
+    };
+    let Some(host) = parsed.host_str() else {
+        return false;
+    };
+    TRUSTED_DOWNLOAD_HOSTS.iter().any(|allowed| {
+        host == *allowed || host.ends_with(&format!(".{}", allowed))
+    })
 }
 
 pub fn config_dir() -> String {

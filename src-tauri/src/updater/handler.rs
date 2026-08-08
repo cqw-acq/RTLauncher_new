@@ -18,12 +18,13 @@ pub fn get_update_status() -> UpdateConfig {
 #[tauri::command]
 pub async fn check_for_updates(
     state: State<'_, UpdaterState>,
+    force: Option<bool>,
 ) -> Result<UpdateCheckResult, String> {
     let fetcher = {
         let fetcher = state.fetcher.lock().map_err(|e| e.to_string())?;
         fetcher.clone()
     };
-    fetcher.check_for_update().await
+    fetcher.check_for_update(force.unwrap_or(false)).await
 }
 
 #[tauri::command]
