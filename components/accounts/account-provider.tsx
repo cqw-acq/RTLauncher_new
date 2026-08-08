@@ -88,11 +88,28 @@ const AUTH_TYPE_LABELS: Record<AuthType, string> = {
 
 const STORAGE_KEY_PROFILES = "rtl_accounts";
 const STORAGE_KEY_SELECTED = "rtl_selected_account_id";
+const UUID_PATTERN = /^(?:[0-9a-fA-F]{32}|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$/;
+
+function isValidUuid(value: unknown): value is string {
+  return typeof value === "string" && UUID_PATTERN.test(value);
+}
 
 function loadProfiles(): Account[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEY_PROFILES);
-    if (raw) return JSON.parse(raw) as Account[];
+    if (raw) {
+      const parsed: unknown = JSON.parse(raw);
+      if (!Array.isArray(parsed)) return [];
+
+      // localStorage is user-controlled. Microsoft profiles are later passed
+      // to native commands that use UUIDs as file names, so reject malformed
+      // Microsoft records while preserving providers whose IDs are not UUIDs.
+      return parsed.filter((profile): profile is Account => {
+        if (!profile || typeof profile !== "object") return false;
+        const account = profile as Partial<Account>;
+        return account.authType !== "microsoft" || isValidUuid(account.uuid);
+      });
+    }
   } catch {}
   return [];
 }
@@ -169,7 +186,12 @@ export function AccountProvider({ children }: { children: React.ReactNode }) {
       ]);
 
     all.forEach((profile) => {
-      if (profile.authType !== "microsoft" || !profile.uuid) return;
+      if (
+        profile.authType !== "microsoft" ||
+        !isValidUuid(profile.uuid)
+      ) {
+        return;
+      }
       const pid = profile.id;
       const puuid = profile.uuid;
       const pName = profile.name;
@@ -208,10 +230,11 @@ export function AccountProvider({ children }: { children: React.ReactNode }) {
           // 从 profiles 中删除这个残留的微软账号（皮肤信息也是跟着 profile 走的，一并清理）
           setProfiles((prev) => {
             const next = prev.filter((p) => p.id !== pid);
-            // 如果删除的是当前选中的账号，把 selectedProfile 切到第一个或 null
-            if (selectedProfile?.id === pid) {
-              setSelectedProfile(next[0] ?? null);
-            }
+            // Use the functional form so this async callback observes the
+            // latest selection instead of the mount effect's stale closure.
+            setSelectedProfile((curr) =>
+              curr?.id === pid ? next[0] ?? null : curr
+            );
             if (next.length !== prev.length) {
               console.log(
                 `[正版检测-前端] 步骤1：✓ 已从前端移除残留的微软账号：${pName} (${pid})，共 ${prev.length - next.length} 条记录`

@@ -37,34 +37,25 @@ function base64ToArrayBuffer(base64: string): ArrayBuffer {
 
 function loadScript(src: string): Promise<void> {
   return new Promise((resolve, reject) => {
-    const existing = document.querySelector(`script[src="${src}"]`);
+    const existing = document.querySelector(`script[data-schematic-viewer="${src}"]`);
     if (existing) { resolve(); return; }
     const script = document.createElement("script");
     script.src = src;
-    script.onload = () => resolve();
-    script.onerror = () => reject(new Error(`Failed to load ${src}`));
+    script.async = true;
+    script.dataset.schematicViewer = src;
+    script.onload = () => {
+      script.onload = null;
+      script.onerror = null;
+      resolve();
+    };
+    script.onerror = () => {
+      script.onload = null;
+      script.onerror = null;
+      document.head.removeChild(script);
+      reject(new Error(`Failed to load ${src}`));
+    };
     document.head.appendChild(script);
   });
-}
-
-async function loadScriptAsUMD(src: string, globalName: string): Promise<void> {
-  const resp = await fetch(src);
-  if (!resp.ok) throw new Error(`HTTP ${resp.status} fetching ${src}`);
-  const code = await resp.text();
-  const factory = new Function("module", "exports", "define", "global", "window", "self", `${code}\n; return module.exports;`);
-  const module = { exports: {} as any };
-  const exports = module.exports;
-  const define = (deps: any, factoryFn: any) => {
-    const args = deps.map((d: string) => d === "exports" ? exports : (window as any)[d.replace(/^\.\//, "")] || {});
-    module.exports = factoryFn ? factoryFn(...args) : deps;
-  };
-  (define as any).amd = true;
-  const ctx = typeof window !== "undefined" ? window : typeof self !== "undefined" ? self : globalThis;
-  const result = factory.call(ctx, module, exports, define, ctx, window || ctx, self || ctx);
-  const exposed = result && Object.keys(result).length ? result : (module.exports && Object.keys(module.exports).length ? module.exports : null);
-  if (exposed && !(window as any)[globalName]) {
-    (window as any)[globalName] = exposed;
-  }
 }
 
 export default function SchematicViewerPage() {
@@ -114,59 +105,22 @@ export default function SchematicViewerPage() {
       if (!cancelled) setLocalFileStatus(status);
     })();
 
+    const LOCAL_SCRIPTS = [
+      "/schematic-viewer/deepslate.js",
+      "/schematic-viewer/gl-matrix-min.js",
+      "/schematic-viewer/assets.js",
+      "/schematic-viewer/opaque.js",
+      "/schematic-viewer/deepslate-helpers.js",
+      "/schematic-viewer/litematic-utils.js",
+      "/schematic-viewer/viewer.js",
+    ];
+
     async function init() {
       try {
-        const CDN_URLS = [
-          "https://cdn.jsdelivr.net/npm",
-          "https://unpkg.com",
-          "https://unpkg.zhimg.com",
-        ];
-
-        async function fetchWithFallback(path: string, localPath?: string): Promise<string> {
-          if (localPath) {
-            try {
-              const resp = await fetch(localPath);
-              if (resp.ok) return await resp.text();
-            } catch {}
-          }
-          for (const base of CDN_URLS) {
-            try {
-              const resp = await fetch(`${base}${path}`);
-              if (resp.ok) return await resp.text();
-            } catch {}
-          }
-          throw new Error(`All sources (local + CDN) failed for ${path}`);
+        for (const src of LOCAL_SCRIPTS) {
+          await loadScript(src);
+          if (cancelled) return;
         }
-
-        async function loadScriptFallback(path: string, localPath?: string, ensureGlobal?: string): Promise<void> {
-          if (localPath) {
-            try {
-              if (ensureGlobal) {
-                await loadScriptAsUMD(localPath, ensureGlobal);
-              } else {
-                await loadScript(localPath);
-              }
-              return;
-            } catch {}
-          }
-          for (const base of CDN_URLS) {
-            try {
-              if (ensureGlobal) {
-                await loadScriptAsUMD(`${base}${path}`, ensureGlobal);
-              } else {
-                await loadScript(`${base}${path}`);
-              }
-              return;
-            } catch {}
-          }
-          throw new Error(`All sources (local + CDN) failed for ${path}`);
-        }
-
-        await Promise.all([
-          loadScriptFallback("/deepslate@0.10.1/dist/deepslate.js", "/schematic-viewer/deepslate.js", "deepslate"),
-          loadScriptFallback("/gl-matrix@3.4.3/gl-matrix-min.js", "/schematic-viewer/gl-matrix-min.js", "glMatrix"),
-        ]);
-        if (cancelled) return;
 
         if (typeof (window as any).glMatrix === "undefined") {
           throw new Error("glMatrix failed to initialize (window.glMatrix is undefined) - please check /schematic-viewer/gl-matrix-min.js");
@@ -174,37 +128,9 @@ export default function SchematicViewerPage() {
         if (typeof (window as any).deepslate === "undefined") {
           throw new Error("deepslate failed to initialize (window.deepslate is undefined) - please check /schematic-viewer/deepslate.js");
         }
-
-        const assetsText = await fetchWithFallback("/deepslate@0.10.1/dist/assets.js", "/schematic-viewer/assets.js");
-        if (cancelled) return;
-
         if (typeof (window as any).assets === "undefined") {
-          if (!(window as any).__dvAssetsGuard) {
-            (window as any).__dvAssetsGuard = true;
-            const sanitized = assetsText
-              .replace(/^\s*(?:const|let|var)\s+assets\s*=/, "var assets =");
-            const factory = new Function("window", "globalThis", "self",
-              `${sanitized}
-if (typeof assets !== "undefined") { window.assets = assets; }`);
-            try {
-              factory(window, window, window);
-            } catch (e) {
-              if (!(e instanceof SyntaxError && /assets|already been declared|Identifier/.test(e.message || ""))) {
-                throw e;
-              }
-            }
-          }
+          throw new Error("Failed to load assets.js (window.assets is undefined) - please check /schematic-viewer/assets.js");
         }
-
-        if (typeof (window as any).assets === "undefined") {
-          throw new Error("Failed to evaluate assets.js (window.assets is undefined)");
-        }
-
-        await loadScript("/schematic-viewer/opaque.js");
-        await loadScript("/schematic-viewer/deepslate-helpers.js");
-        await loadScript("/schematic-viewer/litematic-utils.js");
-        await loadScript("/schematic-viewer/viewer.js");
-        if (cancelled) return;
 
         setScriptsLoaded(true);
       } catch (e) {
@@ -501,15 +427,14 @@ if (typeof assets !== "undefined") { window.assets = assets; }`);
             <div className="text-zinc-400 text-sm mb-4 text-left space-y-2">
               <p>
                 {L({
-                  "zh-CN": "由于 CDN 不可访问，请将以下 3 个文件手动复制到",
-                  "en-US": "CDN is not accessible. Please manually copy the following 3 files to",
+                  "zh-CN": "无法加载随应用提供的本地查看器资源，请检查",
+                  "en-US": "The bundled local viewer resources could not be loaded. Check",
                 })}
                 <code className="bg-zinc-800 px-1.5 py-0.5 rounded text-blue-400 font-mono text-xs">public/schematic-viewer/</code>
               </p>
               <ol className="list-decimal list-inside space-y-1 text-xs text-zinc-300 pl-2">
                 <li>
                   <code className="bg-zinc-800 px-1 rounded">assets.js</code>
-                  <span className="text-zinc-500 ml-2">← F:\litematic-viewer\resource\assets.js</span>
                   {localFileStatus["assets.js"] ? (
                     <span className="text-green-500 ml-2">({L({ "zh-CN": "✓ 已就绪", "en-US": "✓ Ready" })})</span>
                   ) : (
@@ -518,7 +443,6 @@ if (typeof assets !== "undefined") { window.assets = assets; }`);
                 </li>
                 <li>
                   <code className="bg-zinc-800 px-1 rounded">deepslate.js</code>
-                  <span className="text-zinc-500 ml-2">← 下载 https://cdn.jsdelivr.net/npm/deepslate@0.10.1/dist/deepslate.js</span>
                   {localFileStatus["deepslate.js"] ? (
                     <span className="text-green-500 ml-2">({L({ "zh-CN": "✓ 已就绪", "en-US": "✓ Ready" })})</span>
                   ) : (
@@ -527,7 +451,6 @@ if (typeof assets !== "undefined") { window.assets = assets; }`);
                 </li>
                 <li>
                   <code className="bg-zinc-800 px-1 rounded">gl-matrix-min.js</code>
-                  <span className="text-zinc-500 ml-2">← 下载 https://cdn.jsdelivr.net/npm/gl-matrix@3.4.3/gl-matrix-min.js</span>
                   {localFileStatus["gl-matrix-min.js"] ? (
                     <span className="text-green-500 ml-2">({L({ "zh-CN": "✓ 已就绪", "en-US": "✓ Ready" })})</span>
                   ) : (
@@ -537,8 +460,8 @@ if (typeof assets !== "undefined") { window.assets = assets; }`);
               </ol>
               <p className="text-xs text-zinc-500 pt-2">
                 {L({
-                  "zh-CN": "复制完成后刷新页面即可",
-                  "en-US": "Refresh the page after copying",
+                  "zh-CN": "这些文件是应用的一部分；如果缺失，请重新安装或恢复应用文件。",
+                  "en-US": "These files ship with the app. If any are missing, reinstall or restore the application files.",
                 })}
               </p>
             </div>
