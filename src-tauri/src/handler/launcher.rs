@@ -1,5 +1,4 @@
 use anyhow::Context;
-use log::{debug, error, info, warn};
 use os_info::Type;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -14,7 +13,7 @@ use std::{
     process::{Child, Command, Stdio},
     thread,
 };
-use tauri::Emitter;
+use tauri::{Emitter, Manager};
 
 /// 全局游戏进程跟踪（存储 Child 所有权 + PID，便于 kill）
 struct GameProcess {
@@ -93,6 +92,41 @@ fn clean_param_spaces(param: &str) -> String {
     } else {
         trimmed.to_string()
     }
+}
+
+/// 简单的 shell 风格分词：按空格拆分，但保持单/双引号内的内容为一个 token；不支持转义。
+/// 用于把用户输入的自定义 JVM 参数按空格/换行拆成独立参数。
+fn shell_split(input: &str) -> Vec<String> {
+    let mut tokens: Vec<String> = Vec::new();
+    let mut current = String::new();
+    let mut chars = input.chars().peekable();
+    let mut quote: Option<char> = None;
+    while let Some(c) = chars.next() {
+        match quote {
+            Some(q) => {
+                if c == q {
+                    quote = None;
+                } else {
+                    current.push(c);
+                }
+            }
+            None => {
+                if c == '"' || c == '\'' {
+                    quote = Some(c);
+                } else if c.is_whitespace() {
+                    if !current.is_empty() {
+                        tokens.push(std::mem::take(&mut current));
+                    }
+                } else {
+                    current.push(c);
+                }
+            }
+        }
+    }
+    if !current.is_empty() {
+        tokens.push(current);
+    }
+    tokens
 }
 
 /// Add JVM arguments read from a separate loader JSON.
@@ -232,6 +266,8 @@ fn compare_versions(version1: &str, version2: &str) -> bool {
 #[serde(rename_all = "camelCase")]
 struct VersionJson {
     arguments: Option<Arguments>,
+    #[serde(rename = "javaVersion")]
+    java_version: Option<JavaVersion>,
     main_class: String,
     libraries: Vec<Library>,
     #[serde(rename = "inheritsFrom")]
@@ -239,6 +275,12 @@ struct VersionJson {
     logging: Option<Logging>,
     minecraft_arguments: Option<String>,
     asset_index: Option<AssetIndex>,
+}
+
+#[derive(Debug, Deserialize)]
+struct JavaVersion {
+    #[serde(rename = "majorVersion")]
+    major_version: u32,
 }
 
 #[derive(Debug, Deserialize)]
@@ -575,6 +617,7 @@ pub fn build_jvm_arguments(
     loadName: &str,
     window_width: &str,
     window_height: &str,
+    custom_jvm_args: &str,
 ) -> Result<String, String> {
     build_jvm_arguments_inner(
         app,
@@ -593,6 +636,7 @@ pub fn build_jvm_arguments(
         loadName,
         window_width,
         window_height,
+        custom_jvm_args,
     )
     .map(|args| args.join(" "))
     .map_err(|e| e.to_string())
@@ -615,6 +659,7 @@ fn build_jvm_arguments_inner(
     loadName: &str,
     window_width: &str,
     window_height: &str,
+    custom_jvm_args: &str,
 ) -> anyhow::Result<Vec<String>> {
     let minecraft_path_buf = PathBuf::from(minecraft_path);
 
@@ -2321,6 +2366,21 @@ fn build_jvm_arguments_inner(
     }
 
     // 如果有 Wrapper 则用 Wrapper 主类包裹原始主类，否则直接使用原始主类
+    // 在此之前先注入用户自定义 JVM 参数，允许用户覆盖默认行为（如 GC 参数、系统属性等）
+    if !custom_jvm_args.trim().is_empty() {
+        let mut raw = custom_jvm_args.to_string();
+        // 支持 Windows 风格的换行（\r\n）、Unix 换行（\n）、中文逗号分号统一当作分隔符
+        raw = raw.replace("\r\n", " ").replace('\r', " ").replace('\n', " ");
+        // 用 shell 风格的简单分词：支持空格分隔，支持单/双引号包裹（引号内保留空格）
+        let tokens = shell_split(&raw);
+        for tok in tokens {
+            let trimmed = tok.trim().to_string();
+            if !trimmed.is_empty() {
+                args.push(trimmed);
+            }
+        }
+    }
+
     if !wrapper_path.is_empty() {
         args.push(version_json.main_class.clone());
     } else {
@@ -2337,6 +2397,53 @@ fn build_jvm_arguments_inner(
 
     println!("{}", args.join(" "));
     Ok(args)
+}
+
+/// 运行 java -version 并提取大版本号（第一个 . 之前的数字）
+fn get_java_major_version(java_path: &str) -> String {
+    let output = std::process::Command::new(java_path)
+        .arg("-version")
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .output();
+
+    match output {
+        Ok(out) => {
+            let text = String::from_utf8_lossy(&out.stderr);
+            let text = text.trim();
+            // 典型输出: openjdk version "17.0.9" 或 java version "1.8.0_301"
+            for line in text.lines() {
+                let lower = line.to_lowercase();
+                if let Some(ver_start) = lower.find("version") {
+                    let after = &line[ver_start + "version".len()..].trim();
+                    let after = after.trim_matches(|c: char| c == '"' || c == ' ');
+                    // 提取第一个 . 之前的数字
+                    if let Some(dot) = after.find('.') {
+                        let major = &after[..dot];
+                        if major.chars().all(|c| c.is_ascii_digit()) {
+                            return major.to_string();
+                        }
+                    }
+                    // 没有 . 的情况，整段作为版本号
+                    if after.chars().all(|c| c.is_ascii_digit()) {
+                        return after.to_string();
+                    }
+                }
+            }
+            "未知".to_string()
+        }
+        Err(e) => format!("获取失败: {}", e),
+    }
+}
+
+fn major_version_to_runtime_name(major: u32) -> Option<&'static str> {
+    match major {
+        8 => Some("java-runtime-alpha"),
+        11 => Some("java-runtime-beta"),
+        17 => Some("java-runtime-gamma"),
+        21 => Some("java-runtime-delta"),
+        _ => None,
+    }
 }
 
 /// 启动游戏（构建参数并执行 Java 进程）
@@ -2358,15 +2465,130 @@ pub fn launch_game(
     loadName: &str,
     window_width: &str,
     window_height: &str,
+    custom_jvm_args: &str,
 ) -> Result<String, String> {
-    // launcher_profiles 仅在真正启动游戏时才有价值，后台处理以保持启动响应。
     crate::handler::system::schedule_launcher_profiles_check();
+
+    let mut resolved_java_path = java_path.to_string();
+    let version_json_path = PathBuf::from(minecraft_path)
+        .join("versions")
+        .join(version_name)
+        .join(format!("{}.json", version_name));
+
+    let target_major: Option<u32> = (|| {
+        let file = std::fs::File::open(&version_json_path).ok()?;
+        let vj: VersionJson = serde_json::from_reader(file).ok()?;
+        vj.java_version.map(|jv| jv.major_version)
+    })();
+
+    if let Some(major) = target_major {
+        println!(
+            "[启动器] 版本 {} 的 javaVersion.majorVersion = {}",
+            version_name, major
+        );
+
+        let current_major = crate::handler::java_scanner::validate_java_path(java_path.to_string())
+            .ok()
+            .map(|inst| inst.major_version);
+
+        let needs_swap = match current_major {
+            Some(m) => {
+                println!(
+                    "[启动器] 当前 Java 路径 {} 的大版本号 = {}",
+                    java_path, m
+                );
+                m != major as i32
+            }
+            None => {
+                println!(
+                    "[启动器] 当前 Java 路径 {} 无效或无法获取版本号",
+                    java_path
+                );
+                true
+            }
+        };
+
+        if needs_swap {
+            println!(
+                "[启动器] Java 版本不匹配（需要 {}），正在搜索匹配的 Java 安装...",
+                major
+            );
+            if let Some(matched) =
+                crate::handler::java_scanner::find_java_by_major_version(major)
+            {
+                println!(
+                    "[启动器] 已自动切换到匹配的 Java: {} (版本 {})",
+                    matched.path, matched.version
+                );
+                resolved_java_path = matched.path;
+            } else {
+                let runtime_name = major_version_to_runtime_name(major);
+                if let Some(rt_name) = runtime_name {
+                    println!(
+                        "[启动器] 未找到匹配的 Java {}，开始自动下载 {}...",
+                        major, rt_name
+                    );
+                    let java_download_dir = crate::handler::config::get_java_download_dir()
+                        .unwrap_or_else(|_| "./RTL/java".to_string());
+                    let task_id = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_secs())
+                        .unwrap_or(0);
+                    let window = app
+                        .get_webview_window("main")
+                        .ok_or_else(|| "无法获取主窗口".to_string())?;
+                    let rt_name_owned = rt_name.to_string();
+                    let base_path = java_download_dir.clone();
+                    let download_result =
+                        tokio::runtime::Handle::current().block_on(async move {
+                            crate::handler::java_downloader::download_java_runtime(
+                                rt_name_owned,
+                                base_path,
+                                task_id,
+                                window,
+                            )
+                            .await
+                        });
+                    match download_result {
+                        Ok(result) => {
+                            println!(
+                                "[启动器] Java 下载成功: {}",
+                                result.message
+                            );
+                            resolved_java_path = result.java_path;
+                        }
+                        Err(e) => {
+                            eprintln!(
+                                "[启动器] Java 下载失败: {}，将继续使用当前路径 {}",
+                                e, java_path
+                            );
+                        }
+                    }
+                } else {
+                    println!(
+                        "[启动器] Java {} 无对应运行时名称映射，将继续使用当前路径 {}",
+                        major, java_path
+                    );
+                }
+            }
+        }
+    } else {
+        println!(
+            "[启动器] 版本 {} 的版本 json 中未找到 javaVersion 字段",
+            version_name
+        );
+        let java_major = get_java_major_version(java_path);
+        println!(
+            "[启动器] Java 路径 {} 的大版本号 = {}",
+            java_path, java_major
+        );
+    }
 
     // 先构建参数
     let args = build_jvm_arguments_inner(
         app.clone(),
         minecraft_path,
-        java_path,
+        &resolved_java_path,
         wrapper_path,
         max_memory,
         version_name,
@@ -2380,13 +2602,14 @@ pub fn launch_game(
         loadName,
         window_width,
         window_height,
+        custom_jvm_args,
     )
     .map_err(|e| e.to_string())?;
 
     // 再启动游戏
     run_command(
         args.clone(),
-        PathBuf::from(java_path),
+        PathBuf::from(&resolved_java_path),
         PathBuf::from(minecraft_path),
         app,
     )

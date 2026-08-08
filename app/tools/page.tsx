@@ -26,6 +26,7 @@ import {
   formatTimestamp,
 } from "@/components/modpack/modpack-api";
 import { useI18n } from "@/components/i18n/use-i18n";
+import type { AppLanguage } from "@/components/settings/settings-provider";
 
 interface NewPackDialogState {
   open: boolean;
@@ -36,7 +37,8 @@ interface NewPackDialogState {
 
 export default function ToolsPage() {
   const router = useRouter();
-  const { t } = useI18n();
+  const { t, language } = useI18n();
+  const L = <T extends { [k in AppLanguage]: string }>(obj: T): string => obj[language] ?? obj["zh-CN"] ?? obj["en-US"];
 
   // 整合包实例
   const { instances, loading: instLoading, reload: reloadInstances } =
@@ -132,7 +134,7 @@ export default function ToolsPage() {
                 </div>
                 <h3 className="font-semibold text-base">{t("tools.createAModrinthModpack")}</h3>
                 <p className="text-xs text-muted-foreground mt-1 leading-relaxed">
-                  {t("tools.modrinthStandardExportDescription")}
+                  {L({ "zh-CN": "通过 Modrinth API 搜索并添加文件，自动收集 path、SHA-1、SHA-512、fileSize 与下载地址，并导出标准 .mrpack。", "en-US": "Search and add files with the Modrinth API, collect path, SHA-1, SHA-512, fileSize, and download URL, and export a standard .mrpack." })}
                 </p>
                 <Button
                   className="mt-4 w-full gap-2"
@@ -160,7 +162,7 @@ export default function ToolsPage() {
                 </div>
                 <h3 className="font-semibold text-base">{t("tools.createACurseForgeModpack")}</h3>
                 <p className="text-xs text-muted-foreground mt-1 leading-relaxed">
-                  {t("tools.curseForgeStandardExportDescription")}
+                  {L({ "zh-CN": "通过 CurseForge API 搜索，收集 projectID 与 fileID，生成标准 manifest.json 并导出 ZIP。", "en-US": "Search with the CurseForge API, collect projectID and fileID, generate a standard manifest.json, and export a ZIP." })}
                 </p>
                 <Button
                   className="mt-4 w-full gap-2"

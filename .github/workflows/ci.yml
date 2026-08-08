@@ -41,10 +41,10 @@ jobs:
             artifact_name: 'linux'
             bundle_path: 'src-tauri/target/release/bundle/deb/*.deb'
           - platform: 'windows-latest'
-            args: ''
+            args: '--no-bundle'
             name: 'Windows'
             artifact_name: 'windows'
-            bundle_path: 'src-tauri/target/release/bundle/msi/*.msi'
+            bundle_path: 'src-tauri/target/release/rtlauncher.exe'
 
     runs-on: ${{ matrix.platform }}
 
@@ -86,18 +86,41 @@ jobs:
         # 核心修复：增加 --ignore-workspace 避免配置失效导致的 ERR_PNPM_INVALID_WORKSPACE_CONFIGURATION
         run: pnpm install --ignore-workspace
 
-      # --- 4. 执行 Tauri 构建 ---
-      - name: Build Tauri App
-        uses: tauri-apps/tauri-action@v1
-        id: tauri-build
+      # --- 4. Windows 数字签名 ---
+      - name: Sign Windows Executable
+        if: matrix.platform == 'windows-latest'
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          CARGO_INCREMENTAL: 1
-          RUSTFLAGS: ${{ matrix.platform == 'macos-latest' && '-C split-debuginfo=unpacked' || '' }}
-        with:
-          args: ${{ matrix.args }}
+          CERT_BASE64: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}
+          CERT_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          if (-not $env:CERT_BASE64) {
+            Write-Host "[WARN] WINDOWS_CERTIFICATE_BASE64 secret not set, skipping signature"
+            exit 0
+          }
+          $certBytes = [Convert]::FromBase64String($env:CERT_BASE64)
+          $certPath = Join-Path $env:RUNNER_TEMP "signing-cert.pfx"
+          [System.IO.File]::WriteAllBytes($certPath, $certBytes)
+          $signArgs = @(
+            "sign",
+            "/fd", "SHA256",
+            "/f", $certPath,
+            "/tr", "http://timestamp.digicert.com",
+            "/td", "SHA256",
+            "src-tauri/target/release/rtlauncher.exe"
+          )
+          if ($env:CERT_PASSWORD) {
+            $signArgs = @("sign", "/fd", "SHA256", "/f", $certPath, "/p", $env:CERT_PASSWORD, "/tr", "http://timestamp.digicert.com", "/td", "SHA256", "src-tauri/target/release/rtlauncher.exe")
+          }
+          & signtool $signArgs
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "[ERROR] Signing failed with exit code $LASTEXITCODE"
+            exit 1
+          }
+          Write-Host "[OK] rtlauncher.exe signed successfully"
+          Remove-Item $certPath -ErrorAction SilentlyContinue
 
-      # --- 5. 产物上传 (只提取 .dmg/.msi/.deb) ---
+      # --- 5. 产物上传 (只提取 .dmg/.exe/.deb) ---
       - name: Upload Bundles
         uses: actions/upload-artifact@v7
         with:

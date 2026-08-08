@@ -11,16 +11,15 @@ import {
   BG_OPACITY_MIN,
   BG_OPACITY_MAX,
   type ThemeMode,
-  type ThemeStyle,
   type HomeMode,
 } from "@/components/settings/settings-provider";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { ImagePlus, Layout, RotateCcw, Sparkles, Type, X } from "lucide-react";
+import { ImagePlus, RotateCcw, Sparkles, Type, X, Layout } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { useI18n, type TranslationKey } from "@/components/i18n/use-i18n";
+import { useI18n } from "@/components/i18n/use-i18n";
 
 // ============================================================
 // 主题模式（浅色 / 深色）
@@ -54,86 +53,14 @@ function ThemeModeRow({
 }
 
 // ============================================================
-// 配色方案：经典默认 / 红石熔岩 / 指挥蓝
-// ============================================================
-const THEME_STYLE_OPTIONS: Array<{
-  value: ThemeStyle;
-  label: TranslationKey;
-  description: TranslationKey;
-  audience: TranslationKey;
-}> = [
-  {
-    value: "classic",
-    label: "settings.appearance.classicDefault",
-    description: "settings.appearance.classicDefaultDescription",
-    audience: "settings.appearance.classicDefaultAudience",
-  },
-  {
-    value: "redstone-terminal",
-    label: "settings.appearance.redstoneTerminal",
-    description: "settings.appearance.redstoneTerminalDescription",
-    audience: "settings.appearance.redstoneTerminalAudience",
-  },
-  {
-    value: "grid-command",
-    label: "settings.appearance.gridCommand",
-    description: "settings.appearance.gridCommandDescription",
-    audience: "settings.appearance.gridCommandAudience",
-  },
-];
-
-function ThemeStyleRow({
-  value,
-  onChange,
-}: {
-  value: ThemeStyle;
-  onChange: (v: ThemeStyle) => void;
-}) {
-  const { t } = useI18n();
-  const selectedOption = THEME_STYLE_OPTIONS.find((option) => option.value === value) ?? THEME_STYLE_OPTIONS[0];
-
-  return (
-    <div className="space-y-2.5">
-      <div className="flex items-center justify-between gap-3">
-        <Label className="font-medium text-sm">{t("settings.appearance.themeStyle")}</Label>
-        <span className="text-xs text-muted-foreground">{t(selectedOption.label)}</span>
-      </div>
-
-      <Select value={value} onValueChange={(next) => onChange(next as ThemeStyle)}>
-        <SelectTrigger className="w-full" aria-label={t("settings.appearance.themeStyle")}>
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          {THEME_STYLE_OPTIONS.map((option) => (
-            <SelectItem key={option.value} value={option.value}>
-              {t(option.label)}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-
-      <div className="space-y-1">
-        <p className="text-xs text-foreground/80">{t(selectedOption.description)}</p>
-        <p className="text-[11px] text-muted-foreground">
-          {t("settings.appearance.forUsers")} · {t(selectedOption.audience)}
-        </p>
-      </div>
-      <p className="text-xs text-muted-foreground">{t("settings.appearance.themeStyleDescription")}</p>
-    </div>
-  );
-}
-
-// ============================================================
 // 主题色：简约自定义调色盘
 // ============================================================
 function ThemeColorRow({
   value,
   onChange,
-  disabled = false,
 }: {
   value: string; // "default" 或 oklch 字符串
   onChange: (v: string) => void;
-  disabled?: boolean;
 }) {
   const { t } = useI18n();
   const currentColor = value === "default" ? "#1f1f1f" : oklchToHex(value) ?? "#1f1f1f";
@@ -144,7 +71,7 @@ function ThemeColorRow({
   };
 
   return (
-    <fieldset disabled={disabled} className={cn("space-y-2.5", disabled && "opacity-55")}>
+    <div className="space-y-2.5">
       <div className="flex items-center justify-between">
         <Label className="font-medium text-sm">{t("settings.appearance.themeColor")}</Label>
       </div>
@@ -184,7 +111,7 @@ function ThemeColorRow({
           </Button>
         )}
       </div>
-    </fieldset>
+    </div>
   );
 }
 
@@ -401,19 +328,11 @@ export function AppearanceSection() {
   const { settings, update, reset } = useSettings();
   const { t } = useI18n();
   const { appearance } = settings;
-  const usesPresetPalette = appearance.themeStyle !== "classic";
   const { setTheme: setNextTheme } = useTheme();
   // 主题模式切换时同步到 next-themes，确保全站一致
   const handleThemeModeChange = (mode: ThemeMode) => {
     update("appearance", { themeMode: mode });
     setNextTheme(mode);
-  };
-  const handleThemeStyleChange = (style: ThemeStyle) => {
-    update("appearance", { themeStyle: style });
-  };
-  const handleReset = () => {
-    reset();
-    setNextTheme("light");
   };
 
   return (
@@ -427,7 +346,7 @@ export function AppearanceSection() {
             </CardTitle>
             <CardDescription className="text-xs mt-1">{t("settings.appearance.themeColorFontSizeAndPageBackground")}</CardDescription>
           </div>
-          <Button type="button" variant="outline" size="sm" onClick={handleReset} className="shrink-0 gap-1.5 h-8">
+          <Button type="button" variant="outline" size="sm" onClick={reset} className="shrink-0 gap-1.5 h-8">
             <RotateCcw className="size-3.5" />
             {t("settings.appearance.reset")}
           </Button>
@@ -442,17 +361,9 @@ export function AppearanceSection() {
 
         <div className="h-px bg-border" />
 
-        <ThemeStyleRow
-          value={appearance.themeStyle}
-          onChange={handleThemeStyleChange}
-        />
-
-        <div className="h-px bg-border" />
-
         <ThemeColorRow
           value={appearance.themeColor}
           onChange={(v) => update("appearance", { themeColor: v })}
-          disabled={usesPresetPalette}
         />
 
         <div className="h-px bg-border" />

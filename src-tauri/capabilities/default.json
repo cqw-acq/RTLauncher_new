@@ -8,7 +8,6 @@
   "permissions": [
     "core:default",
     "dialog:default",
-    "updater:default",
     "opener:default",
     "core:window:allow-minimize",
     "core:window:allow-maximize",
