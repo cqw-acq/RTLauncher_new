@@ -58,7 +58,6 @@ body:
     attributes:
       label: 日志与截图
       description: 请粘贴相关日志，或拖入截图。提交前请移除令牌、密码等敏感信息。
-      render: shell
 
   - type: textarea
     id: additional-context
