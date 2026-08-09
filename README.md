@@ -2,18 +2,18 @@
 
 一款现代化的 Minecraft 桌面启动器，基于 **Tauri 2** (Rust) + **Next.js 16** 构建，轻量、快速且跨平台。
 
-## ✨ 功能特性
+## 功能特性
 
-- 🎮 **多版本支持** — 支持原版、Forge、NeoForge、Fabric、Quilt、LiteLoader、OptiFine 共 7 种 Mod Loader
-- 🔌 **整合包管理** — 支持 CurseForge / Modrinth 整合包一键导入、导出与缓存
-- 👥 **多人联机** — 基于 OpenP2P 的局域网联机方案，支持房主创建和玩家加入
-- 🎨 **皮肤系统** — 3D 皮肤预览（skinview3d）、Microsoft / LittleSkin / Yggdrasil 账户登录
-- 🌍 **国际化** — 内置中文（简体）与英文界面，可轻松扩展
-- 🔧 **自动安装** — 自动下载 Java 运行时、Mod Loader、依赖库
-- 🌙 **主题切换** — 亮/暗主题无缝切换
-- 📦 **低体积** — Rust 原生打包，安装包体积小、内存占用低
+-  **多版本支持** — 支持原版、Forge、NeoForge、Fabric、Quilt、LiteLoader、OptiFine 共 7 种 Mod Loader
+-  **整合包管理** — 支持 CurseForge / Modrinth 整合包一键导入、导出与缓存
+-  **多人联机** — 基于 OpenP2P 的局域网联机方案，支持房主创建和玩家加入
+-  **皮肤系统** — 3D 皮肤预览（skinview3d）、Microsoft / LittleSkin / Yggdrasil 账户登录
+-  **国际化** — 内置中文（简体）与英文界面，可轻松扩展
+-  **自动安装** — 自动下载 Java 运行时、Mod Loader、依赖库
+-  **主题切换** — 亮/暗主题无缝切换
+-  **低体积** — Rust 原生打包，安装包体积小、内存占用低
 
-## 🏗️ 技术栈
+##  技术栈
 
 | 层级 | 技术 |
 |------|------|
@@ -22,7 +22,7 @@
 | 后端 | Rust (Tauri 2), reqwest, tokio |
 | 构建 | pnpm, Tauri CLI |
 
-## 🚀 快速开始
+##  快速开始
 
 ### 环境要求
 
@@ -48,7 +48,7 @@ pnpm tauri dev
 pnpm tauri build
 ```
 
-## 📁 项目结构
+# 项目结构
 
 ```
 RTLauncher/
@@ -75,7 +75,7 @@ RTLauncher/
 └── types/                      # TypeScript 类型定义
 ```
 
-## 🌍 Crowdin 翻译同步
+##  Crowdin 翻译同步
 
 Crowdin 使用 `components/i18n/locales/en-US.json` 作为英文源文件，并将目标语言写入同一目录。GitHub Actions 每周同步一次翻译，并创建翻译更新 PR。
 
@@ -86,7 +86,7 @@ Crowdin 使用 `components/i18n/locales/en-US.json` 作为英文源文件，并�
 
 首次启用时，手动运行 `Sync Crowdin translations` 工作流，并启用 `seed_existing_translations`，以将现有翻译上传到 Crowdin。
 
-## 🔌 支持的 Mod Loader
+## 支持的 Mod Loader
 
 | Loader | 版本获取 | 自动安装 | 取消下载 |
 |--------|---------|---------|---------|
@@ -97,14 +97,14 @@ Crowdin 使用 `components/i18n/locales/en-US.json` 作为英文源文件，并�
 | OptiFine | ✅ | ✅ | ✅ |
 | LiteLoader | ✅ | ✅ | ✅ |
 
-## 🌐 账户系统
+##  账户系统
 
 - **Microsoft 账户** — Device Code OAuth 登录
 - **LittleSkin** — 第三方皮肤站认证
 - **Yggdrasil** — 自定义验证服务器（authlib-injector）
 - **离线账户** — 无需登录的本地账户
 
-## 🤝 贡献
+## 贡献
 
 欢迎贡献代码！可以通过以下方式参与：
 
@@ -114,6 +114,6 @@ Crowdin 使用 `components/i18n/locales/en-US.json` 作为英文源文件，并�
 4. 推送到分支 (`git push origin feature/amazing-feature`)
 5. 创建 Pull Request
 
-## 📝 开源协议
+## 开源协议
 
 本项目基于 [MIT License](LICENSE) 开源。
