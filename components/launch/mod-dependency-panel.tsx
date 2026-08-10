@@ -98,7 +98,7 @@ export function ModDependencyPanel() {
       if (useDeep) {
         const result = await invoke<any>("deep_analyze_with_api", {
           instanceDir,
-          mcVersion: config.versionName || "1.20.1",
+          mcVersion: config.minecraftVersion || config.versionName || "1.20.1",
           loader: (config.loadName || "forge").toLowerCase().replace(/[^a-z]/g, ""),
         });
         setAnalysis(result);
@@ -141,7 +141,7 @@ export function ModDependencyPanel() {
   const totalLoaderIssues = loaderReport?.errors.length || 0;
 
   const mcParams = useMemo(() => ({
-    mcVersion: config.versionName || "1.20.1",
+    mcVersion: config.minecraftVersion || config.versionName || "1.20.1",
     loader: (config.loadName || "forge").toLowerCase().replace(/[^a-z]/g, ""),
   }), [config]);
 

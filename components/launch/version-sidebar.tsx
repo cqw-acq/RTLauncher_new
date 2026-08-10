@@ -151,6 +151,8 @@ export function VersionSidebar({ className }: VersionSidebarProps) {
     // 更新启动配置中的版本信息
     updateConfig({
       versionName: instance.name,
+      // 基础 Minecraft 版本（用于定位游戏 JAR）
+      minecraftVersion: instance.minecraft_version,
       loadType: instance.loader === "Vanilla" ? "0" : "1",
       loadName: instance.loader === "Vanilla" ? "" : instance.name,
     });

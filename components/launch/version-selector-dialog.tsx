@@ -350,6 +350,8 @@ export function VersionSelectorDialog({ open: controlledOpen, onOpenChange, comp
     updateConfig({
       // 整合包目录名（如 PVZ_Survive）
       versionName: version.name,
+      // 基础 Minecraft 版本（用于定位游戏 JAR）
+      minecraftVersion: version.id,
       // 加载器类型：0=原版，1=modloader
       loadType: isVanilla ? "0" : "1",
       // modloader 文件夹名（如 PVZ_Survive），原版时为空
@@ -614,10 +616,4 @@ function compareMcVersionDesc(a: string, b: string): number {
     if (pa[i] !== pb[i]) return pb[i] - pa[i];
   }
   return 0;
-}
-interface ScannedInstance {
-  name: string;
-  minecraft_version: string;
-  loader: string;
-  mods_count: number;
 }

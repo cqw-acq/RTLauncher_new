@@ -15,6 +15,20 @@ use std::{
 };
 use tauri::{Emitter, Manager};
 
+/// 从合并型整合包 version.json 的 `patches` 字段读取真实 Minecraft 版本
+fn detect_minecraft_version_from_patches(json: &serde_json::Value) -> Option<String> {
+    json.get("patches")?
+        .as_array()?
+        .iter()
+        .find_map(|patch| {
+            if patch.get("id").and_then(|v| v.as_str()) != Some("game") {
+                return None;
+            }
+            let ver = patch.get("version").and_then(|v| v.as_str())?;
+            Some(ver.to_string())
+        })
+}
+
 /// 全局游戏进程跟踪（存储 Child 所有权 + PID，便于 kill）
 struct GameProcess {
     child: Option<Child>,
@@ -615,6 +629,7 @@ pub fn build_jvm_arguments(
     wrapper_path: &str,
     max_memory: &str,
     version_name: &str,
+    minecraft_version: &str,
     player_name: &str,
     auth_token: &str,
     uuid: &str,
@@ -634,6 +649,7 @@ pub fn build_jvm_arguments(
         wrapper_path,
         max_memory,
         version_name,
+        minecraft_version,
         player_name,
         auth_token,
         uuid,
@@ -657,6 +673,7 @@ fn build_jvm_arguments_inner(
     wrapper_path: &str,
     max_memory: &str,
     version_name: &str,
+    minecraft_version: &str,
     player_name: &str,
     auth_token: &str,
     uuid: &str,
@@ -1289,12 +1306,33 @@ fn build_jvm_arguments_inner(
         }
     }
 
-    let mut version_json: VersionJson = serde_json::from_reader(
-        std::fs::File::open(version_path).context("Failed to open version json")?,
-    )
-    .context("Failed to parse version json")?;
+    // 读取 version.json 为两种格式：结构化的 VersionJson 和原始的 serde_json::Value
+    let version_json_content = std::fs::read_to_string(&version_path)
+        .with_context(|| format!("Failed to read version json from {}", version_path.display()))?;
+    
+    let version_json_value: serde_json::Value = serde_json::from_str(&version_json_content)
+        .context("Failed to parse version json as value")?;
+    
+    let mut version_json: VersionJson = serde_json::from_str(&version_json_content)
+        .context("Failed to parse version json")?;
 
     let parent_version: Option<String> = version_json.parent_version.clone();
+    
+    // 确定基础 Minecraft 版本（用于定位游戏 JAR）
+    // 优先级：传入的 minecraft_version > parent_version (inheritsFrom) > patches 中的 game 版本 > version_name
+    let base_minecraft_version = if !minecraft_version.is_empty() {
+        println!("使用传入的 minecraft_version 作为基础版本: {}", minecraft_version);
+        minecraft_version.to_string()
+    } else if let Some(parent) = &parent_version {
+        println!("使用 inheritsFrom 作为基础版本: {}", parent);
+        parent.clone()
+    } else if let Some(patch_version) = detect_minecraft_version_from_patches(&version_json_value) {
+        println!("从 patches 中提取基础版本: {}", patch_version);
+        patch_version
+    } else {
+        println!("使用 version_name 作为基础版本: {}", version_name);
+        version_name.to_string()
+    };
 
     if let Some(parent) = &version_json.parent_version {
         let parent_path = minecraft_path_buf
@@ -1716,32 +1754,34 @@ fn build_jvm_arguments_inner(
             .join(loadName)
             .join(format!("{}.jar", loadName));
         
-        // Fabric通常直接使用原版JAR，不会复制一份
-        // 所以优先检查原版路径
+        // 使用基础 Minecraft 版本来定位原版 JAR
+        // 这样可以处理整合包的情况，其中 version_name 是整合包名，但 JAR 在原版目录中
         let vanilla_jar = minecraft_path_buf
             .join("versions")
-            .join(version_name)
-            .join(format!("{}.jar", version_name));
+            .join(&base_minecraft_version)
+            .join(format!("{}.jar", base_minecraft_version));
         
         if vanilla_jar.exists() {
-            println!("使用原版游戏JAR: {}", vanilla_jar.display());
+            println!("使用原版游戏JAR (基础版本 {}): {}", base_minecraft_version, vanilla_jar.display());
             vanilla_jar
         } else if loader_jar.exists() {
             println!("使用加载器独立游戏JAR: {}", loader_jar.display());
             loader_jar
         } else {
-            // 两个都不存在，返回错误
-            minecraft_path_buf
+            // 两个都不存在，尝试使用 version_name 作为最后的回退
+            let fallback_jar = minecraft_path_buf
                 .join("versions")
                 .join(version_name)
-                .join(format!("{}.jar", version_name))
+                .join(format!("{}.jar", version_name));
+            println!("原版和加载器JAR都不存在，尝试回退路径: {}", fallback_jar.display());
+            fallback_jar
         }
     } else {
         // 对于原版，使用标准路径
         minecraft_path_buf
             .join("versions")
-            .join(version_name)
-            .join(format!("{}.jar", version_name))
+            .join(&base_minecraft_version)
+            .join(format!("{}.jar", base_minecraft_version))
     };
 
     // 验证游戏JAR文件是否存在
@@ -2572,6 +2612,7 @@ pub fn launch_game(
     wrapper_path: &str,
     max_memory: &str,
     version_name: &str,
+    minecraft_version: &str,
     player_name: &str,
     auth_token: &str,
     uuid: &str,
@@ -2709,6 +2750,7 @@ pub fn launch_game(
         wrapper_path,
         max_memory,
         version_name,
+        minecraft_version,
         player_name,
         auth_token,
         uuid,

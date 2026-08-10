@@ -182,6 +182,8 @@ export type LaunchConfig = {
   maxMemory: string;
   /** 游戏版本名 */
   versionName: string;
+  /** 基础 Minecraft 版本（用于定位游戏 JAR） */
+  minecraftVersion: string;
   /** 加载器类型: "0"=原版, "1"=Forge/Fabric等 */
   loadType: string;
   /** 加载器名称 */
