@@ -47,6 +47,7 @@ output.log
 /src-tauri/bridge/
 /src-tauri/RTL/
 /src-tauri/instance/
+/src-tauri/minecraft/
 
 
 # Tauri signing keys (NEVER commit these!)

@@ -283,28 +283,6 @@ export function LaunchProvider({ children }: { children: React.ReactNode }) {
     return () => { unlisten?.(); };
   }, [t]);
 
-  // 监听游戏启动失败事件
-  useEffect(() => {
-    if (!isTauriRuntime()) return;
-
-    let unlisten: (() => void) | null = null;
-    listen<string>("game-launch-failed", (event) => {
-      const errorMsg = event.payload;
-      setStatus("idle");
-      setProgress(null);
-      setLogs((prev) => [
-        ...prev,
-        {
-          id: ++logIdRef.current,
-          timestamp: new Date().toLocaleTimeString(),
-          level: "error",
-          message: t("launch.provider.gameLaunchFailed", { error: errorMsg }),
-        },
-      ]);
-    }).then((fn) => { unlisten = fn; });
-    return () => { unlisten?.(); };
-  }, [t]);
-
   // 监听启动进度事件
   useEffect(() => {
     if (!isTauriRuntime()) return;

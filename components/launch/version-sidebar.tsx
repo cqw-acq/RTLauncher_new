@@ -29,13 +29,40 @@ interface McVersionGroup {
 
 /** 比较两个 MC 版本号，返回正表示 a > b，负表示 a < b（降序用） */
 function compareMcVersionDesc(a: string, b: string): number {
-  const parseNum = (s: string) => {
-    const parts = s.split(".").map(Number);
+  // 检测周快照格式（如 25w42a）
+  const weeklySnapshotRegex = /^(\d{2})w(\d{2})([a-z])$/;
+  const aMatch = a.match(weeklySnapshotRegex);
+  const bMatch = b.match(weeklySnapshotRegex);
+
+  // 如果都是周快照，按（年、周、字母）排序
+  if (aMatch && bMatch) {
+    const aYear = parseInt(aMatch[1], 10);
+    const aWeek = parseInt(aMatch[2], 10);
+    const aLetter = aMatch[3];
+    const bYear = parseInt(bMatch[1], 10);
+    const bWeek = parseInt(bMatch[2], 10);
+    const bLetter = bMatch[3];
+
+    if (aYear !== bYear) return bYear - aYear; // 降序
+    if (aWeek !== bWeek) return bWeek - aWeek; // 降序
+    return bLetter.localeCompare(aLetter); // 字母降序
+  }
+
+  // 如果只有一个是周快照，周快照排在后面
+  if (aMatch) return -1;
+  if (bMatch) return 1;
+
+  // 对于点分版本号（如 1.20.1），逐段比较
+  const parseVersionParts = (s: string): number[] => {
+    const parts = s.split(".").map(part => {
+      const num = parseInt(part, 10);
+      return isNaN(num) ? 0 : num;
+    });
     return parts;
   };
 
-  const aParts = parseNum(a);
-  const bParts = parseNum(b);
+  const aParts = parseVersionParts(a);
+  const bParts = parseVersionParts(b);
 
   // 逐位比较
   const maxLength = Math.max(aParts.length, bParts.length);
@@ -47,7 +74,8 @@ function compareMcVersionDesc(a: string, b: string): number {
     }
   }
 
-  return 0;
+  // 如果数字部分相同，按字典序比较作为回退
+  return b.localeCompare(a);
 }
 
 interface VersionSidebarProps {

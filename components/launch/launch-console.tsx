@@ -117,6 +117,8 @@ interface LogViewerProps {
   onToggleSelect: (id: number) => void;
   onCopySelected: () => void;
   searchHighlight: string;
+  onKeyDown?: (e: React.KeyboardEvent) => void;
+  tabIndex?: number;
 }
 
 function LogViewer({
@@ -128,6 +130,8 @@ function LogViewer({
   selectedIds,
   onToggleSelect,
   searchHighlight,
+  onKeyDown,
+  tabIndex,
 }: LogViewerProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -166,6 +170,8 @@ function LogViewer({
   return (
     <div
       ref={scrollRef}
+      tabIndex={tabIndex}
+      onKeyDown={onKeyDown}
       className={cn(
         "h-full overflow-auto rounded-xl bg-muted/50 p-3 font-mono text-xs leading-relaxed custom-scrollbar",
         wrapText ? "whitespace-pre-wrap break-all" : "whitespace-pre"
@@ -495,6 +501,8 @@ export function LaunchConsole() {
                 onToggleSelect={toggleSelect}
                 onCopySelected={handleCopySelected}
                 searchHighlight={searchText}
+                onKeyDown={handleKeyDown}
+                tabIndex={0}
               />
             </CardContent>
 
@@ -682,6 +690,8 @@ export function LaunchConsole() {
                   onToggleSelect={toggleSelect}
                   onCopySelected={handleCopySelected}
                   searchHighlight={searchText}
+                  onKeyDown={handleKeyDown}
+                  tabIndex={0}
                 />
               </div>
             </>

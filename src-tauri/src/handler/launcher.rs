@@ -559,8 +559,6 @@ pub fn run_command(
         Err(e) => {
             let msg = format!("游戏启动失败 (Java: {}): {}", javaPath.display(), e);
             println!("{}", msg);
-            // 发送启动失败事件，确保UI状态正确更新
-            let _ = app_handle.emit("game-launch-failed", msg.clone());
             Err(msg.into())
         }
     }
