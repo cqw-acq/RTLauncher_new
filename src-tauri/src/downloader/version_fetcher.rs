@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use regex::Regex;
+use std::sync::OnceLock;
 
 #[derive(Debug, Deserialize)]
 struct VersionManifest {
@@ -78,10 +79,17 @@ pub async fn classify_minecraft_versions() -> Result<[Vec<VersionInfo>; 4], Stri
 
 /// 判断版本ID是否可能是快照版本
 fn is_likely_snapshot(version_id: &str) -> bool {
-    // 快照版本通常以年份+周数开头，如 24w12a, 25w42a
-    let weekly_snapshot = Regex::new(r"^\d{2}w\d{2}[a-z]$").unwrap();
-    // 包含 pre, rc, snapshot 等关键词
-    let pre_release = Regex::new(r"(?i)(pre|rc|snapshot|beta|alpha)").unwrap();
+    // 使用 OnceLock 缓存编译后的正则表达式，避免重复编译
+    static WEEKLY_SNAPSHOT: OnceLock<Regex> = OnceLock::new();
+    static PRE_RELEASE: OnceLock<Regex> = OnceLock::new();
+    
+    let weekly_snapshot = WEEKLY_SNAPSHOT.get_or_init(|| {
+        Regex::new(r"^\d{2}w\d{2}[a-z]$").unwrap()
+    });
+    
+    let pre_release = PRE_RELEASE.get_or_init(|| {
+        Regex::new(r"(?i)(pre|rc|snapshot|beta|alpha)").unwrap()
+    });
     
     weekly_snapshot.is_match(version_id) || pre_release.is_match(version_id)
 }
