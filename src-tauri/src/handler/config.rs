@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Java安装信息
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -71,6 +71,133 @@ fn default_minecraft_path() -> String {
             .to_string_lossy()
             .to_string()
     }
+}
+
+/// HMCL 配置文件结构（部分字段）
+#[derive(Deserialize)]
+#[allow(non_snake_case)]
+struct HMCLConfig {
+    #[serde(default)]
+    #[allow(dead_code)]
+    commonDirType: Option<String>,
+    #[serde(default)]
+    commonDirectory: Option<String>,
+    #[serde(default)]
+    configurations: Option<serde_json::Value>,
+}
+
+/// 从 HMCL 配置文件中提取游戏目录
+fn detect_hmcl_minecraft_paths() -> Vec<String> {
+    let mut paths = Vec::new();
+
+    // 收集可能的 HMCL 配置文件位置
+    let mut config_files = Vec::new();
+
+    // 便携模式：当前目录下的 .hmcl/hmcl.json
+    config_files.push(PathBuf::from(".hmcl").join("hmcl.json"));
+
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(appdata) = std::env::var("APPDATA") {
+            config_files.push(PathBuf::from(appdata).join(".hmcl").join("hmcl.json"));
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        if let Ok(home) = std::env::var("HOME") {
+            config_files.push(PathBuf::from(home.clone()).join(".config").join("hmcl").join("hmcl.json"));
+            config_files.push(PathBuf::from(home).join(".hmcl.json"));
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(home) = std::env::var("HOME") {
+            config_files.push(PathBuf::from(home)
+                .join("Library")
+                .join("Application Support")
+                .join("hmcl")
+                .join("hmcl.json"));
+        }
+    }
+
+    for config_file in config_files {
+        if !config_file.exists() {
+            continue;
+        }
+
+        if let Ok(content) = fs::read_to_string(&config_file) {
+            if let Ok(hmcl_config) = serde_json::from_str::<HMCLConfig>(&content) {
+                // 优先读取 commonDirectory（自定义通用目录）
+                if let Some(common_dir) = hmcl_config.commonDirectory {
+                    if !common_dir.is_empty() {
+                        paths.push(common_dir);
+                    }
+                }
+
+                // 从 configurations 中读取各个实例的游戏目录
+                if let Some(configs) = hmcl_config.configurations {
+                    if let Some(configs_obj) = configs.as_object() {
+                        for (_instance_id, instance_config) in configs_obj {
+                            if let Some(game_dir) = instance_config.get("gameDir").and_then(|v| v.as_str()) {
+                                if !game_dir.is_empty() {
+                                    paths.push(game_dir.to_string());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // 去重
+    paths.sort();
+    paths.dedup();
+    paths
+}
+
+/// 智能判断目录是否为有效的 Minecraft 游戏目录
+/// 通过检查关键文件和目录结构来区分 .minecraft 和 .hmcl
+fn is_valid_minecraft_directory(path: &Path) -> bool {
+    if !path.exists() || !path.is_dir() {
+        return false;
+    }
+
+    let entries = match fs::read_dir(path) {
+        Ok(entries) => entries,
+        Err(_) => return false,
+    };
+
+    // 检查是否包含 HMCL 特有的文件（如果是，则不是 minecraft 目录）
+    let hmcl_indicators = [".hmcl", "hmcl.json", "hmclversion.cfg"];
+    for entry in entries.flatten() {
+        if let Some(name) = entry.file_name().to_str() {
+            if hmcl_indicators.iter().any(|&indicator| name == indicator) {
+                return false;
+            }
+        }
+    }
+
+    // 重新读取目录以检查 Minecraft 标准目录结构
+    let entries = match fs::read_dir(path) {
+        Ok(entries) => entries,
+        Err(_) => return false,
+    };
+
+    // 检查 Minecraft 标准目录结构
+    let mc_indicators = ["versions", "libraries", "assets", "saves", "resourcepacks"];
+    
+    for entry in entries.flatten() {
+        if let Some(name) = entry.file_name().to_str() {
+            if mc_indicators.iter().any(|&indicator| name == indicator) {
+                return true;
+            }
+        }
+    }
+
+    false
 }
 
 /// 存储在 launcher.json 中的路径配置
@@ -146,12 +273,30 @@ pub fn get_launcher_paths_config() -> LauncherPathsConfig {
                     }
                     cfg.minecraft_paths = dedup;
                 }
+                
+                // 从 HMCL 配置文件检测游戏目录并添加到列表
+                let hmcl_paths = detect_hmcl_minecraft_paths();
+                for hmcl_path in hmcl_paths {
+                    // 只添加通过验证的 Minecraft 目录，避免误判 .hmcl 目录
+                    if is_valid_minecraft_directory(Path::new(&hmcl_path)) && !cfg.minecraft_paths.contains(&hmcl_path) {
+                        cfg.minecraft_paths.push(hmcl_path);
+                    }
+                }
+                
                 cfg
             }
             Err(_) => def,
         }
     } else {
-        def
+        // 即使配置文件不存在，也尝试从 HMCL 检测路径
+        let mut cfg = def.clone();
+        let hmcl_paths = detect_hmcl_minecraft_paths();
+        for hmcl_path in hmcl_paths {
+            if is_valid_minecraft_directory(Path::new(&hmcl_path)) && !cfg.minecraft_paths.contains(&hmcl_path) {
+                cfg.minecraft_paths.push(hmcl_path);
+            }
+        }
+        cfg
     }
 }
 
@@ -202,6 +347,15 @@ pub fn save_launcher_paths_config(config: LauncherPathsConfig) -> Result<(), Str
         }
         cfg.minecraft_paths = dedup;
     }
+    
+    // 保存时也重新检测 HMCL 路径，确保不会丢失 HMCL 检测到的路径
+    let hmcl_paths = detect_hmcl_minecraft_paths();
+    for hmcl_path in hmcl_paths {
+        if is_valid_minecraft_directory(Path::new(&hmcl_path)) && !cfg.minecraft_paths.contains(&hmcl_path) {
+            cfg.minecraft_paths.push(hmcl_path);
+        }
+    }
+    
     let text = serde_json::to_string_pretty(&cfg).map_err(|e| e.to_string())?;
     fs::write(&path, text).map_err(|e| e.to_string())
 }

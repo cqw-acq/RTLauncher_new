@@ -160,6 +160,7 @@
       "liteLoader": "LiteLoader",
       "selectAGameVersion": "Select a game version",
       "version": "version",
+      "allVersions": "All versions",
       "searchVanillaVersions": "Search vanilla versions...",
       "searchModLoaders": "Search mod loaders...",
       "searchVersions": "Search versions...",
@@ -175,6 +176,7 @@
     "provider": {
       "gameExitedWithCodeExitCode": "Game exited with code: {exitCode}",
       "gameFullyStartedPidPidStoppedJvmTracking": "Game fully started (PID {pid}); stopped JVM tracking",
+      "gameLaunchFailed": "Game launch failed: {error}",
       "setTheMinecraftGameDirectory": "Set the Minecraft game directory",
       "setAJavaPath": "Set a Java path",
       "selectAGameVersion": "Select a game version",
@@ -334,6 +336,7 @@
       "theme": "Theme",
       "light": "Light",
       "dark": "Dark",
+      "system": "System",
       "themeColor": "Theme color",
       "reset": "Reset",
       "fontSize": "Font size",

@@ -131,19 +131,45 @@ fn detect_loader_from_name(name: &str) -> &'static str {
 /// - "fabric-loader-0.15.0-1.21.1" -> "1.21.1"
 /// - "quilt-loader-0.25.0-1.21.1" -> "1.21.1"
 /// - "1.21.1-OptiFine_HD_U_I7_pre1" -> "1.21.1"
+/// - "26.3-snapshot-5" -> "26.3"
+/// - "25w42a" -> "25w42a"
 fn extract_minecraft_version(name: &str) -> String {
-    // 模式 1：以数字开头，后面跟 . 和数字，即 "x.y.z" 或 "x.y" 格式
+    // 模式 1：快照版本格式，如 25w42a, 24w12a
+    let snapshot_re = regex::Regex::new(r"^\d{2}w\d{2}[a-z]$").unwrap();
+    if snapshot_re.is_match(name) {
+        return name.to_string();
+    }
+    
+    // 模式 2：以数字开头，后面跟 . 和数字，即 "x.y.z" 或 "x.y" 格式
     // 匹配 "1.21.1"、"1.21" 等开头的部分
-    let re1 = regex::Regex::new(r"^(\d+\.\d+(?:\.\d+)?)").ok();
-    if let Some(caps) = re1.as_ref().and_then(|r| r.captures(name)) {
+    let standard_re = regex::Regex::new(r"^(\d+\.\d+(?:\.\d+)?)").unwrap();
+    if let Some(caps) = standard_re.captures(name) {
         return caps.get(1).unwrap().as_str().to_string();
     }
     
-    // 模式 2：版本号在字符串中间，例如 "fabric-loader-0.15.0-1.21.1"
-    // Rust regex 不支持 look-around，使用非数字边界并只捕获版本号本身。
-    let re2 = regex::Regex::new(r"(?:^|[^0-9])(\d+\.\d+(?:\.\d+)?)(?:[^0-9]|$)").ok();
-    if let Some(caps) = re2.as_ref().and_then(|r| r.captures(name)) {
+    // 模式 3：版本号在字符串中间，例如 "fabric-loader-0.15.0-1.21.1"
+    // 匹配被非数字字符包围的版本号
+    let middle_re = regex::Regex::new(r"(?:^|[^0-9])(\d+\.\d+(?:\.\d+)?)(?:[^0-9]|$)").unwrap();
+    if let Some(caps) = middle_re.captures(name) {
         return caps.get(1).unwrap().as_str().to_string();
+    }
+    
+    // 模式 4：处理类似 "26.3-snapshot-5" 的格式
+    let snapshot_ver_re = regex::Regex::new(r"^(\d+\.\d+)-snapshot").unwrap();
+    if let Some(caps) = snapshot_ver_re.captures(name) {
+        return caps.get(1).unwrap().as_str().to_string();
+    }
+    
+    // 模式 5：处理单个数字版本，如 "26" (用于新的快照格式)
+    let single_ver_re = regex::Regex::new(r"^(\d+)(?:[-_.]|$)").unwrap();
+    if let Some(caps) = single_ver_re.captures(name) {
+        let ver = caps.get(1).unwrap().as_str();
+        // 只有当数字大于等于 20 时才认为是版本号（避免误判其他数字）
+        if let Ok(num) = ver.parse::<u32>() {
+            if num >= 20 {
+                return ver.to_string();
+            }
+        }
     }
     
     // fallback：原样返回
@@ -157,11 +183,25 @@ fn extract_minecraft_version(name: &str) -> String {
 fn version_from_instance_name(name: &str) -> Option<String> {
     let release = regex::Regex::new(r"^\d+\.\d+(?:\.\d+)?(?:-.+)?$").ok()?;
     let weekly_snapshot = regex::Regex::new(r"^\d{2}w\d{2}[a-z]$").ok()?;
+    // 新的快照格式，如 26, 26.3, 26.3-snapshot-5
+    let new_snapshot = regex::Regex::new(r"^\d+(\.\d+)?(?:-snapshot)?$").ok()?;
 
     if release.is_match(name) {
         Some(extract_minecraft_version(name))
     } else if weekly_snapshot.is_match(name) {
         Some(name.to_string())
+    } else if new_snapshot.is_match(name) {
+        // 检查是否为合理的版本号（主版本号 >= 20）
+        let extracted = extract_minecraft_version(name);
+        if let Ok(num) = extracted.parse::<f32>() {
+            if num >= 20.0 {
+                Some(extracted)
+            } else {
+                None
+            }
+        } else {
+            None
+        }
     } else {
         None
     }
@@ -186,12 +226,39 @@ fn detect_minecraft_version_from_libraries(json: &serde_json::Value) -> Option<S
             || (group == "net.fabricmc" && artifact == "intermediary");
         if carries_mc_version {
             let detected = extract_minecraft_version(version);
-            if detected != version || version.contains('.') {
+            // 合并型整合包里 fabric 的 intermediary 会被改写成占位符 "0.0.0"，
+            // 它不含真实版本信息，直接跳过，留给后续的 patches 检测。
+            if detected != "0.0.0" && (detected != version || version.contains('.')) {
                 return Some(detected);
             }
         }
     }
     None
+}
+
+/// 从合并型整合包 version.json 的 `patches` 字段读取真实 Minecraft 版本。
+///
+/// 合并型整合包的 JSON 会把补丁列表写入 `patches`，例如：
+/// ```json
+/// { "patches": [ { "id": "game", "version": "26.1.2", "priority": 0 } ] }
+/// ```
+/// 其中 `id == "game"` 的补丁携带的是真实的 Minecraft 版本号。
+fn detect_minecraft_version_from_patches(json: &serde_json::Value) -> Option<String> {
+    json.get("patches")?
+        .as_array()?
+        .iter()
+        .find_map(|patch| {
+            if patch.get("id").and_then(|v| v.as_str()) != Some("game") {
+                return None;
+            }
+            let ver = patch.get("version").and_then(|v| v.as_str())?;
+            let detected = extract_minecraft_version(ver);
+            if version_from_instance_name(&detected).is_some() {
+                Some(detected)
+            } else {
+                None
+            }
+        })
 }
 
 /// 扫描单个实例目录，构建 InstanceData
@@ -201,6 +268,11 @@ fn build_instance_data(instance_dir: &Path, minecraft_path: &Path) -> Option<Ins
         .and_then(|n| n.to_str())
         .unwrap_or("Unknown")
         .to_string();
+
+    // 跳过 HMCL 特有的目录
+    if name == ".hmcl" || name == "hmcl" {
+        return None;
+    }
 
     // 计算 mods 数量
     let mods_dir = instance_dir.join("mods");
@@ -223,11 +295,12 @@ fn build_instance_data(instance_dir: &Path, minecraft_path: &Path) -> Option<Ins
                 match serde_json::from_str::<serde_json::Value>(&content) {
                     Ok(json) => {
                         // assetIndex.id 是资源索引代号，不是 Minecraft 版本。
-                        // 合并型实例优先读加载器库坐标，普通实例再读版本目录名。
+                        // 合并型实例优先读补丁列表里的真实版本，其次读加载器库坐标，普通实例再读版本目录名。
                         let raw_ver = json
                             .get("inheritsFrom")
                             .and_then(|v| v.as_str())
                             .map(|s| s.to_string())
+                            .or_else(|| detect_minecraft_version_from_patches(&json))
                             .or_else(|| detect_minecraft_version_from_libraries(&json))
                             .or_else(|| version_from_instance_name(&name))
                             .or_else(|| {
@@ -248,7 +321,16 @@ fn build_instance_data(instance_dir: &Path, minecraft_path: &Path) -> Option<Ins
                             })
                             .unwrap_or(name.clone());
                         // 进一步提取纯版本号（防止 inheritsFrom 也包含加载器信息）
-                        let mc_ver = extract_minecraft_version(&raw_ver);
+                        let mut mc_ver = extract_minecraft_version(&raw_ver);
+                        // 如果提取到的版本看起来不合理（例如 "0.0.0" 或等于原始目录名），
+                        // 那么尝试从目录名中再次提取一个更可信的版本号。
+                        let is_plausible = version_from_instance_name(&mc_ver).is_some();
+                        if !is_plausible || mc_ver == "0.0.0" || mc_ver == name {
+                            let alt = extract_minecraft_version(&name);
+                            if version_from_instance_name(&alt).is_some() {
+                                mc_ver = alt;
+                            }
+                        }
                         // 从 mainClass 推断加载器，但与文件夹名交叉验证
                         // （NeoForge 的 mainClass 可能与 Forge 相同，需要用文件夹名区分）
                         let from_main = json
@@ -339,6 +421,14 @@ pub async fn vm_scan_instances(instances_path: String) -> Result<Vec<InstanceDat
     for entry in entries.flatten() {
         let p = entry.path();
         if p.is_dir() {
+            // 跳过 HMCL 特有的目录，避免误判
+            if let Some(dir_name) = p.file_name().and_then(|n| n.to_str()) {
+                // 明确跳过 HMCL 相关目录
+                if dir_name == ".hmcl" || dir_name == "hmcl" {
+                    continue;
+                }
+            }
+            
             if let Some(data) = build_instance_data(&p, minecraft_path) {
                 result.push(data);
             }
@@ -591,7 +681,8 @@ pub async fn vm_delete_cached_file(
 #[cfg(test)]
 mod tests {
     use super::{
-        detect_loader_from_main_class, detect_minecraft_version_from_libraries,
+        detect_loader_from_main_class, detect_loader_from_name,
+        detect_minecraft_version_from_libraries, detect_minecraft_version_from_patches,
         extract_minecraft_version, version_from_instance_name,
     };
     use serde_json::json;
@@ -599,6 +690,45 @@ mod tests {
     #[test]
     fn extracts_version_from_named_modpack_instance() {
         assert_eq!(extract_minecraft_version("1-1.20.1"), "1.20.1");
+    }
+
+    #[test]
+    fn extracts_version_from_standard_format() {
+        assert_eq!(extract_minecraft_version("1.21.1"), "1.21.1");
+        assert_eq!(extract_minecraft_version("1.20.4"), "1.20.4");
+        assert_eq!(extract_minecraft_version("1.21"), "1.21");
+    }
+
+    #[test]
+    fn extracts_version_from_loader_format() {
+        assert_eq!(extract_minecraft_version("1.21.1-neoforge-4.0.1.20"), "1.21.1");
+        assert_eq!(extract_minecraft_version("1.21.1-forge-52.0.0"), "1.21.1");
+        assert_eq!(extract_minecraft_version("fabric-loader-0.15.0-1.21.1"), "1.21.1");
+        assert_eq!(extract_minecraft_version("quilt-loader-0.25.0-1.21.1"), "1.21.1");
+        assert_eq!(extract_minecraft_version("1.21.1-OptiFine_HD_U_I7_pre1"), "1.21.1");
+    }
+
+    #[test]
+    fn extracts_version_from_snapshot_format() {
+        assert_eq!(extract_minecraft_version("25w42a"), "25w42a");
+        assert_eq!(extract_minecraft_version("24w12a"), "24w12a");
+        assert_eq!(extract_minecraft_version("26.3-snapshot-5"), "26.3");
+        assert_eq!(extract_minecraft_version("26"), "26");
+    }
+
+    #[test]
+    fn extracts_version_from_complex_format() {
+        assert_eq!(extract_minecraft_version("1.20.1-fabric-0.15.11"), "1.20.1");
+        assert_eq!(extract_minecraft_version("1.19.4-forge-45.2.0"), "1.19.4");
+    }
+
+    #[test]
+    fn handles_edge_cases() {
+        // 低版本号不应被误判为版本号
+        assert_eq!(extract_minecraft_version("5-something"), "5-something");
+        // 高版本号应该被正确识别
+        assert_eq!(extract_minecraft_version("20"), "20");
+        assert_eq!(extract_minecraft_version("21"), "21");
     }
 
     #[test]
@@ -616,6 +746,47 @@ mod tests {
     }
 
     #[test]
+    fn skips_zeroed_fabric_intermediary_placeholder() {
+        // 合并型整合包中 fabric 的 intermediary 会被置为 "0.0.0"，
+        // 它不含真实版本信息，不应被当作 Minecraft 版本。
+        let version = json!({
+            "libraries": [
+                { "name": "net.fabricmc:intermediary:0.0.0" }
+            ]
+        });
+
+        assert_eq!(detect_minecraft_version_from_libraries(&version), None);
+    }
+
+    #[test]
+    fn detects_mc_version_from_merged_modpack_patches() {
+        // PVZ_Survive 这类合并型整合包：没有 inheritsFrom，
+        // 但 patches 里 id == "game" 的补丁携带真实版本号。
+        let version = json!({
+            "patches": [
+                { "id": "game", "version": "26.1.2", "priority": 0 },
+                { "id": "fabric", "version": "0.19.3", "priority": 1 }
+            ]
+        });
+
+        assert_eq!(
+            detect_minecraft_version_from_patches(&version).as_deref(),
+            Some("26.1.2")
+        );
+    }
+
+    #[test]
+    fn igores_patches_without_game_entry() {
+        let version = json!({
+            "patches": [
+                { "id": "fabric", "version": "0.19.3", "priority": 1 }
+            ]
+        });
+
+        assert_eq!(detect_minecraft_version_from_patches(&version), None);
+    }
+
+    #[test]
     fn keeps_release_and_snapshot_versions_instead_of_asset_index_ids() {
         assert_eq!(version_from_instance_name("26.2").as_deref(), Some("26.2"));
         assert_eq!(
@@ -627,6 +798,15 @@ mod tests {
             Some("25w42a")
         );
         assert_eq!(version_from_instance_name("custom-profile"), None);
+    }
+
+    #[test]
+    fn detects_new_snapshot_format() {
+        assert_eq!(version_from_instance_name("26").as_deref(), Some("26"));
+        assert_eq!(version_from_instance_name("26.3").as_deref(), Some("26.3"));
+        assert_eq!(version_from_instance_name("27").as_deref(), Some("27"));
+        // 低版本号不应被识别
+        assert_eq!(version_from_instance_name("5"), None);
     }
 
     #[test]

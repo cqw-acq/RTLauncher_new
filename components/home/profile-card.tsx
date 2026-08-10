@@ -24,7 +24,9 @@ export function ProfileCard({
   const isRunning = status === "running";
   const canLaunch = !isLaunching && !isRunning;
 
-  const versionDisplay = config.versionName || "未选择游戏版本";
+  const versionDisplay = config.loadType === "1" && config.loadName
+    ? config.loadName
+    : config.versionName || "未选择游戏版本";
 
   const handleLaunch = () => {
     if (isLaunching || isRunning) {

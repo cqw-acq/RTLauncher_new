@@ -282,8 +282,32 @@ export function LaunchProvider({ children }: { children: React.ReactNode }) {
     return () => { unlisten?.(); };
   }, [t]);
 
+  // 监听游戏启动失败事件
+  useEffect(() => {
+    if (!isTauriRuntime()) return;
+
+    let unlisten: (() => void) | null = null;
+    listen<string>("game-launch-failed", (event) => {
+      const errorMsg = event.payload;
+      setStatus("idle");
+      setProgress(null);
+      setLogs((prev) => [
+        ...prev,
+        {
+          id: ++logIdRef.current,
+          timestamp: new Date().toLocaleTimeString(),
+          level: "error",
+          message: t("launch.provider.gameLaunchFailed", { error: errorMsg }),
+        },
+      ]);
+    }).then((fn) => { unlisten = fn; });
+    return () => { unlisten?.(); };
+  }, [t]);
+
   // 监听启动进度事件
   useEffect(() => {
+    if (!isTauriRuntime()) return;
+
     let unlisten: (() => void) | null = null;
     listen<{ current_step: number; total_steps: number; current_stage: string; percentage: number }>("launch-progress", (event) => {
       const { current_step, total_steps, current_stage, percentage } = event.payload;
@@ -304,19 +328,26 @@ export function LaunchProvider({ children }: { children: React.ReactNode }) {
       }
       try {
         const result = await invoke<string>("kill_game_process");
+        const now = Date.now();
         setLogs((prev) => [
           ...prev,
           {
             id: ++logIdRef.current,
-            timestamp: new Date().toLocaleTimeString(),
+            timestamp: new Date(now).toLocaleTimeString(),
             level: "warn",
             message: result,
           },
         ]);
+        // 立即更新状态为idle
         setStatus("idle");
         setProgress(null);
+        setLaunchEndedAt(now);
+        setLastExitCode(0);
       } catch (e) {
         setErrorMessage(e instanceof Error ? e.message : String(e));
+        // 即使失败也要重置状态
+        setStatus("idle");
+        setProgress(null);
       }
     },
     [status]

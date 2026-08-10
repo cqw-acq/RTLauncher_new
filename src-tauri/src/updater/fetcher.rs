@@ -1064,7 +1064,7 @@ impl UpdateFetcher {
                         #[cfg(unix)]
                         {
                             use std::os::unix::fs::PermissionsExt;
-                            if let Ok(mode) = file.unix_mode() {
+                            if let Some(mode) = file.unix_mode() {
                                 let _ = fs::set_permissions(&outpath, fs::Permissions::from_mode(mode));
                             }
                         }

@@ -24,22 +24,27 @@ import { cn } from "@/lib/utils";
 import { useI18n, type TranslationKey } from "@/components/i18n/use-i18n";
 import { useLaunchContext } from "./launch-provider";
 import { LoaderIcon, inferLoaderKind, type LoaderKind } from "@/components/launch/loader-icon";
+import type { InstanceData } from "@/types";
+
+// 使用 InstanceData 作为 ScannedInstance
+type ScannedInstance = InstanceData;
 
 /** 解析后的版本信息 */
 interface ParsedVersion {
   name: string;           // 完整目录名
   mcVersion: string;      // MC 版本号 如 1.20.1
+  majorVersion: string;   // MC大版本号 如 1.20 (用于分组)
   loaderType: string;     // 加载器类型：vanilla/fabric/forge/neoforge/optifine/liteloader/quilt
   loaderVersion: string;  // 加载器版本号 如 0.15.11
 }
 
-/** 层级数据结构 */
+/** 层级数据结构 - 按MC完整版本分组 */
 interface McVersionNode {
-  mcVersion: string;
-  loaders: Record<string, ParsedVersion[]>;  // loaderType -> 版本列表
+  mcVersion: string;      // MC完整版本 如 1.20.1, 1.21.3, 26.1.2
+  subVersions: ParsedVersion[];  // 该MC版本下的所有子版本（整合包）
 }
 
-type Step = "mc" | "loader" | "version";
+type Step = "mc" | "version";
 
 interface VersionSelectorDialogProps {
   open?: boolean;
@@ -55,6 +60,7 @@ function parseVersionDir(dirName: string): ParsedVersion {
   let loaderType: string = "vanilla";
   let loaderVersion = "";
   let mcVersion = dirName;
+  let majorVersion = dirName;
 
   // 按优先级匹配（neoforge 要在 forge 之前检测，因为 neoforge 包含 forge）
   if (lower.includes("neoforge")) {
@@ -71,41 +77,106 @@ function parseVersionDir(dirName: string): ParsedVersion {
     loaderType = "quilt";
   }
 
+  // 提取 MC 版本号（与后端逻辑保持一致）
+  mcVersion = extractMinecraftVersion(dirName);
+  
+  // 提取大版本号
+  const versionParts = mcVersion.split(".");
+  if (versionParts.length >= 2) {
+    majorVersion = `${versionParts[0]}.${versionParts[1]}`;
+  } else if (versionParts.length === 1) {
+    // 处理单个数字版本，如 "26"
+    majorVersion = versionParts[0];
+  }
+
   if (loaderType !== "vanilla") {
-    // 尝试从目录名中提取 MC 版本号和加载器版本号
-    // 常见格式: 1.20.1-fabric-0.15.11, 1.20.1-forge-47.2.0, 1.20.1-neoforge-21.1.99
-    const parts = dirName.split("-");
+      // 尝试从目录名中提取加载器版本号
+      // 支持多种格式：1.20.1-fabric-0.15.11, fabric-loader-0.15.0-1.21.1, 1.21.1-OptiFine...
+      const parts = dirName.split("-");
 
-    // 第一个通常是 MC 版本号（如 1.20.1）
-    if (/^\d+\.\d+/.test(parts[0])) {
-      mcVersion = parts[0];
-
-      // 从剩余部分提取加载器版本号（找到第一个看起来像版本号的部分）
-      for (let i = 2; i < parts.length; i++) {
-        if (/^\d+/.test(parts[i])) {
-          // 可能是加载器版本号的起始，收集连续的版本片段
-          const loaderParts: string[] = [];
-          for (let j = i; j < parts.length; j++) {
-            loaderParts.push(parts[j]);
-          }
-          loaderVersion = loaderParts.join("-");
+      // 优先基于已识别的 loaderType 提取 loaderVersion：
+      // 在 parts 中查找包含 loader 关键字的位置（如 fabric / forge / neoforge / optifine / liteloader / quilt），
+      // 若找到则取该位置及其后面的所有片段作为 loaderVersion；否则回退到之前的候选方案。
+      const loaderTokens = ["neoforge", "liteloader", "optifine", "fabric", "forge", "quilt"];
+      let loaderIndex = -1;
+      for (let i = 0; i < parts.length; i++) {
+        const p = parts[i].toLowerCase();
+        if (loaderTokens.some((tok) => p.includes(tok))) {
+          loaderIndex = i;
           break;
         }
       }
-
-      // 如果没提取到，就把加载器名后面的都算进去
-      if (!loaderVersion && parts.length > 2) {
-        loaderVersion = parts.slice(2).join("-");
+      if (loaderIndex !== -1) {
+        // 排除 MC 版本片段
+        const segs = parts.filter((p, idx) => {
+          // 检查是否是 MC 版本片段
+          const isMcVersion = /^\d+\.\d+(?:\.\d+)?$/.test(p) || /^\d{2}w\d{2}[a-z]$/.test(p) || /^\d+(\.\d+)?$/.test(p);
+          return idx !== loaderIndex && !isMcVersion;
+        });
+        if (segs.length > 0) loaderVersion = segs.join("-");
       }
-    }
+      // fallback: 如果仍未得到 loaderVersion，则使用除 MC 版本外的其他片段
+      if (!loaderVersion) {
+        const candidateLoaderParts = parts.filter((p) => {
+          const isMcVersion = /^\d+\.\d+(?:\.\d+)?$/.test(p) || /^\d{2}w\d{2}[a-z]$/.test(p) || /^\d+(\.\d+)?$/.test(p);
+          return !isMcVersion;
+        });
+        if (candidateLoaderParts.length > 0) loaderVersion = candidateLoaderParts.join("-");
+      }
   }
 
   return {
     name: dirName,
     mcVersion,
+    majorVersion,
     loaderType,
     loaderVersion: loaderVersion || dirName,
   };
+}
+
+/** 提取 Minecraft 版本号（与后端逻辑保持一致） */
+function extractMinecraftVersion(name: string): string {
+  // 模式 1：快照版本格式，如 25w42a, 24w12a
+  const snapshotRe = /^\d{2}w\d{2}[a-z]$/;
+  if (snapshotRe.test(name)) {
+    return name;
+  }
+
+  // 模式 2：以数字开头，后面跟 . 和数字，即 "x.y.z" 或 "x.y" 格式
+  const standardRe = /^(\d+\.\d+(?:\.\d+)?)/;
+  const match = name.match(standardRe);
+  if (match) {
+    return match[1];
+  }
+
+  // 模式 3：版本号在字符串中间，例如 "fabric-loader-0.15.0-1.21.1"
+  const middleRe = /(?:^|[^0-9])(\d+\.\d+(?:\.\d+)?)(?:[^0-9]|$)/;
+  const middleMatch = name.match(middleRe);
+  if (middleMatch) {
+    return middleMatch[1];
+  }
+
+  // 模式 4：处理类似 "26.3-snapshot-5" 的格式
+  const snapshotVerRe = /^(\d+\.\d+)-snapshot/;
+  const snapshotMatch = name.match(snapshotVerRe);
+  if (snapshotMatch) {
+    return snapshotMatch[1];
+  }
+
+  // 模式 5：处理单个数字版本，如 "26" (用于新的快照格式)
+  const singleVerRe = /^(\d+)(?:[-_.]|$)/;
+  const singleMatch = name.match(singleVerRe);
+  if (singleMatch) {
+    const ver = singleMatch[1];
+    const num = parseInt(ver, 10);
+    // 只有当数字大于等于 20 时才认为是版本号（避免误判其他数字）
+    if (num >= 20) {
+      return ver;
+    }
+  }
+
+  // fallback：原样返回
+  return name;
 }
 
 /** 加载器类型的显示信息 */
@@ -126,9 +197,21 @@ function parsedVersionFromInstance(instance: ScannedInstance): ParsedVersion {
     ? detectedLoader
     : fromName.loaderType;
 
+  // 如果 minecraft_version 是 "0.0.0" 或无效值，使用从目录名解析的版本
+  const mcVersion = instance.minecraft_version && instance.minecraft_version !== "0.0.0"
+    ? instance.minecraft_version
+    : fromName.mcVersion;
+
+  // 提取大版本号（保持向后兼容）
+  const versionParts = mcVersion.split(".");
+  const majorVersion = versionParts.length >= 2 
+    ? `${versionParts[0]}.${versionParts[1]}`
+    : fromName.majorVersion;
+
   return {
     name: instance.name,
-    mcVersion: instance.minecraft_version || fromName.mcVersion,
+    mcVersion,
+    majorVersion,
     loaderType,
     loaderVersion:
       fromName.loaderType === loaderType && fromName.loaderVersion !== instance.name
@@ -144,13 +227,11 @@ export function VersionSelectorDialog({ open: controlledOpen, onOpenChange, comp
   const [versions, setVersions] = useState<ParsedVersion[]>([]);
   const [loading, setLoading] = useState(false);
   const [mcSearchQuery, setMcSearchQuery] = useState("");
-  const [loaderSearchQuery, setLoaderSearchQuery] = useState("");
   const [versionSearchQuery, setVersionSearchQuery] = useState("");
 
   // 层级选择的状态
   const [step, setStep] = useState<Step>("mc");
   const [selectedMcVersion, setSelectedMcVersion] = useState<string | null>(null);
-  const [selectedLoader, setSelectedLoader] = useState<string | null>(null);
 
   const isControlled = controlledOpen !== undefined;
   const open = isControlled ? controlledOpen : internalOpen;
@@ -167,9 +248,7 @@ export function VersionSelectorDialog({ open: controlledOpen, onOpenChange, comp
       loadVersions();
       setStep("mc");
       setSelectedMcVersion(null);
-      setSelectedLoader(null);
       setMcSearchQuery("");
-      setLoaderSearchQuery("");
       setVersionSearchQuery("");
     }
   }, [open, config.minecraftPath]);
@@ -199,30 +278,23 @@ export function VersionSelectorDialog({ open: controlledOpen, onOpenChange, comp
     }
   };
 
-  // 构建数据结构：按 mcVersion 组织，每个 mcVersion 下按 loaderType 组织版本
+  // 构建数据结构：按 mcVersion 组织，每个 mcVersion 下直接列出所有子版本
   const mcTree = useMemo<McVersionNode[]>(() => {
-    const mcMap = new Map<string, Map<string, ParsedVersion[]>>();
+    const mcMap = new Map<string, ParsedVersion[]>();
 
     for (const v of versions) {
       if (!mcMap.has(v.mcVersion)) {
-        mcMap.set(v.mcVersion, new Map());
+        mcMap.set(v.mcVersion, []);
       }
-      const loaderMap = mcMap.get(v.mcVersion)!;
-      if (!loaderMap.has(v.loaderType)) {
-        loaderMap.set(v.loaderType, []);
-      }
-      loaderMap.get(v.loaderType)!.push(v);
+      mcMap.get(v.mcVersion)!.push(v);
     }
 
     // 转换为数组并排序
     return Array.from(mcMap.entries())
-      .map(([mcVersion, loaderMap]) => {
-        const loaders: Record<string, ParsedVersion[]> = {};
-        for (const [loaderType, list] of loaderMap.entries()) {
-          loaders[loaderType] = list;
-        }
-        return { mcVersion, loaders };
-      })
+      .map(([mcVersion, subVersions]) => ({
+        mcVersion,
+        subVersions,
+      }))
       .sort((a, b) => compareMcVersionDesc(a.mcVersion, b.mcVersion));
   }, [versions]);
 
@@ -232,30 +304,11 @@ export function VersionSelectorDialog({ open: controlledOpen, onOpenChange, comp
     [mcTree, selectedMcVersion]
   );
 
-  // 7 种固定的 loader 类型（包括原版 vanilla）
-  const AVAILABLE_LOADERS = ["vanilla", "forge", "liteloader", "neoforge", "optifine", "fabric", "quilt"];
-
-  // 第二步：当前 MC 版本下，7 种 loader 各有多少个版本
-  const loaderAvailability = useMemo(() => {
-    if (!currentMcNode) return [];
-    return AVAILABLE_LOADERS.map((lt) => ({
-      type: lt,
-      versions: currentMcNode.loaders[lt] || [],
-    }));
-  }, [currentMcNode]);
-
-  // 第三步：当前 MC 版本 + loader 下的版本列表
-  // 需求2：modloader 选中后，version 列表要包含原版 + modloader 版本
+  // 当前版本列表
   const currentVersionList = useMemo(() => {
-    if (!currentMcNode || !selectedLoader) return [];
-    const loaderVersions = currentMcNode.loaders[selectedLoader] || [];
-    if (selectedLoader === "vanilla") {
-      return loaderVersions;
-    }
-    // 非 vanilla 的 modloader：将原版版本和 modloader 版本合并
-    const vanillaVersions = currentMcNode.loaders["vanilla"] || [];
-    return [...vanillaVersions, ...loaderVersions];
-  }, [currentMcNode, selectedLoader]);
+    if (!currentMcNode) return [];
+    return currentMcNode.subVersions;
+  }, [currentMcNode]);
 
   // 第一步：过滤 MC 版本（同时搜索子版本实例名）
   const filteredMcTree = useMemo(() => {
@@ -263,11 +316,9 @@ export function VersionSelectorDialog({ open: controlledOpen, onOpenChange, comp
     const wrapped = mcTree.map((n) => {
       const matchingInstances: ParsedVersion[] = [];
       if (q) {
-        for (const loaderType of Object.keys(n.loaders)) {
-          for (const inst of n.loaders[loaderType]) {
-            if (inst.name.toLowerCase().includes(q)) {
-              matchingInstances.push(inst);
-            }
+        for (const inst of n.subVersions) {
+          if (inst.name.toLowerCase().includes(q)) {
+            matchingInstances.push(inst);
           }
         }
       }
@@ -279,20 +330,7 @@ export function VersionSelectorDialog({ open: controlledOpen, onOpenChange, comp
     return wrapped.filter((item) => item.matchesMc || item.matchingInstances.length > 0);
   }, [mcTree, mcSearchQuery]);
 
-  // 第二步：过滤 loader
-  const filteredLoaders = useMemo(() => {
-    if (!loaderSearchQuery) return loaderAvailability;
-    const q = loaderSearchQuery.toLowerCase();
-    return loaderAvailability.filter((item) => {
-      const display = LOADER_DISPLAY[item.type]?.label;
-      return (
-        (display ? t(display).toLowerCase().includes(q) : false) ||
-        item.type.toLowerCase().includes(q)
-      );
-    });
-  }, [loaderAvailability, loaderSearchQuery, t]);
-
-  // 第三步：过滤版本列表
+  // 第二步：过滤版本列表
   const filteredVersionList = useMemo(() => {
     if (!versionSearchQuery) return currentVersionList;
     const q = versionSearchQuery.toLowerCase();
@@ -303,12 +341,6 @@ export function VersionSelectorDialog({ open: controlledOpen, onOpenChange, comp
 
   const handleSelectMcVersion = (mcVersion: string) => {
     setSelectedMcVersion(mcVersion);
-    setLoaderSearchQuery("");
-    setStep("loader");
-  };
-
-  const handleSelectLoader = (loaderType: string) => {
-    setSelectedLoader(loaderType);
     setVersionSearchQuery("");
     setStep("version");
   };
@@ -316,11 +348,11 @@ export function VersionSelectorDialog({ open: controlledOpen, onOpenChange, comp
   const handleSelectVersion = (version: ParsedVersion) => {
     const isVanilla = version.loaderType === "vanilla";
     updateConfig({
-      // 原版版本号（如 1.20.1）
-      versionName: version.mcVersion,
+      // 整合包目录名（如 PVZ_Survive）
+      versionName: version.name,
       // 加载器类型：0=原版，1=modloader
       loadType: isVanilla ? "0" : "1",
-      // modloader 文件夹名（如 1.20.1-forge-47.2.0），原版时为空
+      // modloader 文件夹名（如 PVZ_Survive），原版时为空
       loadName: isVanilla ? "" : version.name,
     });
     setOpen(false);
@@ -328,13 +360,9 @@ export function VersionSelectorDialog({ open: controlledOpen, onOpenChange, comp
 
   const goBack = () => {
     if (step === "version") {
-      setStep("loader");
-      setSelectedLoader(null);
-      setVersionSearchQuery("");
-    } else if (step === "loader") {
       setStep("mc");
       setSelectedMcVersion(null);
-      setLoaderSearchQuery("");
+      setVersionSearchQuery("");
     }
   };
 
@@ -378,19 +406,11 @@ export function VersionSelectorDialog({ open: controlledOpen, onOpenChange, comp
                 {t("common.back")}
               </Button>
               <div className="text-xs text-muted-foreground">
-                {step === "loader" && (
+                {step === "version" && (
                   <>
                     MC {t("launch.versionSelector.version")}:{" "}
                     <span className="font-medium text-foreground">
                       {selectedMcVersion}
-                    </span>
-                  </>
-                )}
-                {step === "version" && (
-                  <>
-                    {selectedMcVersion} ·{" "}
-                    <span className="font-medium text-foreground">
-                      {LOADER_DISPLAY[selectedLoader || ""] ? t(LOADER_DISPLAY[selectedLoader || ""].label) : selectedLoader}
                     </span>
                   </>
                 )}
@@ -405,20 +425,15 @@ export function VersionSelectorDialog({ open: controlledOpen, onOpenChange, comp
               placeholder={
                 step === "mc"
                   ? t("launch.versionSelector.searchVanillaVersions")
-                  : step === "loader"
-                  ? t("launch.versionSelector.searchModLoaders")
                   : t("launch.versionSelector.searchVersions")
               }
               value={
                 step === "mc"
                   ? mcSearchQuery
-                  : step === "loader"
-                  ? loaderSearchQuery
                   : versionSearchQuery
               }
               onChange={(e) => {
                 if (step === "mc") setMcSearchQuery(e.target.value);
-                else if (step === "loader") setLoaderSearchQuery(e.target.value);
                 else setVersionSearchQuery(e.target.value);
               }}
               className="pl-9 text-xs"
@@ -445,10 +460,7 @@ export function VersionSelectorDialog({ open: controlledOpen, onOpenChange, comp
               ) : (
                 filteredMcTree.map((item) => {
                   const node = item.node;
-                  const totalCount = Object.keys(node.loaders).reduce(
-                    (sum, k) => sum + (node.loaders[k]?.length || 0),
-                    0
-                  );
+                  const totalCount = node.subVersions.length;
 
                   return (
                     <motion.button
@@ -495,82 +507,12 @@ export function VersionSelectorDialog({ open: controlledOpen, onOpenChange, comp
                   );
                 })
               )
-            ) : step === "loader" ? (
-              currentMcNode ? (
-                filteredLoaders.length === 0 ? (
-                  <div className="flex flex-col items-center justify-center py-12 text-center">
-                    <PackageOpen className="size-10 text-muted-foreground/40 mb-3" />
-                    <p className="text-sm text-muted-foreground">
-                      {loaderSearchQuery ? t("launch.versionSelector.noMatchingModLoadersFound") : t("launch.versionSelector.noModLoadersAvailable")}
-                    </p>
-                  </div>
-                ) : (
-                  filteredLoaders.map((item) => {
-                  const display = LOADER_DISPLAY[item.type];
-                  const count = item.versions.length;
-                  const preview =
-                    count > 0
-                      ? item.versions
-                          .slice(0, 2)
-                          .map((v) => v.loaderVersion)
-                          .join(", ") + (count > 2 ? "..." : "")
-                      : "";
-
-                  return (
-                    <motion.button
-                      key={item.type}
-                      onClick={() => handleSelectLoader(item.type)}
-                      className={cn(
-                        "w-full flex items-center gap-3 rounded-lg p-3 transition-colors text-left",
-                        "hover:bg-accent/50",
-                        count === 0 && "opacity-50"
-                      )}
-                      whileHover={count > 0 ? { scale: 1.01 } : {}}
-                      whileTap={count > 0 ? { scale: 0.99 } : {}}
-                    >
-                      <LoaderIcon kind={inferLoaderKind(item.type) as LoaderKind} className="size-7 shrink-0" />
-
-                      <div className="flex-1 min-w-0 overflow-hidden">
-                        <div className="flex items-center gap-2">
-                          <span
-                            className={cn(
-                              "px-1.5 py-0.5 rounded text-[10px] font-medium",
-                              display?.color ||
-                                "bg-gray-500/10 text-gray-600 dark:text-gray-400"
-                            )}
-                          >
-                            {display ? t(display.label) : item.type}
-                          </span>
-                          <span className="text-xs text-muted-foreground">
-                            {t("launch.versionSelector.countVersions", { count: count })}
-                          </span>
-                        </div>
-                        {preview && (
-                          <div className="text-[11px] text-muted-foreground/70 mt-1 truncate">
-                            {preview}
-                          </div>
-                        )}
-                      </div>
-
-                      <ChevronDown className="size-4 shrink-0 text-muted-foreground rotate-[-90deg]" />
-                    </motion.button>
-                  );
-                  })
-                )
-              ) : (
-                <div className="flex flex-col items-center justify-center py-12 text-center">
-                  <PackageOpen className="size-10 text-muted-foreground/40 mb-3" />
-                  <p className="text-sm text-muted-foreground">
-                    {t("launch.versionSelector.noLoadersAreAvailableForThisMcVersion")}
-                  </p>
-                </div>
-              )
-            ) : (
-              // 第三步：版本列表
+            ) : step === "version" ? (
+              // 第二步：版本列表
               filteredVersionList.length > 0 ? (
                 filteredVersionList.map((version) => {
                   const isSelected =
-                    config.versionName === version.mcVersion &&
+                    config.versionName === version.name &&
                     (version.loaderType === "vanilla"
                       ? config.loadType === "0"
                       : config.loadName === version.name);
@@ -631,7 +573,7 @@ export function VersionSelectorDialog({ open: controlledOpen, onOpenChange, comp
                   </p>
                 </div>
               )
-            )}
+            ) : null}
           </div>
 
           {/* 刷新按钮 */}

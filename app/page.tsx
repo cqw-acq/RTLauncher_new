@@ -77,6 +77,12 @@ export default function Home() {
   const versionName = selectedInstance?.minecraft_version || config.versionName || t("launch.noVersionSelected");
   const loaderName =
     selectedInstance?.loader || (config.loadType === "0" ? "Vanilla" : t("home.modLoader"));
+
+  // 获取显示的整合包名称
+  const displayInstanceName = config.loadName || config.versionName || t("launch.noVersionSelected");
+
+  // 获取MC版本号（优先从selectedInstance获取，如果没有则从config获取）
+  const displayMcVersion = selectedInstance?.minecraft_version || versionName;
   const profileStatusMap: Record<string, string> = {
     "LittleSkin 登录": t("account.littleSkinSignIn"),
     "第三方登录": t("account.thirdPartySignIn"),
@@ -252,12 +258,18 @@ export default function Home() {
                             </Badge>
                           </div>
                           <h2 className="truncate text-2xl font-semibold tracking-tight">
-                            {selectedInstance?.name || versionName}
+                            {selectedInstance?.name || displayInstanceName}
                           </h2>
                           <p className="mt-2 text-sm text-muted-foreground">
-                            {selectedInstance
-                              ? `Minecraft ${versionName} · ${t("home.modsCountModsInstalled", { modsCount: selectedInstance.mods_count })}`
-                              : t("home.selectAnInstalledVersionToLaunchTheGameHere")}
+                            {selectedInstance ? (
+                              <>
+                                Minecraft {selectedInstance.minecraft_version} · {t("home.modsCountModsInstalled", { modsCount: selectedInstance.mods_count })}
+                              </>
+                            ) : (
+                              <>
+                                Minecraft {displayMcVersion}
+                              </>
+                            )}
                           </p>
 
                           <div className="mt-4">
