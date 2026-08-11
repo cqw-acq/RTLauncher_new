@@ -5,7 +5,7 @@ use crate::http_client::{
 use futures::future::join_all;
 use scraper::{Html, Selector};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs::{self, File};
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
@@ -307,7 +307,7 @@ pub async fn get_modrinth_mod_files(slug: String) -> Result<String, String> {
 #[tauri::command]
 pub async fn search_modrinth_projects(
     query: String,
-    project_type: String,
+    project_type: Option<String>,
     limit: Option<u32>,
 ) -> Result<String, String> {
     let query = query.trim();
@@ -315,22 +315,29 @@ pub async fn search_modrinth_projects(
         return Err("query cannot be empty".to_string());
     }
 
-    let project_type = project_type.trim().to_ascii_lowercase();
-    if !matches!(
-        project_type.as_str(),
-        "mod" | "modpack" | "resourcepack" | "shader" | "datapack" | "world"
-    ) {
-        return Err(format!("unsupported Modrinth project type: {}", project_type));
-    }
-
     let limit = limit.unwrap_or(25).clamp(1, 100);
-    let facets = format!(r#"[["project_type:{}"]]"#, project_type);
-    let url = format!(
-        "https://api.modrinth.com/v2/search?query={}&limit={}&facets={}",
-        urlencoding(query),
-        limit,
-        urlencoding(&facets),
-    );
+    let url = if let Some(project_type) = project_type {
+        let project_type = project_type.trim().to_ascii_lowercase();
+        if !matches!(
+            project_type.as_str(),
+            "mod" | "modpack" | "resourcepack" | "shader" | "datapack" | "world"
+        ) {
+            return Err(format!("unsupported Modrinth project type: {}", project_type));
+        }
+        let facets = format!(r#"[["project_type:{}"]]"#, project_type);
+        format!(
+            "https://api.modrinth.com/v2/search?query={}&limit={}&facets={}",
+            urlencoding(query),
+            limit,
+            urlencoding(&facets),
+        )
+    } else {
+        format!(
+            "https://api.modrinth.com/v2/search?query={}&limit={}",
+            urlencoding(query),
+            limit,
+        )
+    };
     let client = modrinth_client().await;
     let response = get_with_retry(
         &client,
@@ -526,6 +533,7 @@ async fn resolve_modrinth_dependency_version(
 ///
 /// A URL that does not belong to Modrinth deliberately returns an empty list:
 /// the selected CurseForge file cannot be safely matched without its file ID.
+#[allow(dependency_on_unit_never_type_fallback)]
 #[tauri::command]
 pub async fn get_modrinth_required_dependencies(
     project_slug: String,
@@ -770,6 +778,7 @@ async fn get_curseforge_project_identity(
 /// Resolve the selected CurseForge file's transitive required dependencies.
 /// CurseForge identifies required files by project rather than file ID, so the
 /// latest compatible stable file is selected for each dependency project.
+#[allow(dependency_on_unit_never_type_fallback)]
 #[tauri::command]
 pub async fn get_curseforge_required_dependencies(
     project_slug: String,
@@ -1496,62 +1505,3 @@ pub async fn search_curseforge_projects(
     serde_json::to_string(&response_data).map_err(|_e| "Failed to serialize JSON".to_string())
 }
 
-#[allow(dependency_on_unit_never_type_fallback)]
-#[tauri::command]
-pub async fn search_modrinth_projects(
-    query: String,
-    project_type: Option<String>,
-    limit: Option<u32>,
-) -> Result<String, String> {
-    let client = modrinth_client().await;
-    let semaphore = global_semaphore().await;
-    let retry_cfg = RetryConfig {
-        max_retries: 3,
-        initial_delay_ms: 500,
-        max_delay_ms: 3000,
-    };
-    let lm = limit.unwrap_or(25);
-    let encoded_query = urlencoding(&query);
-    let mut facets = String::new();
-    if let Some(pt) = project_type {
-        let pt_lower = pt.to_lowercase();
-        facets = format!(
-            "[[\"project_type:{}\"]]",
-            match pt_lower.as_str() {
-                "modpack" => "modpack",
-                "resourcepack" | "texturepack" => "resourcepack",
-                "shaderpack" | "shaders" => "shader",
-                "datapack" => "datapack",
-                "world" | "worlds" => "project:world",
-                _ => "mod",
-            }
-        );
-    }
-    let encoded_facets = urlencoding(&facets);
-    let url = if facets.is_empty() {
-        format!(
-            "https://api.modrinth.com/v2/search?query={}&limit={}",
-            encoded_query, lm
-        )
-    } else {
-        format!(
-            "https://api.modrinth.com/v2/search?query={}&limit={}&facets={}",
-            encoded_query, lm, encoded_facets
-        )
-    };
-    let _permit = semaphore
-        .acquire()
-        .await
-        .map_err(|e| format!("信号量获取失败: {}", e))?;
-    let response = get_with_retry(&client, &url, Some(retry_cfg))
-        .await
-        .map_err(|e| format!("Modrinth API request failed (retried 3 times): {}", e))?;
-    if !response.status().is_success() {
-        return Err(format!("Modrinth API 返回错误状态: {}", response.status()));
-    }
-    let text = response
-        .text()
-        .await
-        .map_err(|e| format!("读取响应失败: {}", e))?;
-    Ok(text)
-}

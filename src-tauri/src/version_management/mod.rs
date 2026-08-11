@@ -105,15 +105,25 @@ fn detect_loader_from_main_class(main_class: &str) -> &'static str {
 /// 从版本文件夹名中快速推断加载器（备用方案）
 fn detect_loader_from_name(name: &str) -> &'static str {
     let lower = name.to_lowercase();
+    // 使用更精确的匹配模式，避免误报
+    // 例如： "-fabric-", "_fabric_", "-fabric", "fabric-", "fabric_" 等模式
     if lower.contains("optifine") {
         "OptiFine"
     } else if lower.contains("neoforge") {
         "NeoForge"
-    } else if lower.contains("fabric") {
+    } else if lower.contains("-fabric-") || lower.contains("_fabric_") ||
+              lower.ends_with("-fabric") || lower.ends_with("_fabric") ||
+              lower.starts_with("fabric-") || lower.starts_with("fabric_") ||
+              lower.contains("-fabricloader-") || lower.contains("_fabricloader_") {
         "Fabric"
-    } else if lower.contains("quilt") {
+    } else if lower.contains("-quilt-") || lower.contains("_quilt_") ||
+              lower.ends_with("-quilt") || lower.ends_with("_quilt") ||
+              lower.starts_with("quilt-") || lower.starts_with("quilt_") ||
+              lower.contains("-quiltloader-") || lower.contains("_quiltloader_") {
         "Quilt"
-    } else if lower.contains("forge") {
+    } else if lower.contains("-forge-") || lower.contains("_forge_") ||
+              lower.ends_with("-forge") || lower.ends_with("_forge") ||
+              lower.starts_with("forge-") || lower.starts_with("forge_") {
         "Forge"
     } else if lower.contains("liteloader") {
         "LiteLoader"
@@ -830,6 +840,28 @@ mod tests {
         assert_eq!(
             detect_loader_from_name("1.21.1-OptiFine-HD_U_I7"),
             "OptiFine"
+        );
+    }
+
+    #[test]
+    fn avoids_fabric_false_positive() {
+        // 测试包含 "fabric" 但不是加载器的名称不会被误判
+        assert_eq!(
+            detect_loader_from_name("SHser-Basic-Package Edit by Meversation"),
+            "Vanilla"
+        );
+        assert_eq!(
+            detect_loader_from_name("some-fabric-name-not-loader"),
+            "Vanilla"
+        );
+        // 但实际的 Fabric 加载器格式应该被正确识别
+        assert_eq!(
+            detect_loader_from_name("fabric-loader-0.15.0-1.21.1"),
+            "Fabric"
+        );
+        assert_eq!(
+            detect_loader_from_name("1.21.1-fabric-0.15.11"),
+            "Fabric"
         );
     }
 }

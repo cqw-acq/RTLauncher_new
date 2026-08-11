@@ -2,14 +2,13 @@ use anyhow::Context;
 use os_info::Type;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use std::env::consts::OS;
 use std::{
     collections::{HashMap, HashSet},
     path::PathBuf,
     sync::{Mutex, OnceLock},
 };
 use std::{
-    io::{BufRead, BufReader},
+    io::{BufRead, BufReader, Read},
     process::{Child, Command, Stdio},
     thread,
 };
@@ -419,9 +418,14 @@ pub fn run_command(
             .map_err(|e| format!("无法创建游戏目录 {}: {}", MCPath.display(), e))?;
     }
 
-    let mut command = match OS {
-        "windows" | "linux" | "macos" => Command::new(&javaPath),
-        _ => return Err("不支持的操作系统".to_string().into()),
+    let mut command = if cfg!(any(
+        target_os = "windows",
+        target_os = "linux",
+        target_os = "macos"
+    )) {
+        Command::new(&javaPath)
+    } else {
+        return Err("不支持的操作系统".to_string().into());
     };
     
     // 设置工作目录为 minecraft_path（共享资源目录）
@@ -2138,20 +2142,18 @@ fn build_jvm_arguments_inner(
         }
     }
 
-    let fixed_params = vec![
-        // 新版 macOS 的 os.name 返回 "Mac OS" 而非 "Mac OS X"，旧版 LWJGL 不识别
-        // 强制设为 "Mac OS X" 以确保 LWJGL 正确识别平台
-        if OS == "macos" {
-            "-Dos.name=Mac OS X".to_string()
-        } else {
-            format!("-Dos.name={}", os_info.os_type())
-        },
-        format!("-Dos.version={}", os_info.version()),
-        format!(
-            "-DlibraryDirectory={}",
-            format_path(minecraft_path_buf.join("libraries"))
-        ),
-    ];
+    let mut fixed_params = vec![format!(
+        "-DlibraryDirectory={}",
+        format_path(minecraft_path_buf.join("libraries"))
+    )];
+
+    // Linux 和 Windows 必须保留 JVM 自己提供的
+    // os.name/os.version/os.arch。LWJGL 会区分大小写检查 "Linux"；
+    // 将它改成 "linux" 会令游戏以 -3 退出，Unix 显示为退出码 253。
+    // 仅为需要兼容旧版 LWJGL 的 macOS 保留历史兼容值。
+    if cfg!(target_os = "macos") {
+        fixed_params.push("-Dos.name=Mac OS X".to_string());
+    }
 
     // 确保 -Djava.library.path 参数总是被添加
     // 根据loadType和loadName来决定使用哪个版本名
@@ -2601,6 +2603,25 @@ fn major_version_to_runtime_name(major: u32) -> Option<&'static str> {
     }
 }
 
+/// 从游戏 JAR 的 class 文件推断真实 Java 需求，避免整合包中过期的
+/// `javaVersion` 导致启动器选择过旧的 Java。
+fn required_java_major_from_jar(jar_path: &std::path::Path) -> Option<u32> {
+    let file = std::fs::File::open(jar_path).ok()?;
+    let mut archive = zip::ZipArchive::new(file).ok()?;
+    for index in 0..archive.len() {
+        let mut entry = archive.by_index(index).ok()?;
+        if !entry.name().ends_with(".class") || entry.name().starts_with("META-INF/versions/") {
+            continue;
+        }
+        let mut header = [0_u8; 8];
+        if entry.read_exact(&mut header).is_err() || header[..4] != [0xCA, 0xFE, 0xBA, 0xBE] {
+            continue;
+        }
+        return (u16::from_be_bytes([header[6], header[7]]) as u32).checked_sub(44);
+    }
+    None
+}
+
 /// 启动游戏（构建参数并执行 Java 进程）
 #[tauri::command]
 pub fn launch_game(
@@ -2631,11 +2652,28 @@ pub fn launch_game(
         .join(version_name)
         .join(format!("{}.json", version_name));
 
-    let target_major: Option<u32> = (|| {
+    let metadata_major: Option<u32> = (|| {
         let file = std::fs::File::open(&version_json_path).ok()?;
         let vj: VersionJson = serde_json::from_reader(file).ok()?;
         vj.java_version.map(|jv| jv.major_version)
     })();
+
+    let version_jar_path = PathBuf::from(minecraft_path)
+        .join("versions")
+        .join(version_name)
+        .join(format!("{}.jar", version_name));
+    let jar_major = required_java_major_from_jar(&version_jar_path);
+    let target_major = match (metadata_major, jar_major) {
+        (Some(metadata), Some(actual)) if actual > metadata => {
+            println!(
+                "[启动器] 版本 JSON 声明 Java {}，但游戏 JAR 字节码需要 Java {}，以 JAR 为准",
+                metadata, actual
+            );
+            Some(actual)
+        }
+        (Some(metadata), _) => Some(metadata),
+        (None, actual) => actual,
+    };
 
     if let Some(major) = target_major {
         println!(
