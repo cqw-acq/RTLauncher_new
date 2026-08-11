@@ -2,6 +2,8 @@
 
 一款现代化的 Minecraft 桌面启动器，基于 **Tauri 2** (Rust) + **Next.js 16** 构建，轻量、快速且跨平台。
 
+如果需要更多支持,欢迎访问官方文档[RTL官网](rtlauncher.cfd/docs "Docs"),也可以加入RTL用户群:1013525092
+
 ## 功能特性
 
 -  **多版本支持** — 支持原版、Forge、NeoForge、Fabric、Quilt、LiteLoader、OptiFine 共 7 种 Mod Loader
