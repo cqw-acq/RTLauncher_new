@@ -105,15 +105,18 @@ fn detect_loader_from_main_class(main_class: &str) -> &'static str {
 /// 从版本文件夹名中快速推断加载器（备用方案）
 fn detect_loader_from_name(name: &str) -> &'static str {
     let lower = name.to_lowercase();
+    let starts_with_mc_version = regex::Regex::new(r"^\d+\.\d+(?:\.\d+)?[-_]")
+        .map(|re| re.is_match(&lower))
+        .unwrap_or(false);
     // 使用更精确的匹配模式，避免误报
     // 例如： "-fabric-", "_fabric_", "-fabric", "fabric-", "fabric_" 等模式
     if lower.contains("optifine") {
         "OptiFine"
     } else if lower.contains("neoforge") {
         "NeoForge"
-    } else if lower.contains("-fabric-") || lower.contains("_fabric_") ||
+    } else if (starts_with_mc_version && (lower.contains("-fabric-") || lower.contains("_fabric_"))) ||
               lower.ends_with("-fabric") || lower.ends_with("_fabric") ||
-              lower.starts_with("fabric-") || lower.starts_with("fabric_") ||
+              lower.starts_with("fabric-loader-") || lower.starts_with("fabric_loader_") ||
               lower.contains("-fabricloader-") || lower.contains("_fabricloader_") {
         "Fabric"
     } else if lower.contains("-quilt-") || lower.contains("_quilt_") ||
@@ -157,11 +160,18 @@ fn extract_minecraft_version(name: &str) -> String {
         return caps.get(1).unwrap().as_str().to_string();
     }
     
-    // 模式 3：版本号在字符串中间，例如 "fabric-loader-0.15.0-1.21.1"
-    // 匹配被非数字字符包围的版本号
-    let middle_re = regex::Regex::new(r"(?:^|[^0-9])(\d+\.\d+(?:\.\d+)?)(?:[^0-9]|$)").unwrap();
-    if let Some(caps) = middle_re.captures(name) {
-        return caps.get(1).unwrap().as_str().to_string();
+    // 模式 3：版本号在字符串中间。一个名称可能同时包含加载器版本和
+    // Minecraft 版本（如 fabric-loader-0.15.0-1.21.1），优先选 1.x，
+    // 否则选日历版本中最后一个主版本 >= 20 的候选。
+    let middle_re = regex::Regex::new(r"\d+\.\d+(?:\.\d+)?").unwrap();
+    let candidates: Vec<&str> = middle_re.find_iter(name).map(|m| m.as_str()).collect();
+    if let Some(version) = candidates.iter().find(|v| v.starts_with("1.")) {
+        return (*version).to_string();
+    }
+    if let Some(version) = candidates.iter().rev().find(|v| {
+        v.split('.').next().and_then(|n| n.parse::<u32>().ok()).unwrap_or(0) >= 20
+    }) {
+        return (*version).to_string();
     }
     
     // 模式 4：处理类似 "26.3-snapshot-5" 的格式

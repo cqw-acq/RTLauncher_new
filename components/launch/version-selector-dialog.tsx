@@ -149,11 +149,19 @@ function extractMinecraftVersion(name: string): string {
     return match[1];
   }
 
-  // 模式 3：版本号在字符串中间，例如 "fabric-loader-0.15.0-1.21.1"
-  const middleRe = /(?:^|[^0-9])(\d+\.\d+(?:\.\d+)?)(?:[^0-9]|$)/;
-  const middleMatch = name.match(middleRe);
-  if (middleMatch) {
-    return middleMatch[1];
+  // 模式 3：名称可能同时包含加载器版本和 MC 版本。
+  // 例如 fabric-loader-0.15.0-1.21.1 应选 1.21.1，而不是 0.15.0。
+  const candidates = name.match(/\d+\.\d+(?:\.\d+)?/g) ?? [];
+  const legacyRelease = candidates.find((candidate) => candidate.startsWith("1."));
+  if (legacyRelease) {
+    return legacyRelease;
+  }
+  const calendarRelease = [...candidates].reverse().find((candidate) => {
+    const major = Number.parseInt(candidate.split(".")[0], 10);
+    return major >= 20;
+  });
+  if (calendarRelease) {
+    return calendarRelease;
   }
 
   // 模式 4：处理类似 "26.3-snapshot-5" 的格式
@@ -351,7 +359,7 @@ export function VersionSelectorDialog({ open: controlledOpen, onOpenChange, comp
       // 整合包目录名（如 PVZ_Survive）
       versionName: version.name,
       // 基础 Minecraft 版本（用于定位游戏 JAR）
-      minecraftVersion: version.id,
+      minecraftVersion: version.mcVersion,
       // 加载器类型：0=原版，1=modloader
       loadType: isVanilla ? "0" : "1",
       // modloader 文件夹名（如 PVZ_Survive），原版时为空

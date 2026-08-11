@@ -2,6 +2,8 @@
  * 测试版本提取逻辑
  */
 
+import { describe, expect, test } from "vitest";
+
 // 复制自 version-selector-dialog.tsx 的函数
 function extractMinecraftVersion(name: string): string {
   // 模式 1：快照版本格式，如 25w42a, 24w12a
@@ -17,11 +19,18 @@ function extractMinecraftVersion(name: string): string {
     return match[1];
   }
   
-  // 模式 3：版本号在字符串中间，例如 "fabric-loader-0.15.0-1.21.1"
-  const middleRe = /(?:^|[^0-9])(\d+\.\d+(?:\.\d+)?)(?:[^0-9]|$)/;
-  const middleMatch = name.match(middleRe);
-  if (middleMatch) {
-    return middleMatch[1];
+  // 模式 3：同时包含加载器版本和 MC 版本时，选择真实 MC 版本。
+  const candidates = name.match(/\d+\.\d+(?:\.\d+)?/g) ?? [];
+  const legacyRelease = candidates.find((candidate) => candidate.startsWith("1."));
+  if (legacyRelease) {
+    return legacyRelease;
+  }
+  const calendarRelease = [...candidates].reverse().find((candidate) => {
+    const major = Number.parseInt(candidate.split(".")[0], 10);
+    return major >= 20;
+  });
+  if (calendarRelease) {
+    return calendarRelease;
   }
   
   // 模式 4：处理类似 "26.3-snapshot-5" 的格式
