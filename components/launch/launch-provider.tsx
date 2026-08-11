@@ -380,7 +380,7 @@ export function LaunchProvider({ children }: { children: React.ReactNode }) {
           wrapperPath: merged.wrapperPath,
           maxMemory: merged.maxMemory,
           versionName: merged.versionName,
-          minecraftVersion: merged.minecraftVersion || merged.versionName,
+          minecraftVersion: merged.minecraftVersion,
           playerName: merged.playerName || selectedProfile.name,
           authToken: merged.authToken || selectedProfile.accessToken || "",
           uuid: merged.uuid || selectedProfile.uuid || selectedProfile.id,

@@ -1322,7 +1322,14 @@ fn build_jvm_arguments_inner(
     
     // 确定基础 Minecraft 版本（用于定位游戏 JAR）
     // 优先级：传入的 minecraft_version > parent_version (inheritsFrom) > patches 中的 game 版本 > version_name
-    let base_minecraft_version = if !minecraft_version.is_empty() {
+    let supplied_version_jar = minecraft_path_buf
+        .join("versions")
+        .join(minecraft_version)
+        .join(format!("{}.jar", minecraft_version));
+    let supplied_version_is_trusted = !minecraft_version.is_empty()
+        && (is_plausible_minecraft_version(minecraft_version) || supplied_version_jar.is_file());
+
+    let base_minecraft_version = if supplied_version_is_trusted {
         println!("使用传入的 minecraft_version 作为基础版本: {}", minecraft_version);
         minecraft_version.to_string()
     } else if let Some(parent) = &parent_version {
@@ -2622,6 +2629,18 @@ fn required_java_major_from_jar(jar_path: &std::path::Path) -> Option<u32> {
     None
 }
 
+fn is_plausible_minecraft_version(version: &str) -> bool {
+    static VERSION_PATTERN: OnceLock<Regex> = OnceLock::new();
+    VERSION_PATTERN
+        .get_or_init(|| {
+            Regex::new(
+                r"^(?:\d+\.\d+(?:\.\d+)?(?:-(?:pre|rc)\d+)?|\d{2}w\d{2}[a-z]|\d{2,}(?:\.\d+)?(?:-snapshot(?:-\d+)?)?)$",
+            )
+            .expect("valid Minecraft version regex")
+        })
+        .is_match(version)
+}
+
 /// 启动游戏（构建参数并执行 Java 进程）
 #[tauri::command]
 pub fn launch_game(
@@ -2815,7 +2834,9 @@ pub fn launch_game(
 
 #[cfg(test)]
 mod tests {
-    use super::{append_loader_jvm_args, launcher_rules_allow};
+    use super::{
+        append_loader_jvm_args, is_plausible_minecraft_version, launcher_rules_allow,
+    };
     use serde_json::json;
 
     #[test]
@@ -2878,6 +2899,16 @@ mod tests {
         let rules = json!([{ "action": "allow" }]);
 
         assert!(launcher_rules_allow(Some(&rules)));
+    }
+
+    #[test]
+    fn validates_base_minecraft_version_formats() {
+        for version in ["1.20.1", "1.21-rc1", "25w42a", "26", "26.3-snapshot-5"] {
+            assert!(is_plausible_minecraft_version(version), "{version}");
+        }
+        for instance_name in ["PVZ_Survive", "SHser-Basic-Package", "fabric-loader-0.15.0"] {
+            assert!(!is_plausible_minecraft_version(instance_name), "{instance_name}");
+        }
     }
 }
 
