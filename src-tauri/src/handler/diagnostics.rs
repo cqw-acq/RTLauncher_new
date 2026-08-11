@@ -175,6 +175,20 @@ pub fn collect_system_info() -> SystemInfo {
                 .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
                 .unwrap_or_else(|_| "Unknown".to_string())
         },
+        "linux" => {
+            std::process::Command::new("cat")
+                .arg("/etc/os-release")
+                .output()
+                .map(|o| {
+                    let output = String::from_utf8_lossy(&o.stdout);
+                    output.lines()
+                        .find(|line| line.starts_with("PRETTY_NAME"))
+                        .and_then(|line| line.split('=').nth(1))
+                        .map(|s| s.trim().trim_matches('"').to_string())
+                        .unwrap_or_else(|| "Unknown".to_string())
+                })
+                .unwrap_or_else(|_| "Unknown".to_string())
+        },
         "macos" => {
             std::process::Command::new("sw_vers")
                 .arg("-productVersion")
@@ -185,14 +199,40 @@ pub fn collect_system_info() -> SystemInfo {
         _ => "Unknown".to_string(),
     };
 
-    let cpu_model = std::process::Command::new("cmd")
-        .args(["/c", "wmic cpu get name"])
-        .output()
-        .map(|o| {
-            let output = String::from_utf8_lossy(&o.stdout);
-            output.lines().nth(1).unwrap_or("Unknown").trim().to_string()
-        })
-        .unwrap_or_else(|_| "Unknown".to_string());
+    let cpu_model = match os.as_str() {
+        "windows" => {
+            std::process::Command::new("cmd")
+                .args(["/c", "wmic cpu get name"])
+                .output()
+                .map(|o| {
+                    let output = String::from_utf8_lossy(&o.stdout);
+                    output.lines().nth(1).unwrap_or("Unknown").trim().to_string()
+                })
+                .unwrap_or_else(|_| "Unknown".to_string())
+        },
+        "linux" => {
+            std::process::Command::new("cat")
+                .arg("/proc/cpuinfo")
+                .output()
+                .map(|o| {
+                    let output = String::from_utf8_lossy(&o.stdout);
+                    output.lines()
+                        .find(|line| line.starts_with("model name"))
+                        .and_then(|line| line.split(':').nth(1))
+                        .map(|s| s.trim().to_string())
+                        .unwrap_or_else(|| "Unknown".to_string())
+                })
+                .unwrap_or_else(|_| "Unknown".to_string())
+        },
+        "macos" => {
+            std::process::Command::new("sysctl")
+                .args(["-n", "machdep.cpu.brand_string"])
+                .output()
+                .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+                .unwrap_or_else(|_| "Unknown".to_string())
+        },
+        _ => "Unknown".to_string(),
+    };
 
     let cpu_cores = std::thread::available_parallelism()
         .map(|p| p.get())
@@ -220,12 +260,12 @@ fn get_memory_info() -> (u64, u64) {
         let output = Command::new("cmd")
             .args(["/c", "wmic OS get FreePhysicalMemory,TotalVisibleMemorySize /Value"])
             .output();
-        
+
         if let Ok(output) = output {
             let stdout = String::from_utf8_lossy(&output.stdout);
             let mut total = 0u64;
             let mut free = 0u64;
-            
+
             for line in stdout.lines() {
                 if line.starts_with("TotalVisibleMemorySize=") {
                     if let Some(val) = line.split('=').nth(1) {
@@ -241,7 +281,76 @@ fn get_memory_info() -> (u64, u64) {
             return (total, free);
         }
     }
-    
+
+    #[cfg(target_os = "linux")]
+    {
+        use std::process::Command;
+        let output = Command::new("cat")
+            .arg("/proc/meminfo")
+            .output();
+
+        if let Ok(output) = output {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let mut total = 0u64;
+            let mut available = 0u64;
+
+            for line in stdout.lines() {
+                if line.starts_with("MemTotal:") {
+                    if let Some(val) = line.split_whitespace().nth(1) {
+                        total = val.parse().unwrap_or(0) * 1024; // Convert KB to bytes
+                    }
+                }
+                if line.starts_with("MemAvailable:") {
+                    if let Some(val) = line.split_whitespace().nth(1) {
+                        available = val.parse().unwrap_or(0) * 1024; // Convert KB to bytes
+                    }
+                }
+            }
+            // If MemAvailable is not available, calculate it from MemFree + Buffers + Cached
+            if available == 0 {
+                let mut mem_free = 0u64;
+                let mut buffers = 0u64;
+                let mut cached = 0u64;
+
+                for line in stdout.lines() {
+                    if line.starts_with("MemFree:") {
+                        if let Some(val) = line.split_whitespace().nth(1) {
+                            mem_free = val.parse().unwrap_or(0) * 1024;
+                        }
+                    }
+                    if line.starts_with("Buffers:") {
+                        if let Some(val) = line.split_whitespace().nth(1) {
+                            buffers = val.parse().unwrap_or(0) * 1024;
+                        }
+                    }
+                    if line.starts_with("Cached:") {
+                        if let Some(val) = line.split_whitespace().nth(1) {
+                            cached = val.parse().unwrap_or(0) * 1024;
+                        }
+                    }
+                }
+                available = mem_free + buffers + cached;
+            }
+            return (total, available);
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        use std::process::Command;
+        let output = Command::new("sysctl")
+            .args(["-n", "hw.memsize"])
+            .output();
+
+        if let Ok(output) = output {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            if let Ok(total) = stdout.trim().parse::<u64>() {
+                // For macOS, we'll use total as available since getting available memory is complex
+                return (total, total);
+            }
+        }
+    }
+
     (0, 0)
 }
 
@@ -1606,375 +1715,3 @@ pub async fn export_launch_report(
     Ok(zip_path.to_string_lossy().to_string())
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ResolvedModDependency {
-    pub project_id: String,
-    pub project_slug: String,
-    pub project_name: String,
-    pub download_url: String,
-}
-
-#[tauri::command]
-pub async fn get_modrinth_required_dependencies(
-    project_slug: String,
-    mc_version: String,
-    mod_loader: String,
-    download_url: Option<String>,
-) -> Result<Vec<ResolvedModDependency>, String> {
-    let client = modrinth_client().await;
-
-    let version_id_from_url = download_url.as_ref().and_then(|u| {
-        let re = regex::Regex::new(r"/v2/version_file/([a-zA-Z0-9]+)/").ok();
-        re.and_then(|r| r.captures(u))
-            .and_then(|c| c.get(1).map(|m| m.as_str().to_string()))
-    });
-
-    let versions_url = format!(
-        "https://api.modrinth.com/v2/project/{}/version",
-        urlencoding::encode(&project_slug)
-    );
-    let versions_resp = get_with_retry(
-        &client,
-        &versions_url,
-        Some(RetryConfig {
-            max_retries: 2,
-            initial_delay_ms: 400,
-            max_delay_ms: 2000,
-        }),
-    )
-    .await
-    .map_err(|e| format!("获取 Modrinth 版本列表失败: {}", e))?;
-
-    if !versions_resp.status().is_success() {
-        return Err(format!(
-            "Modrinth 版本 API 返回错误: {}",
-            versions_resp.status()
-        ));
-    }
-
-    let versions_text = versions_resp
-        .text()
-        .await
-        .map_err(|e| format!("读取 Modrinth 响应失败: {}", e))?;
-    let versions_json: serde_json::Value =
-        serde_json::from_str(&versions_text).map_err(|e| format!("解析版本 JSON 失败: {}", e))?;
-    let versions = versions_json
-        .as_array()
-        .ok_or("Modrinth 版本列表格式不正确")?;
-
-    let mc_prefix = mc_version
-        .split('.')
-        .take(2)
-        .collect::<Vec<_>>()
-        .join(".");
-
-    let mut selected_version: Option<(serde_json::Value, String)> = None;
-
-    if let Some(ref vid) = version_id_from_url {
-        for v in versions {
-            if let Some(id) = v.get("id").and_then(|x| x.as_str()) {
-                if id == vid {
-                    selected_version = Some((v.clone(), vid.clone()));
-                    break;
-                }
-            }
-        }
-    }
-
-    if selected_version.is_none() {
-        for v in versions {
-            let game_versions = v
-                .get("game_versions")
-                .and_then(|gv| gv.as_array())
-                .cloned()
-                .unwrap_or_default();
-            let loaders = v
-                .get("loaders")
-                .and_then(|l| l.as_array())
-                .cloned()
-                .unwrap_or_default();
-
-            let matches_mc = game_versions.iter().any(|gv| {
-                gv.as_str()
-                    .map(|s| s == mc_version || s.starts_with(&mc_prefix))
-                    .unwrap_or(false)
-            });
-            let matches_loader = loaders.iter().any(|l| {
-                l.as_str()
-                    .map(|s| s.to_lowercase() == mod_loader.to_lowercase())
-                    .unwrap_or(false)
-            });
-
-            if matches_mc || matches_loader {
-                if let Some(id) = v.get("id").and_then(|x| x.as_str()) {
-                    selected_version = Some((v.clone(), id.to_string()));
-                    break;
-                }
-            }
-        }
-    }
-
-    let selected_version = match selected_version {
-        Some(v) => v,
-        None => return Ok(vec![]),
-    };
-
-    let (version_value, version_id) = selected_version;
-    let raw_deps = fetch_modrinth_version_dependencies(&project_slug, &version_id)
-        .await
-        .unwrap_or_default();
-
-    let required_deps: Vec<ApiDependency> = raw_deps
-        .into_iter()
-        .filter(|d| d.dependency_type == "required" && !is_platform_dep(&d.mod_id))
-        .collect();
-
-    let mut resolved: Vec<ResolvedModDependency> = Vec::new();
-    let sem = Arc::new(tokio::sync::Semaphore::new(3));
-    let mut tasks = Vec::new();
-
-    for dep in required_deps {
-        let dep_slug = dep.slug.clone().unwrap_or_else(|| dep.mod_id.clone());
-        let permit = sem.clone().acquire_owned().await.map_err(|e| e.to_string())?;
-        let mc_ver = mc_version.clone();
-        let loader = mod_loader.clone();
-        let dep_name = dep.mod_id.clone();
-        let task = tokio::spawn(async move {
-            let _permit = permit;
-            let res = search_modrinth_with_deps(&dep_slug, &mc_ver, &loader).await;
-            (dep_name, dep_slug, res)
-        });
-        tasks.push(task);
-    }
-
-    let task_results = join_all(tasks).await;
-    for tr in task_results {
-        if let Ok((dep_name, dep_slug, res_opt)) = tr {
-            if let Some(mwd) = res_opt {
-                if let (Some(url), Some(title)) = (
-                    mwd.search_result.download_url,
-                    Some(mwd.search_result.title),
-                ) {
-                    resolved.push(ResolvedModDependency {
-                        project_id: mwd.search_result.mod_id.clone(),
-                        project_slug: if mwd.search_result.slug.is_empty() { dep_slug.clone() } else { mwd.search_result.slug.clone() },
-                        project_name: title,
-                        download_url: url,
-                    });
-                    continue;
-                }
-            }
-            // fallback: 也试试 curseforge
-            let cf_res = search_curseforge_with_deps(&dep_slug, &mc_version, &mod_loader).await;
-            if let Some(mwd) = cf_res {
-                if let (Some(url), Some(title)) = (
-                    mwd.search_result.download_url,
-                    Some(mwd.search_result.title),
-                ) {
-                    resolved.push(ResolvedModDependency {
-                        project_id: mwd.search_result.mod_id.clone(),
-                        project_slug: if mwd.search_result.slug.is_empty() { dep_slug.clone() } else { mwd.search_result.slug.clone() },
-                        project_name: title,
-                        download_url: url,
-                    });
-                    continue;
-                }
-            }
-            // 实在没找到就跳过，不影响主流程
-            let _ = dep_name;
-        }
-    }
-
-    // 避免重复下载
-    resolved.sort_by(|a, b| a.project_slug.cmp(&b.project_slug));
-    resolved.dedup_by(|a, b| a.download_url == b.download_url);
-
-    let _ = version_value;
-    Ok(resolved)
-}
-
-#[tauri::command]
-pub async fn get_curseforge_required_dependencies(
-    project_slug: String,
-    mc_version: String,
-    mod_loader: String,
-    download_url: Option<String>,
-) -> Result<Vec<ResolvedModDependency>, String> {
-    let client = curseforge_client().await;
-    let semaphore = global_semaphore().await;
-    let _sem_permit = semaphore.acquire().await.map_err(|e| e.to_string())?;
-
-    let search_url = format!(
-        "https://api.curseforge.com/v1/mods/search?gameId=432&searchFilter={}&modLoaderType={}&gameVersion={}&pageSize=5&classId=6",
-        urlencoding::encode(&project_slug),
-        loader_name_to_curseforge_id(&mod_loader),
-        urlencoding::encode(&mc_version),
-    );
-
-    let search_resp = get_with_retry(
-        &client,
-        &search_url,
-        Some(RetryConfig {
-            max_retries: 2,
-            initial_delay_ms: 500,
-            max_delay_ms: 2000,
-        }),
-    )
-    .await
-    .map_err(|e| format!("CurseForge 搜索失败: {}", e))?;
-
-    if !search_resp.status().is_success() {
-        return Err(format!(
-            "CurseForge API 返回错误: {}",
-            search_resp.status()
-        ));
-    }
-
-    let search_text = search_resp
-        .text()
-        .await
-        .map_err(|e| format!("读取 CurseForge 响应失败: {}", e))?;
-    let search_json: serde_json::Value =
-        serde_json::from_str(&search_text).map_err(|e| format!("解析 CurseForge 搜索 JSON 失败: {}", e))?;
-    let data = search_json.get("data").and_then(|d| d.as_array());
-    let mods_list = data.cloned().unwrap_or_default();
-    if mods_list.is_empty() {
-        return Ok(vec![]);
-    }
-
-    let first_mod = &mods_list[0];
-    let mod_id = first_mod
-        .get("id")
-        .and_then(|m| m.as_i64())
-        .ok_or("CurseForge 模组 ID 无效")?;
-
-    let files_url = format!(
-        "https://api.curseforge.com/v1/mods/{}/files?gameVersion={}&pageSize=20",
-        mod_id,
-        urlencoding::encode(&mc_version)
-    );
-    let files_resp = get_with_retry(
-        &client,
-        &files_url,
-        Some(RetryConfig {
-            max_retries: 2,
-            initial_delay_ms: 400,
-            max_delay_ms: 2000,
-        }),
-    )
-    .await
-    .ok();
-    let file_id_from_url = download_url.as_ref().and_then(|u| {
-        let re = regex::Regex::new(r"/(\d{8,12})/").ok();
-        re.and_then(|r| r.captures(u))
-            .and_then(|c| c.get(1).map(|m| m.as_str().to_string()))
-    });
-
-    let mut picked_file_id: Option<i64> = None;
-    if let Some(files_resp) = files_resp {
-        if files_resp.status().is_success() {
-            if let Ok(text) = files_resp.text().await {
-                if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
-                    if let Some(files) = json.get("data").and_then(|d| d.as_array()) {
-                        if let Some(fid_from_url) = file_id_from_url.clone() {
-                            if let Ok(parsed) = fid_from_url.parse::<i64>() {
-                                for f in files {
-                                    if f.get("id").and_then(|x| x.as_i64()) == Some(parsed) {
-                                        picked_file_id = Some(parsed);
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                        if picked_file_id.is_none() {
-                            if let Some(first_file) = files.first() {
-                                picked_file_id = first_file.get("id").and_then(|x| x.as_i64());
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    let file_id = match picked_file_id {
-        Some(id) => id,
-        None => return Ok(vec![]),
-    };
-
-    let deps = fetch_curseforge_mod_dependencies(mod_id, file_id)
-        .await
-        .unwrap_or_default();
-
-    let required_deps: Vec<ApiDependency> = deps
-        .into_iter()
-        .filter(|d| d.dependency_type == "required" && !is_platform_dep(&d.mod_id))
-        .collect();
-
-    let mut resolved: Vec<ResolvedModDependency> = Vec::new();
-    let sem = Arc::new(tokio::sync::Semaphore::new(2));
-    let mut tasks = Vec::new();
-
-    for dep in required_deps {
-        let dep_slug = dep.slug.clone().unwrap_or_else(|| dep.mod_id.clone());
-        let permit = sem.clone().acquire_owned().await.map_err(|e| e.to_string())?;
-        let mc_ver = mc_version.clone();
-        let loader = mod_loader.clone();
-        let task = tokio::spawn(async move {
-            let _permit = permit;
-            let (mr, cf) = tokio::join!(
-                search_modrinth_with_deps(&dep_slug, &mc_ver, &loader),
-                search_curseforge_with_deps(&dep_slug, &mc_ver, &loader)
-            );
-            (dep_slug, mr, cf)
-        });
-        tasks.push(task);
-    }
-
-    let task_results = join_all(tasks).await;
-    for tr in task_results {
-        if let Ok((dep_slug, mr_opt, cf_opt)) = tr {
-            if let Some(mwd) = mr_opt {
-                if let (Some(url), Some(title)) = (mwd.search_result.download_url, Some(mwd.search_result.title)) {
-                    resolved.push(ResolvedModDependency {
-                        project_id: mwd.search_result.mod_id.clone(),
-                        project_slug: if mwd.search_result.slug.is_empty() { dep_slug.clone() } else { mwd.search_result.slug.clone() },
-                        project_name: title,
-                        download_url: url,
-                    });
-                    continue;
-                }
-            }
-            if let Some(mwd) = cf_opt {
-                if let (Some(url), Some(title)) = (mwd.search_result.download_url, Some(mwd.search_result.title)) {
-                    resolved.push(ResolvedModDependency {
-                        project_id: mwd.search_result.mod_id.clone(),
-                        project_slug: if mwd.search_result.slug.is_empty() { dep_slug.clone() } else { mwd.search_result.slug.clone() },
-                        project_name: title,
-                        download_url: url,
-                    });
-                    continue;
-                }
-            }
-        }
-    }
-
-    resolved.sort_by(|a, b| a.project_slug.cmp(&b.project_slug));
-    resolved.dedup_by(|a, b| a.download_url == b.download_url);
-    Ok(resolved)
-}
-
-fn loader_name_to_curseforge_id(loader: &str) -> u32 {
-    // CurseForge: https://docs.curseforge.com/#tocS_ModLoaderType
-    // Any = 0, Forge = 1, Cauldron = 2, LiteLoader = 3, Fabric = 4,
-    // Quilt = 5, NeoForge = 6
-    match loader.to_lowercase().trim() {
-        l if l.contains("forge") && l.contains("neo") => 6,
-        l if l.contains("forge") => 1,
-        l if l.contains("fabric") => 4,
-        l if l.contains("quilt") => 5,
-        l if l.contains("liteloader") => 3,
-        _ => 1,
-    }
-}

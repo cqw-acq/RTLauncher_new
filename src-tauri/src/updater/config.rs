@@ -233,7 +233,10 @@ pub fn get_current_os() -> String {
         return "linux".to_string();
     }
 
-    "unknown".to_string()
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+    {
+        return "unknown".to_string();
+    }
 }
 
 pub fn matches_asset_name(asset_name: &str) -> bool {

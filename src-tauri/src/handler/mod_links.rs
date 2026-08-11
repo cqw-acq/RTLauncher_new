@@ -5,7 +5,7 @@ use crate::http_client::{
 use futures::future::join_all;
 use scraper::{Html, Selector};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs::{self, File};
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
@@ -300,9 +300,540 @@ pub async fn get_modrinth_mod_files(slug: String) -> Result<String, String> {
         Err(e) => Err(format!("Failed to serialize result: {}", e)),
     }
 }
-async fn get_mod_files(
-    mod_id: &str,
-) -> Result<HashMap<String, Vec<(Vec<String>, String)>>, Box<dyn std::error::Error>> {
+
+/// Search Modrinth through the native HTTP client instead of the WebView.
+/// This avoids WebView CORS and proxy-policy failures being reported as an
+/// unavailable Modrinth source.
+#[tauri::command]
+pub async fn search_modrinth_projects(
+    query: String,
+    project_type: Option<String>,
+    limit: Option<u32>,
+) -> Result<String, String> {
+    let query = query.trim();
+    if query.is_empty() {
+        return Err("query cannot be empty".to_string());
+    }
+
+    let limit = limit.unwrap_or(25).clamp(1, 100);
+    let url = if let Some(project_type) = project_type {
+        let project_type = project_type.trim().to_ascii_lowercase();
+        if !matches!(
+            project_type.as_str(),
+            "mod" | "modpack" | "resourcepack" | "shader" | "datapack" | "world"
+        ) {
+            return Err(format!("unsupported Modrinth project type: {}", project_type));
+        }
+        let facets = format!(r#"[["project_type:{}"]]"#, project_type);
+        format!(
+            "https://api.modrinth.com/v2/search?query={}&limit={}&facets={}",
+            urlencoding(query),
+            limit,
+            urlencoding(&facets),
+        )
+    } else {
+        format!(
+            "https://api.modrinth.com/v2/search?query={}&limit={}",
+            urlencoding(query),
+            limit,
+        )
+    };
+    let client = modrinth_client().await;
+    let response = get_with_retry(
+        &client,
+        &url,
+        Some(RetryConfig {
+            max_retries: 3,
+            initial_delay_ms: 500,
+            max_delay_ms: 3000,
+        }),
+    )
+    .await
+    .map_err(|error| format!("Modrinth search failed (retried 3 times): {}", error))?;
+
+    if !response.status().is_success() {
+        return Err(format!("Modrinth search returned HTTP {}", response.status()));
+    }
+    response
+        .text()
+        .await
+        .map_err(|error| format!("Failed to read Modrinth search response: {}", error))
+}
+
+#[tauri::command]
+pub async fn get_modrinth_project(slug: String) -> Result<String, String> {
+    let slug = slug.trim();
+    if slug.is_empty() {
+        return Err("slug cannot be empty".to_string());
+    }
+
+    let url = format!("https://api.modrinth.com/v2/project/{}", urlencoding(slug));
+    let client = modrinth_client().await;
+    let response = get_with_retry(&client, &url, None)
+        .await
+        .map_err(|error| format!("Modrinth project fetch failed: {}", error))?;
+    if !response.status().is_success() {
+        return Err(format!("Modrinth project fetch returned HTTP {}", response.status()));
+    }
+    response
+        .text()
+        .await
+        .map_err(|error| format!("Failed to read Modrinth project response: {}", error))
+}
+
+const MAX_AUTO_RESOLVED_DEPENDENCIES: usize = 32;
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResolvedModDependency {
+    pub project_id: String,
+    pub project_slug: String,
+    pub project_name: String,
+    pub download_url: String,
+}
+
+fn json_string(value: &serde_json::Value, key: &str) -> Option<String> {
+    value.get(key).and_then(|field| field.as_str()).map(str::to_owned)
+}
+
+fn primary_modrinth_file_url(version: &serde_json::Value) -> Option<String> {
+    let files = version.get("files")?.as_array()?;
+    files
+        .iter()
+        .find(|file| file.get("primary").and_then(|primary| primary.as_bool()).unwrap_or(false))
+        .or_else(|| files.first())?
+        .get("url")?
+        .as_str()
+        .map(str::to_owned)
+}
+
+fn required_modrinth_dependencies(version: &serde_json::Value) -> Vec<serde_json::Value> {
+    version
+        .get("dependencies")
+        .and_then(|dependencies| dependencies.as_array())
+        .map(|dependencies| {
+            dependencies
+                .iter()
+                .filter(|dependency| {
+                    dependency
+                        .get("dependency_type")
+                        .and_then(|kind| kind.as_str())
+                        == Some("required")
+                })
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn version_is_compatible(
+    version: &serde_json::Value,
+    mc_version: &str,
+    mod_loader: &str,
+) -> bool {
+    let supports_game_version = version
+        .get("game_versions")
+        .and_then(|versions| versions.as_array())
+        .map(|versions| versions.iter().any(|version| version.as_str() == Some(mc_version)))
+        .unwrap_or(false);
+    if !supports_game_version {
+        return false;
+    }
+
+    let normalized_loader = mod_loader.trim().to_ascii_lowercase();
+    if normalized_loader.is_empty() || normalized_loader == "universal" || normalized_loader == "vanilla" {
+        return true;
+    }
+
+    version
+        .get("loaders")
+        .and_then(|loaders| loaders.as_array())
+        .map(|loaders| {
+            loaders.iter().any(|loader| {
+                loader
+                    .as_str()
+                    .map(|loader| loader.eq_ignore_ascii_case(&normalized_loader))
+                    .unwrap_or(false)
+            })
+        })
+        .unwrap_or(false)
+}
+
+async fn get_modrinth_json(
+    client: &reqwest::Client,
+    url: &str,
+) -> Result<serde_json::Value, String> {
+    let response = get_with_retry(client, url, Some(RetryConfig {
+        max_retries: 2,
+        initial_delay_ms: 400,
+        max_delay_ms: 1600,
+    }))
+    .await?;
+    if !response.status().is_success() {
+        return Err(format!("Modrinth API returned {} for {}", response.status(), url));
+    }
+    response
+        .json::<serde_json::Value>()
+        .await
+        .map_err(|error| format!("Failed to parse Modrinth response: {}", error))
+}
+
+async fn get_modrinth_project_identity(
+    client: &reqwest::Client,
+    project_id: &str,
+) -> (String, String) {
+    let fallback = project_id.to_string();
+    let url = format!("https://api.modrinth.com/v2/project/{}", urlencoding(project_id));
+    let Ok(project) = get_modrinth_json(client, &url).await else {
+        return (fallback.clone(), fallback);
+    };
+    let slug = json_string(&project, "slug").unwrap_or_else(|| fallback.clone());
+    let name = json_string(&project, "title").unwrap_or_else(|| slug.clone());
+    (slug, name)
+}
+
+async fn resolve_modrinth_dependency_version(
+    client: &reqwest::Client,
+    dependency: &serde_json::Value,
+    mc_version: &str,
+    mod_loader: &str,
+) -> Result<Option<serde_json::Value>, String> {
+    if let Some(version_id) = json_string(dependency, "version_id") {
+        let url = format!("https://api.modrinth.com/v2/version/{}", urlencoding(&version_id));
+        return get_modrinth_json(client, &url).await.map(Some);
+    }
+
+    let Some(project_id) = json_string(dependency, "project_id") else {
+        return Ok(None);
+    };
+    let url = format!(
+        "https://api.modrinth.com/v2/project/{}/version",
+        urlencoding(&project_id),
+    );
+    let versions_json = get_modrinth_json(client, &url).await?;
+    let versions = match versions_json.as_array() {
+        Some(versions) => versions,
+        None => return Ok(None),
+    };
+
+    for preferred_release in [true, false] {
+        if let Some(version) = versions.iter().find(|version| {
+            version_is_compatible(version, mc_version, mod_loader)
+                && primary_modrinth_file_url(version).is_some()
+                && (!preferred_release
+                    || version.get("version_type").and_then(|kind| kind.as_str()) == Some("release"))
+        }) {
+            return Ok(Some(version.clone()));
+        }
+    }
+    Ok(None)
+}
+
+/// Resolve the selected Modrinth file's transitive `required` dependencies.
+///
+/// A URL that does not belong to Modrinth deliberately returns an empty list:
+/// the selected CurseForge file cannot be safely matched without its file ID.
+#[allow(dependency_on_unit_never_type_fallback)]
+#[tauri::command]
+pub async fn get_modrinth_required_dependencies(
+    project_slug: String,
+    mc_version: String,
+    mod_loader: String,
+    download_url: String,
+) -> Result<Vec<ResolvedModDependency>, String> {
+    let project_slug = project_slug.trim();
+    if project_slug.is_empty() || download_url.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let client = modrinth_client().await;
+    let root_versions_url = format!(
+        "https://api.modrinth.com/v2/project/{}/version",
+        urlencoding(project_slug),
+    );
+    let root_versions = get_modrinth_json(&client, &root_versions_url).await?;
+    let Some(root_version) = root_versions.as_array().and_then(|versions| {
+        versions.iter().find(|version| {
+            version
+                .get("files")
+                .and_then(|files| files.as_array())
+                .map(|files| {
+                    files.iter().any(|file| {
+                        file.get("url").and_then(|url| url.as_str()) == Some(download_url.as_str())
+                    })
+                })
+                .unwrap_or(false)
+        })
+    }) else {
+        return Ok(Vec::new());
+    };
+
+    let mut queue: VecDeque<serde_json::Value> = required_modrinth_dependencies(root_version).into();
+    let mut seen_projects = HashSet::new();
+    if let Some(root_project_id) = json_string(root_version, "project_id") {
+        seen_projects.insert(root_project_id);
+    }
+    let mut resolved = Vec::new();
+
+    while let Some(dependency) = queue.pop_front() {
+        if resolved.len() >= MAX_AUTO_RESOLVED_DEPENDENCIES {
+            break;
+        }
+        let dependency_project_id = json_string(&dependency, "project_id");
+        if let Some(project_id) = dependency_project_id.as_ref() {
+            if !seen_projects.insert(project_id.clone()) {
+                continue;
+            }
+        }
+
+        let Some(version) = resolve_modrinth_dependency_version(
+            &client,
+            &dependency,
+            &mc_version,
+            &mod_loader,
+        )
+        .await?
+        else {
+            continue;
+        };
+        let Some(download_url) = primary_modrinth_file_url(&version) else {
+            continue;
+        };
+        let project_id = json_string(&version, "project_id")
+            .or(dependency_project_id)
+            .unwrap_or_else(|| "unknown".to_string());
+        // A dependency may specify only a version ID. Record its actual project
+        // after fetching it so version-only dependency cycles are still broken.
+        if !seen_projects.contains(&project_id) {
+            seen_projects.insert(project_id.clone());
+        } else if dependency.get("project_id").is_none() {
+            continue;
+        }
+        let (project_slug, project_name) = get_modrinth_project_identity(&client, &project_id).await;
+
+        queue.extend(required_modrinth_dependencies(&version));
+        resolved.push(ResolvedModDependency {
+            project_id,
+            project_slug,
+            project_name,
+            download_url,
+        });
+    }
+
+    Ok(resolved)
+}
+
+fn curseforge_file_download_url(file: &serde_json::Value) -> Option<String> {
+    if let Some(url) = json_string(file, "downloadUrl").filter(|url| !url.is_empty()) {
+        return Some(url);
+    }
+
+    let file_id = file.get("id")?.as_i64()?;
+    let file_name = json_string(file, "fileName")?;
+    let first4 = file_id / 1000;
+    let last3 = file_id % 1000;
+    Some(format!(
+        "https://edge.forgecdn.net/files/{}/{:03}/{}",
+        first4,
+        last3,
+        urlencoding(&file_name),
+    ))
+}
+
+fn curseforge_required_dependency_ids(file: &serde_json::Value) -> Vec<i64> {
+    file.get("dependencies")
+        .and_then(|dependencies| dependencies.as_array())
+        .map(|dependencies| {
+            dependencies
+                .iter()
+                // CurseForge FileRelationType::RequiredDependency is 3.
+                .filter(|dependency| dependency.get("relationType").and_then(|kind| kind.as_i64()) == Some(3))
+                .filter_map(|dependency| dependency.get("modId").and_then(|id| id.as_i64()))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn curseforge_file_supports(
+    file: &serde_json::Value,
+    mc_version: &str,
+    mod_loader: &str,
+) -> bool {
+    let Some(game_versions) = file.get("gameVersions").and_then(|versions| versions.as_array()) else {
+        return false;
+    };
+    if !game_versions.iter().any(|version| version.as_str() == Some(mc_version)) {
+        return false;
+    }
+
+    let loader = mod_loader.trim().to_ascii_lowercase();
+    if loader.is_empty() || loader == "universal" || loader == "vanilla" {
+        return true;
+    }
+
+    let known_loaders = ["fabric", "forge", "neoforge", "quilt", "liteloader", "ornithe"];
+    let tagged_loaders: Vec<String> = game_versions
+        .iter()
+        .filter_map(|version| version.as_str())
+        .map(|version| version.to_ascii_lowercase())
+        .filter(|version| known_loaders.contains(&version.as_str()))
+        .collect();
+
+    // Dependencies without a loader tag are generally universal libraries.
+    tagged_loaders.is_empty() || tagged_loaders.iter().any(|tag| tag == &loader)
+}
+
+fn select_curseforge_compatible_file(
+    files: &[serde_json::Value],
+    mc_version: &str,
+    mod_loader: &str,
+) -> Option<serde_json::Value> {
+    // Prefer stable releases, then beta and alpha, while preserving CurseForge's
+    // newest-first API ordering within each release channel.
+    for release_type in [1_i64, 2, 3] {
+        if let Some(file) = files.iter().find(|file| {
+            file.get("releaseType").and_then(|kind| kind.as_i64()) == Some(release_type)
+                && curseforge_file_supports(file, mc_version, mod_loader)
+                && curseforge_file_download_url(file).is_some()
+        }) {
+            return Some(file.clone());
+        }
+    }
+    None
+}
+
+async fn get_curseforge_json(
+    client: &reqwest::Client,
+    url: &str,
+) -> Result<serde_json::Value, String> {
+    let response = get_with_retry(client, url, Some(RetryConfig {
+        max_retries: 2,
+        initial_delay_ms: 400,
+        max_delay_ms: 1600,
+    }))
+    .await?;
+    if !response.status().is_success() {
+        return Err(format!("CurseForge API returned {} for {}", response.status(), url));
+    }
+    response
+        .json::<serde_json::Value>()
+        .await
+        .map_err(|error| format!("Failed to parse CurseForge response: {}", error))
+}
+
+async fn get_curseforge_files(
+    client: &reqwest::Client,
+    project_id: i64,
+) -> Result<Vec<serde_json::Value>, String> {
+    let url = format!(
+        "https://api.curseforge.com/v1/mods/{}/files?pageSize=1000",
+        project_id,
+    );
+    let response = get_curseforge_json(client, &url).await?;
+    Ok(response
+        .get("data")
+        .and_then(|files| files.as_array())
+        .cloned()
+        .unwrap_or_default())
+}
+
+async fn get_curseforge_project_by_slug(
+    client: &reqwest::Client,
+    slug: &str,
+) -> Result<serde_json::Value, String> {
+    let url = format!(
+        "https://api.curseforge.com/v1/mods/search?gameId=432&searchFilter={}",
+        urlencoding(slug),
+    );
+    let response = get_curseforge_json(client, &url).await?;
+    response
+        .get("data")
+        .and_then(|projects| projects.as_array())
+        .and_then(|projects| {
+            projects.iter().find(|project| {
+                project.get("slug").and_then(|project_slug| project_slug.as_str())
+                    .map(|project_slug| project_slug.eq_ignore_ascii_case(slug))
+                    .unwrap_or(false)
+            })
+        })
+        .cloned()
+        .ok_or_else(|| format!("Project not found on CurseForge: {}", slug))
+}
+
+async fn get_curseforge_project_identity(
+    client: &reqwest::Client,
+    project_id: i64,
+) -> (String, String) {
+    let fallback = project_id.to_string();
+    let url = format!("https://api.curseforge.com/v1/mods/{}", project_id);
+    let Ok(response) = get_curseforge_json(client, &url).await else {
+        return (fallback.clone(), fallback);
+    };
+    let project = response.get("data").unwrap_or(&response);
+    let slug = json_string(project, "slug").unwrap_or_else(|| fallback.clone());
+    let name = json_string(project, "name").unwrap_or_else(|| slug.clone());
+    (slug, name)
+}
+
+/// Resolve the selected CurseForge file's transitive required dependencies.
+/// CurseForge identifies required files by project rather than file ID, so the
+/// latest compatible stable file is selected for each dependency project.
+#[allow(dependency_on_unit_never_type_fallback)]
+#[tauri::command]
+pub async fn get_curseforge_required_dependencies(
+    project_slug: String,
+    mc_version: String,
+    mod_loader: String,
+    download_url: String,
+) -> Result<Vec<ResolvedModDependency>, String> {
+    let project_slug = project_slug.trim();
+    if project_slug.is_empty() || download_url.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let client = curseforge_client().await;
+    let root_project = get_curseforge_project_by_slug(&client, project_slug).await?;
+    let root_project_id = root_project
+        .get("id")
+        .and_then(|id| id.as_i64())
+        .ok_or_else(|| format!("CurseForge project {} has no ID", project_slug))?;
+    let root_files = get_curseforge_files(&client, root_project_id).await?;
+    let Some(root_file) = root_files.into_iter().find(|file| {
+        curseforge_file_download_url(file).as_deref() == Some(download_url.as_str())
+    }) else {
+        return Ok(Vec::new());
+    };
+
+    let mut queue: VecDeque<i64> = curseforge_required_dependency_ids(&root_file).into();
+    let mut seen_projects = HashSet::from([root_project_id]);
+    let mut resolved = Vec::new();
+
+    while let Some(project_id) = queue.pop_front() {
+        if resolved.len() >= MAX_AUTO_RESOLVED_DEPENDENCIES || !seen_projects.insert(project_id) {
+            continue;
+        }
+
+        let files = get_curseforge_files(&client, project_id).await?;
+        let Some(file) = select_curseforge_compatible_file(&files, &mc_version, &mod_loader) else {
+            continue;
+        };
+        let Some(download_url) = curseforge_file_download_url(&file) else {
+            continue;
+        };
+        let (project_slug, project_name) = get_curseforge_project_identity(&client, project_id).await;
+        queue.extend(curseforge_required_dependency_ids(&file));
+        resolved.push(ResolvedModDependency {
+            project_id: project_id.to_string(),
+            project_slug,
+            project_name,
+            download_url,
+        });
+    }
+
+    Ok(resolved)
+}
+
+async fn get_mod_files(mod_id: &str) -> Result<HashMap<String, Vec<(Vec<String>, String)>>, Box<dyn std::error::Error>> {
     let client = curseforge_client().await;
     let class_ids = curseforge_class_ids::all();
     let mut search_urls: Vec<String> = Vec::with_capacity(class_ids.len() + 2);
@@ -974,62 +1505,3 @@ pub async fn search_curseforge_projects(
     serde_json::to_string(&response_data).map_err(|_e| "Failed to serialize JSON".to_string())
 }
 
-#[allow(dependency_on_unit_never_type_fallback)]
-#[tauri::command]
-pub async fn search_modrinth_projects(
-    query: String,
-    project_type: Option<String>,
-    limit: Option<u32>,
-) -> Result<String, String> {
-    let client = modrinth_client().await;
-    let semaphore = global_semaphore().await;
-    let retry_cfg = RetryConfig {
-        max_retries: 3,
-        initial_delay_ms: 500,
-        max_delay_ms: 3000,
-    };
-    let lm = limit.unwrap_or(25);
-    let encoded_query = urlencoding(&query);
-    let mut facets = String::new();
-    if let Some(pt) = project_type {
-        let pt_lower = pt.to_lowercase();
-        facets = format!(
-            "[[\"project_type:{}\"]]",
-            match pt_lower.as_str() {
-                "modpack" => "modpack",
-                "resourcepack" | "texturepack" => "resourcepack",
-                "shaderpack" | "shaders" => "shader",
-                "datapack" => "datapack",
-                "world" | "worlds" => "project:world",
-                _ => "mod",
-            }
-        );
-    }
-    let encoded_facets = urlencoding(&facets);
-    let url = if facets.is_empty() {
-        format!(
-            "https://api.modrinth.com/v2/search?query={}&limit={}",
-            encoded_query, lm
-        )
-    } else {
-        format!(
-            "https://api.modrinth.com/v2/search?query={}&limit={}&facets={}",
-            encoded_query, lm, encoded_facets
-        )
-    };
-    let _permit = semaphore
-        .acquire()
-        .await
-        .map_err(|e| format!("信号量获取失败: {}", e))?;
-    let response = get_with_retry(&client, &url, Some(retry_cfg))
-        .await
-        .map_err(|e| format!("Modrinth API request failed (retried 3 times): {}", e))?;
-    if !response.status().is_success() {
-        return Err(format!("Modrinth API 返回错误状态: {}", response.status()));
-    }
-    let text = response
-        .text()
-        .await
-        .map_err(|e| format!("读取响应失败: {}", e))?;
-    Ok(text)
-}

@@ -2,18 +2,31 @@ use anyhow::Context;
 use os_info::Type;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use std::env::consts::OS;
 use std::{
     collections::{HashMap, HashSet},
     path::PathBuf,
     sync::{Mutex, OnceLock},
 };
 use std::{
-    io::{BufRead, BufReader},
+    io::{BufRead, BufReader, Read},
     process::{Child, Command, Stdio},
     thread,
 };
 use tauri::{Emitter, Manager};
+
+/// 从合并型整合包 version.json 的 `patches` 字段读取真实 Minecraft 版本
+fn detect_minecraft_version_from_patches(json: &serde_json::Value) -> Option<String> {
+    json.get("patches")?
+        .as_array()?
+        .iter()
+        .find_map(|patch| {
+            if patch.get("id").and_then(|v| v.as_str()) != Some("game") {
+                return None;
+            }
+            let ver = patch.get("version").and_then(|v| v.as_str())?;
+            Some(ver.to_string())
+        })
+}
 
 /// 全局游戏进程跟踪（存储 Child 所有权 + PID，便于 kill）
 struct GameProcess {
@@ -405,10 +418,18 @@ pub fn run_command(
             .map_err(|e| format!("无法创建游戏目录 {}: {}", MCPath.display(), e))?;
     }
 
-    let mut command = match OS {
-        "windows" | "linux" | "macos" => Command::new(&javaPath),
-        _ => return Err("不支持的操作系统".to_string().into()),
+    let mut command = if cfg!(any(
+        target_os = "windows",
+        target_os = "linux",
+        target_os = "macos"
+    )) {
+        Command::new(&javaPath)
+    } else {
+        return Err("不支持的操作系统".to_string().into());
     };
+    
+    // 设置工作目录为 minecraft_path（共享资源目录）
+    // 游戏的实际运行目录通过 --game-dir 参数传递
     command.current_dir(&MCPath);
     command.args(&args);
     // 捕获标准输出和错误输出以便转发日志到前端
@@ -589,11 +610,14 @@ pub fn kill_game_process() -> Result<String, String> {
 
     match process_info {
         Some((pid, started)) => {
-            if started {
-                Ok(format!("游戏进程 (PID {}) 已终止", pid))
+            let msg = if started {
+                format!("游戏进程 (PID {}) 已终止", pid)
             } else {
-                Ok(format!("启动中的游戏进程 (PID {}) 已取消", pid))
-            }
+                format!("启动中的游戏进程 (PID {}) 已取消", pid)
+            };
+            // 注意：这里无法发送事件，因为没有 app_handle
+            // 前端会根据返回的成功结果自行更新状态
+            Ok(msg)
         }
         None => Err("当前没有运行中的游戏进程".to_string()),
     }
@@ -607,6 +631,7 @@ pub fn build_jvm_arguments(
     wrapper_path: &str,
     max_memory: &str,
     version_name: &str,
+    minecraft_version: &str,
     player_name: &str,
     auth_token: &str,
     uuid: &str,
@@ -626,6 +651,7 @@ pub fn build_jvm_arguments(
         wrapper_path,
         max_memory,
         version_name,
+        minecraft_version,
         player_name,
         auth_token,
         uuid,
@@ -649,6 +675,7 @@ fn build_jvm_arguments_inner(
     wrapper_path: &str,
     max_memory: &str,
     version_name: &str,
+    minecraft_version: &str,
     player_name: &str,
     auth_token: &str,
     uuid: &str,
@@ -662,6 +689,15 @@ fn build_jvm_arguments_inner(
     custom_jvm_args: &str,
 ) -> anyhow::Result<Vec<String>> {
     let minecraft_path_buf = PathBuf::from(minecraft_path);
+    
+    // 确定实际的游戏目录（用于运行游戏）
+    let game_directory = if loadType != "0" && !loadName.is_empty() {
+        // 对于有加载器的情况，游戏目录应该是版本隔离目录
+        minecraft_path_buf.join("versions").join(loadName)
+    } else {
+        // 对于原版，游戏目录应该是 minecraft_path 本身
+        minecraft_path_buf.clone()
+    };
 
     // 如果 uuid 为空或不合法，根据玩家名生成离线 UUID
     let uuid = if uuid.is_empty() || !is_valid_uuid(uuid) {
@@ -676,10 +712,53 @@ fn build_jvm_arguments_inner(
     };
     let uuid = uuid.as_str();
 
-    let version_path = minecraft_path_buf
-        .join("versions")
-        .join(version_name)
-        .join(format!("{}.json", version_name));
+    // 确定版本JSON的路径
+    let version_path = if loadType != "0" && !loadName.is_empty() {
+        // 对于有加载器的情况，尝试从加载器目录读取版本JSON
+        let loader_json_path = minecraft_path_buf
+            .join("versions")
+            .join(loadName)
+            .join(format!("{}.json", loadName));
+        
+        if loader_json_path.exists() {
+            println!("使用加载器版本JSON: {}", loader_json_path.display());
+            loader_json_path
+        } else {
+            // 回退到原版路径
+            println!("加载器版本JSON不存在: {}, 尝试原版路径: {}", loader_json_path.display(), version_name);
+            let fallback_path = minecraft_path_buf
+                .join("versions")
+                .join(version_name)
+                .join(format!("{}.json", version_name));
+            
+            if fallback_path.exists() {
+                println!("使用原版版本JSON: {}", fallback_path.display());
+                fallback_path
+            } else {
+                // 如果两个都不存在，返回错误
+                return Err(anyhow::anyhow!(
+                    "版本JSON文件不存在。尝试的路径:\n1. 加载器路径: {}\n2. 原版路径: {}",
+                    loader_json_path.display(),
+                    fallback_path.display()
+                ));
+            }
+        }
+    } else {
+        // 对于原版，使用标准路径
+        let standard_path = minecraft_path_buf
+            .join("versions")
+            .join(version_name)
+            .join(format!("{}.json", version_name));
+        
+        if standard_path.exists() {
+            standard_path
+        } else {
+            return Err(anyhow::anyhow!(
+                "版本JSON文件不存在: {}",
+                standard_path.display()
+            ));
+        }
+    };
 
     let mut load_library_paths: Vec<String> = Vec::new();
     let mut load_jvm_params: Vec<String> = Vec::new();
@@ -1229,12 +1308,40 @@ fn build_jvm_arguments_inner(
         }
     }
 
-    let mut version_json: VersionJson = serde_json::from_reader(
-        std::fs::File::open(version_path).context("Failed to open version json")?,
-    )
-    .context("Failed to parse version json")?;
+    // 读取 version.json 为两种格式：结构化的 VersionJson 和原始的 serde_json::Value
+    let version_json_content = std::fs::read_to_string(&version_path)
+        .with_context(|| format!("Failed to read version json from {}", version_path.display()))?;
+    
+    let version_json_value: serde_json::Value = serde_json::from_str(&version_json_content)
+        .context("Failed to parse version json as value")?;
+    
+    let mut version_json: VersionJson = serde_json::from_str(&version_json_content)
+        .context("Failed to parse version json")?;
 
     let parent_version: Option<String> = version_json.parent_version.clone();
+    
+    // 确定基础 Minecraft 版本（用于定位游戏 JAR）
+    // 优先级：传入的 minecraft_version > parent_version (inheritsFrom) > patches 中的 game 版本 > version_name
+    let supplied_version_jar = minecraft_path_buf
+        .join("versions")
+        .join(minecraft_version)
+        .join(format!("{}.jar", minecraft_version));
+    let supplied_version_is_trusted = !minecraft_version.is_empty()
+        && (is_plausible_minecraft_version(minecraft_version) || supplied_version_jar.is_file());
+
+    let base_minecraft_version = if supplied_version_is_trusted {
+        println!("使用传入的 minecraft_version 作为基础版本: {}", minecraft_version);
+        minecraft_version.to_string()
+    } else if let Some(parent) = &parent_version {
+        println!("使用 inheritsFrom 作为基础版本: {}", parent);
+        parent.clone()
+    } else if let Some(patch_version) = detect_minecraft_version_from_patches(&version_json_value) {
+        println!("从 patches 中提取基础版本: {}", patch_version);
+        patch_version
+    } else {
+        println!("使用 version_name 作为基础版本: {}", version_name);
+        version_name.to_string()
+    };
 
     if let Some(parent) = &version_json.parent_version {
         let parent_path = minecraft_path_buf
@@ -1439,13 +1546,7 @@ fn build_jvm_arguments_inner(
             )
             .replace(
                 "${game_directory}",
-                &format_path(minecraft_path_buf.join("versions").join(
-                    if loadType != "0" && !loadName.is_empty() {
-                        loadName
-                    } else {
-                        version_name
-                    },
-                )),
+                &format_path(game_directory.clone()),
             )
             .replace(
                 "${assets_root}",
@@ -1633,6 +1734,8 @@ fn build_jvm_arguments_inner(
     // 1. libraries 中包含 fmlloader 或 bootstraplauncher（对于 Forge 版本名直接启动的情况）
     // 2. 主类中包含 bootstraplauncher / modlauncher / neo / fml / ModLauncher（
     //    对于通过 loadType/loadName 机制加载 Forge 配置但 version_name 是原版版本名的情况）
+    //
+    // 注意：Fabric、LiteLoader 等不使用模块系统，需要游戏JAR在classpath中
     let main_class_lc = version_json.main_class.to_lowercase();
     let uses_module_system =
         version_json.libraries.iter().any(|lib| {
@@ -1641,15 +1744,72 @@ fn build_jvm_arguments_inner(
             || main_class_lc.contains("modlauncher")
             || main_class_lc.contains("cpw.mods")
             || main_class_lc.contains("fml");
+    
+    // Fabric 检测：主类包含 fabric 或 libraries 中包含 fabric loader
+    let is_fabric = main_class_lc.contains("fabric") || 
+        version_json.libraries.iter().any(|lib| lib.name.contains(":fabricloader:"));
+    
+    // 如果是Fabric，确保游戏JAR被添加到classpath（覆盖模块系统检测）
+    if is_fabric {
+        println!("检测到Fabric加载器，确保游戏JAR在classpath中");
+    }
 
-    if !uses_module_system {
-        let vanilla_jar = format_path(
-            minecraft_path_buf
+    // 确定要添加的游戏JAR路径
+    let game_jar_path = if loadType != "0" && !loadName.is_empty() {
+        // 对于有加载器的情况，需要检查是否真的在加载器目录中有独立的JAR
+        // 对于像Fabric这样的加载器，JAR通常就是原版JAR，所以可能还是用原版路径
+        let loader_jar = minecraft_path_buf
+            .join("versions")
+            .join(loadName)
+            .join(format!("{}.jar", loadName));
+        
+        // 使用基础 Minecraft 版本来定位原版 JAR
+        // 这样可以处理整合包的情况，其中 version_name 是整合包名，但 JAR 在原版目录中
+        let vanilla_jar = minecraft_path_buf
+            .join("versions")
+            .join(&base_minecraft_version)
+            .join(format!("{}.jar", base_minecraft_version));
+        
+        if vanilla_jar.exists() {
+            println!("使用原版游戏JAR (基础版本 {}): {}", base_minecraft_version, vanilla_jar.display());
+            vanilla_jar
+        } else if loader_jar.exists() {
+            println!("使用加载器独立游戏JAR: {}", loader_jar.display());
+            loader_jar
+        } else {
+            // 两个都不存在，尝试使用 version_name 作为最后的回退
+            let fallback_jar = minecraft_path_buf
                 .join("versions")
                 .join(version_name)
-                .join(format!("{}.jar", version_name)),
-        );
-        class_path_entries.push(vanilla_jar);
+                .join(format!("{}.jar", version_name));
+            println!("原版和加载器JAR都不存在，尝试回退路径: {}", fallback_jar.display());
+            fallback_jar
+        }
+    } else {
+        // 对于原版，使用标准路径
+        minecraft_path_buf
+            .join("versions")
+            .join(&base_minecraft_version)
+            .join(format!("{}.jar", base_minecraft_version))
+    };
+
+    // 验证游戏JAR文件是否存在
+    if !game_jar_path.exists() {
+        return Err(anyhow::anyhow!(
+            "游戏JAR文件不存在: {}\n请确保游戏版本已正确下载",
+            game_jar_path.display()
+        ));
+    }
+
+    // 只有使用模块系统的加载器才不添加游戏JAR
+    // Fabric、LiteLoader、Quilt等都需要游戏JAR在classpath中
+    // Fabric特别需要游戏JAR，即使检测到模块系统特征也要添加
+    if !uses_module_system || is_fabric {
+        let game_jar = format_path(game_jar_path.clone());
+        println!("添加游戏JAR到classpath: {} (is_fabric: {})", game_jar, is_fabric);
+        class_path_entries.push(game_jar);
+    } else {
+        println!("使用模块系统，跳过添加游戏JAR到classpath");
     }
 
     // ===== 预构建 class_path（用于 ${classpath} 占位符替换）=====
@@ -1989,20 +2149,18 @@ fn build_jvm_arguments_inner(
         }
     }
 
-    let fixed_params = vec![
-        // 新版 macOS 的 os.name 返回 "Mac OS" 而非 "Mac OS X"，旧版 LWJGL 不识别
-        // 强制设为 "Mac OS X" 以确保 LWJGL 正确识别平台
-        if OS == "macos" {
-            "-Dos.name=Mac OS X".to_string()
-        } else {
-            format!("-Dos.name={}", os_info.os_type())
-        },
-        format!("-Dos.version={}", os_info.version()),
-        format!(
-            "-DlibraryDirectory={}",
-            format_path(minecraft_path_buf.join("libraries"))
-        ),
-    ];
+    let mut fixed_params = vec![format!(
+        "-DlibraryDirectory={}",
+        format_path(minecraft_path_buf.join("libraries"))
+    )];
+
+    // Linux 和 Windows 必须保留 JVM 自己提供的
+    // os.name/os.version/os.arch。LWJGL 会区分大小写检查 "Linux"；
+    // 将它改成 "linux" 会令游戏以 -3 退出，Unix 显示为退出码 253。
+    // 仅为需要兼容旧版 LWJGL 的 macOS 保留历史兼容值。
+    if cfg!(target_os = "macos") {
+        fixed_params.push("-Dos.name=Mac OS X".to_string());
+    }
 
     // 确保 -Djava.library.path 参数总是被添加
     // 根据loadType和loadName来决定使用哪个版本名
@@ -2312,6 +2470,13 @@ fn build_jvm_arguments_inner(
             forwarded_args.push(assets_path);
             i += 1; // 跳过原值
         }
+        // 特判：处理 --game-dir 参数，确保游戏目录正确设置
+        else if arg == "--game-dir" && i + 1 < game_args_vec.len() {
+            let game_dir = format_path(game_directory.clone());
+            forwarded_args.push(arg.clone());
+            forwarded_args.push(game_dir);
+            i += 1; // 跳过原值
+        }
         // 处理其他 -- 参数
         else if arg.starts_with("--") {
             forwarded_args.push(arg.clone());
@@ -2333,8 +2498,7 @@ fn build_jvm_arguments_inner(
     game_app_args.extend(filtered_game_args.iter().cloned());
 
     // 处理option.txt文件
-    let instance_dir = minecraft_path_buf.join("versions").join(version_name);
-    let option_file_path = instance_dir.join("options.txt");
+    let option_file_path = game_directory.join("options.txt");
 
     // 检查并创建option.txt文件
     if !option_file_path.exists() {
@@ -2446,6 +2610,37 @@ fn major_version_to_runtime_name(major: u32) -> Option<&'static str> {
     }
 }
 
+/// 从游戏 JAR 的 class 文件推断真实 Java 需求，避免整合包中过期的
+/// `javaVersion` 导致启动器选择过旧的 Java。
+fn required_java_major_from_jar(jar_path: &std::path::Path) -> Option<u32> {
+    let file = std::fs::File::open(jar_path).ok()?;
+    let mut archive = zip::ZipArchive::new(file).ok()?;
+    for index in 0..archive.len() {
+        let mut entry = archive.by_index(index).ok()?;
+        if !entry.name().ends_with(".class") || entry.name().starts_with("META-INF/versions/") {
+            continue;
+        }
+        let mut header = [0_u8; 8];
+        if entry.read_exact(&mut header).is_err() || header[..4] != [0xCA, 0xFE, 0xBA, 0xBE] {
+            continue;
+        }
+        return (u16::from_be_bytes([header[6], header[7]]) as u32).checked_sub(44);
+    }
+    None
+}
+
+fn is_plausible_minecraft_version(version: &str) -> bool {
+    static VERSION_PATTERN: OnceLock<Regex> = OnceLock::new();
+    VERSION_PATTERN
+        .get_or_init(|| {
+            Regex::new(
+                r"^(?:\d+\.\d+(?:\.\d+)?(?:-(?:pre|rc)\d+)?|\d{2}w\d{2}[a-z]|\d{2,}(?:\.\d+)?(?:-snapshot(?:-\d+)?)?)$",
+            )
+            .expect("valid Minecraft version regex")
+        })
+        .is_match(version)
+}
+
 /// 启动游戏（构建参数并执行 Java 进程）
 #[tauri::command]
 pub fn launch_game(
@@ -2455,6 +2650,7 @@ pub fn launch_game(
     wrapper_path: &str,
     max_memory: &str,
     version_name: &str,
+    minecraft_version: &str,
     player_name: &str,
     auth_token: &str,
     uuid: &str,
@@ -2475,11 +2671,28 @@ pub fn launch_game(
         .join(version_name)
         .join(format!("{}.json", version_name));
 
-    let target_major: Option<u32> = (|| {
+    let metadata_major: Option<u32> = (|| {
         let file = std::fs::File::open(&version_json_path).ok()?;
         let vj: VersionJson = serde_json::from_reader(file).ok()?;
         vj.java_version.map(|jv| jv.major_version)
     })();
+
+    let version_jar_path = PathBuf::from(minecraft_path)
+        .join("versions")
+        .join(version_name)
+        .join(format!("{}.jar", version_name));
+    let jar_major = required_java_major_from_jar(&version_jar_path);
+    let target_major = match (metadata_major, jar_major) {
+        (Some(metadata), Some(actual)) if actual > metadata => {
+            println!(
+                "[启动器] 版本 JSON 声明 Java {}，但游戏 JAR 字节码需要 Java {}，以 JAR 为准",
+                metadata, actual
+            );
+            Some(actual)
+        }
+        (Some(metadata), _) => Some(metadata),
+        (None, actual) => actual,
+    };
 
     if let Some(major) = target_major {
         println!(
@@ -2592,6 +2805,7 @@ pub fn launch_game(
         wrapper_path,
         max_memory,
         version_name,
+        minecraft_version,
         player_name,
         auth_token,
         uuid,
@@ -2620,7 +2834,9 @@ pub fn launch_game(
 
 #[cfg(test)]
 mod tests {
-    use super::{append_loader_jvm_args, launcher_rules_allow};
+    use super::{
+        append_loader_jvm_args, is_plausible_minecraft_version, launcher_rules_allow,
+    };
     use serde_json::json;
 
     #[test]
@@ -2683,6 +2899,16 @@ mod tests {
         let rules = json!([{ "action": "allow" }]);
 
         assert!(launcher_rules_allow(Some(&rules)));
+    }
+
+    #[test]
+    fn validates_base_minecraft_version_formats() {
+        for version in ["1.20.1", "1.21-rc1", "25w42a", "26", "26.3-snapshot-5"] {
+            assert!(is_plausible_minecraft_version(version), "{version}");
+        }
+        for instance_name in ["PVZ_Survive", "SHser-Basic-Package", "fabric-loader-0.15.0"] {
+            assert!(!is_plausible_minecraft_version(instance_name), "{instance_name}");
+        }
     }
 }
 

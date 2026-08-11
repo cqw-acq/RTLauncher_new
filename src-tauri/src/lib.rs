@@ -78,9 +78,9 @@ use handler::diagnostics::{
     get_mod_dependencies_analysis, get_system_info, auto_download_missing_dependency,
     auto_download_all_missing_dependencies, search_missing_dependency,
     auto_download_with_dependencies, analyze_loader_logs, deep_analyze_with_api,
-    export_launch_report, get_modrinth_required_dependencies, get_curseforge_required_dependencies,
-    check_mod_installed,
+    export_launch_report, check_mod_installed,
 };
+use handler::mod_links::{get_modrinth_required_dependencies, get_curseforge_required_dependencies};
 use mutiplayer::{
     ensure_openp2p_stopped, mp_check_openp2p, mp_encode_room_info, mp_get_openp2p_dir,
     mp_get_openp2p_path, mp_install_openp2p, mp_is_openp2p_running, mp_poll_log,

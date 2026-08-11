@@ -22,7 +22,7 @@ import { cn } from "@/lib/utils";
 import { useI18n } from "@/components/i18n/use-i18n";
 
 // ============================================================
-// 主题模式（浅色 / 深色）
+// 主题模式（浅色 / 深色 / 跟随系统）
 // ============================================================
 function ThemeModeRow({
   value,
@@ -33,11 +33,22 @@ function ThemeModeRow({
 }) {
   const { t } = useI18n();
 
+  const getModeLabel = (mode: ThemeMode) => {
+    switch (mode) {
+      case "light":
+        return t("settings.appearance.light");
+      case "dark":
+        return t("settings.appearance.dark");
+      case "system":
+        return t("settings.appearance.system");
+    }
+  };
+
   return (
     <div className="space-y-2.5">
       <div className="flex items-center justify-between">
         <Label className="font-medium text-sm">{t("settings.appearance.theme")}</Label>
-        <span className="text-xs text-muted-foreground">{value === "light" ? t("settings.appearance.light") : t("settings.appearance.dark")}</span>
+        <span className="text-xs text-muted-foreground">{getModeLabel(value)}</span>
       </div>
       <Select value={value} onValueChange={(next) => onChange(next as ThemeMode)}>
         <SelectTrigger className="w-full">
@@ -46,6 +57,7 @@ function ThemeModeRow({
         <SelectContent>
           <SelectItem value="light">{t("settings.appearance.light")}</SelectItem>
           <SelectItem value="dark">{t("settings.appearance.dark")}</SelectItem>
+          <SelectItem value="system">{t("settings.appearance.system")}</SelectItem>
         </SelectContent>
       </Select>
     </div>

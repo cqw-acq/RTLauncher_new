@@ -387,7 +387,7 @@ export default function CheckUpdatePage() {
               <div className="flex flex-wrap items-center gap-2 pt-2">
                 <Button
                   variant="outline"
-                  onClick={handleCheck}
+                  onClick={() => handleCheck()}
                   disabled={!canCheckNow}
                   className="gap-1.5"
                 >
@@ -397,7 +397,7 @@ export default function CheckUpdatePage() {
 
                 {(info.status === "available" || info.status === "downloading") && (
                   <Button
-                    onClick={handleDownload}
+                    onClick={() => handleDownload()}
                     disabled={info.status === "downloading"}
                     className="gap-1.5"
                   >
@@ -408,7 +408,7 @@ export default function CheckUpdatePage() {
 
                 {(info.status === "downloaded" || info.status === "installing") && (
                   <Button
-                    onClick={handleInstall}
+                    onClick={() => handleInstall()}
                     disabled={info.status === "installing"}
                     className="gap-1.5"
                   >

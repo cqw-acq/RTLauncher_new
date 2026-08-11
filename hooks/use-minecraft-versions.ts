@@ -7,6 +7,18 @@ import type {
 } from "@/types";
 
 /**
+ * 判断版本ID是否可能是快照版本
+ */
+function isLikelySnapshot(versionId: string): boolean {
+  // 快照版本通常以年份+周数开头，如 24w12a, 25w42a
+  const weeklySnapshot = /^\d{2}w\d{2}[a-z]$/;
+  // 包含 pre, rc, snapshot 等关键词
+  const preRelease = /(pre|rc|snapshot|beta|alpha)/i;
+  
+  return weeklySnapshot.test(versionId) || preRelease.test(versionId);
+}
+
+/**
  * 从后端获取 Minecraft 版本列表的 Hook
  * 调用 Tauri 命令 classify_minecraft_versions 获取真实数据
  */
@@ -42,16 +54,37 @@ export function useMinecraftVersions() {
         const aprilFools: ClassifiedVersions[2] = [];
         const oldVersions: ClassifiedVersions[3] = [];
 
+        // 愚人节版本的特征标识符
+        const aprilFoolsIndicators = [
+          "20w14infinite", "15w14a", "2.0", "1.RV-Pre1", "3D Shareware v1.34"
+        ];
+        
         for (const entry of manifest.versions || []) {
           const item = { id: entry.id, releaseTime: entry.time };
+          
+          // 首先检查是否为愚人节版本（通过版本ID或时间戳）
+          const isAprilFools = aprilFoolsIndicators.some(indicator => 
+            entry.id.toLowerCase().includes(indicator.toLowerCase())
+          ) || entry.time.includes("-04-01");
+          
+          if (isAprilFools) {
+            aprilFools.push(item);
+            continue;
+          }
+          
           if (entry.type === "old_alpha" || entry.type === "old_beta") {
             oldVersions.push(item);
-          } else if (entry.time.includes("-04-01")) {
-            aprilFools.push(item);
           } else if (entry.type === "release") {
             releases.push(item);
           } else if (entry.type === "snapshot") {
             snapshots.push(item);
+          } else {
+            // 对于未知类型，尝试通过版本ID格式推断
+            if (isLikelySnapshot(entry.id)) {
+              snapshots.push(item);
+            } else {
+              releases.push(item);
+            }
           }
         }
         data = [releases, snapshots, aprilFools, oldVersions];

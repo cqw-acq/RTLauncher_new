@@ -5,7 +5,7 @@ import * as React from "react";
 // ============================================================
 // 类型定义
 // ============================================================
-export type ThemeMode = "light" | "dark";
+export type ThemeMode = "light" | "dark" | "system";
 export type HomeMode = "simple" | "full";
 export type AppLanguage = "zh-CN" | "en-US";
 
@@ -69,7 +69,7 @@ export const DEFAULT_SETTINGS: LauncherSettings = {
     autoDownloadModDependencies: true,
   },
   appearance: {
-    themeMode: "light",
+    themeMode: "system",
     themeColor: "default",
     fontSize: 14,
     background: {
@@ -327,7 +327,9 @@ function applyFontSizeToDom(fontSize: number) {
 }
 
 // 应用主题模式：给 html 加/去 .dark class
+// 注意：当 mode 为 "system" 时，交给 next-themes 管理，不做手动操作
 function applyThemeModeToDom(mode: ThemeMode) {
+  if (mode === "system") return;
   const root = document.documentElement;
   root.classList.toggle("dark", mode === "dark");
 }
@@ -392,12 +394,17 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
   React.useEffect(() => {
     if (!ready) return;
 
-    const isDark = settings.appearance.themeMode === "dark";
+    // 当 themeMode 为 system 时，使用 DOM 上实际的 .dark class 状态来判断深色/浅色
+    // 避免 next-themes 管理的系统主题被 settings 中的旧值覆盖
+    const effectiveIsDark = settings.appearance.themeMode === "system"
+      ? document.documentElement.classList.contains("dark")
+      : settings.appearance.themeMode === "dark";
+
     document.documentElement.lang = settings.general.language;
     applyThemeModeToDom(settings.appearance.themeMode);
-    applyThemeColorToDom(settings.appearance.themeColor, isDark);
+    applyThemeColorToDom(settings.appearance.themeColor, effectiveIsDark);
     applyFontSizeToDom(settings.appearance.fontSize);
-    applyBackgroundToDom(settings.appearance.background, isDark);
+    applyBackgroundToDom(settings.appearance.background, effectiveIsDark);
 
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));

@@ -242,6 +242,7 @@ export function LaunchConfigCard() {
         wrapperPath: config.wrapperPath,
         maxMemory: config.maxMemory,
         versionName: config.versionName,
+        minecraftVersion: config.minecraftVersion,
         playerName: config.playerName || selectedProfile.name,
         authToken: config.authToken || selectedProfile.accessToken || "",
         uuid: config.uuid || selectedProfile.uuid || selectedProfile.id,

@@ -117,6 +117,8 @@ interface LogViewerProps {
   onToggleSelect: (id: number) => void;
   onCopySelected: () => void;
   searchHighlight: string;
+  onKeyDown?: (e: React.KeyboardEvent) => void;
+  tabIndex?: number;
 }
 
 function LogViewer({
@@ -128,6 +130,8 @@ function LogViewer({
   selectedIds,
   onToggleSelect,
   searchHighlight,
+  onKeyDown,
+  tabIndex,
 }: LogViewerProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -166,9 +170,11 @@ function LogViewer({
   return (
     <div
       ref={scrollRef}
+      tabIndex={tabIndex}
+      onKeyDown={onKeyDown}
       className={cn(
-        "h-full overflow-y-auto rounded-xl bg-muted/50 p-3 font-mono text-xs leading-relaxed",
-        wrapText ? "whitespace-pre-wrap break-all" : "whitespace-pre overflow-x-auto"
+        "h-full overflow-auto rounded-xl bg-muted/50 p-3 font-mono text-xs leading-relaxed custom-scrollbar",
+        wrapText ? "whitespace-pre-wrap break-all" : "whitespace-pre"
       )}
     >
       {filteredLogs.length === 0 ? (
@@ -314,7 +320,7 @@ export function LaunchConsole() {
     <>
       <Card
         size="sm"
-        className="flex flex-col min-h-0 flex-1 min-h-[260px] max-h-[70vh]"
+        className="flex flex-col min-h-0 flex-1 min-h-[260px] max-h-[70vh] overflow-hidden"
       >
         <CardHeader className="flex-row items-center justify-between py-2 px-3">
           <CardTitle className="flex items-center gap-2 text-sm">
@@ -409,7 +415,7 @@ export function LaunchConsole() {
         </CardHeader>
 
         {activeTab === "logs" && (
-          <>
+          <div className="flex flex-col min-h-0">
             <div className="shrink-0 border-t border-border px-3 py-2 space-y-2">
               <div className="flex items-center gap-1 flex-wrap">
                 {LOG_LEVELS.map((level) => (
@@ -484,57 +490,36 @@ export function LaunchConsole() {
               )}
             </div>
 
-            <CardContent className="flex-1 min-h-0 p-0">
-              <div
-                ref={scrollRef}
-                className="h-full px-3 pb-3"
+            <CardContent className="flex-1 min-h-0 px-3 pb-3 pt-0 flex flex-col">
+              <LogViewer
+                logs={logs}
+                visibleLevels={visibleLevels}
+                autoScroll={autoScroll}
+                wrapText={wrapText}
+                searchText={searchText}
+                selectedIds={selectedIds}
+                onToggleSelect={toggleSelect}
+                onCopySelected={handleCopySelected}
+                searchHighlight={searchText}
                 onKeyDown={handleKeyDown}
                 tabIndex={0}
-              >
-                <LogViewer
-                  logs={logs}
-                  visibleLevels={visibleLevels}
-                  autoScroll={autoScroll}
-                  wrapText={wrapText}
-                  searchText={searchText}
-                  selectedIds={selectedIds}
-                  onToggleSelect={toggleSelect}
-                  onCopySelected={handleCopySelected}
-                  searchHighlight={searchText}
-                />
-              </div>
+              />
             </CardContent>
 
-            <div className="shrink-0 border-t border-border px-3 py-2 flex items-center justify-between">
-              <div className="flex items-center gap-3 text-[11px] text-muted-foreground">
-                <span className="flex items-center gap-1">
-                  <span className="size-1.5 rounded-full bg-red-500" />
-                  {levelCounts.error} {t("launch.log.level.error")}
-                </span>
-                <span className="flex items-center gap-1">
-                  <span className="size-1.5 rounded-full bg-amber-500" />
-                  {levelCounts.warn} {t("launch.log.level.warn")}
-                </span>
-                <span className="flex items-center gap-1">
-                  <span className="size-1.5 rounded-full bg-sky-500" />
-                  {levelCounts.debug} {t("launch.log.level.debug")}
-                </span>
+            {isRunning && (
+              <div className="shrink-0 border-t border-border px-3 py-2 flex items-center justify-end">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-6 text-[11px] text-destructive border-destructive/50 hover:bg-destructive/10"
+                  onClick={cancelLaunch}
+                >
+                  <Square className="size-3 mr-1" />
+                  {t("launch.log.terminate")}
+                </Button>
               </div>
-              <div className="flex items-center gap-1">
-                {isRunning && (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="h-6 text-[11px] text-destructive border-destructive/50 hover:bg-destructive/10"
-                    onClick={cancelLaunch}
-                  >
-                    <Square className="size-3 mr-1" />
-                    {t("launch.log.terminate")}
-                  </Button>
-                )}
-              </div>
-            </div>
-          </>
+            )}
+          </div>
         )}
 
         {activeTab === "analysis" && (
@@ -705,6 +690,8 @@ export function LaunchConsole() {
                   onToggleSelect={toggleSelect}
                   onCopySelected={handleCopySelected}
                   searchHighlight={searchText}
+                  onKeyDown={handleKeyDown}
+                  tabIndex={0}
                 />
               </div>
             </>

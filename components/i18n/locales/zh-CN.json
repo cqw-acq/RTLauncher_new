@@ -160,6 +160,7 @@
       "liteLoader": "LiteLoader",
       "selectAGameVersion": "选择游戏版本",
       "version": "版本",
+      "allVersions": "全部版本",
       "searchVanillaVersions": "搜索原版版本...",
       "searchModLoaders": "搜索 modloader...",
       "searchVersions": "搜索版本...",
@@ -175,6 +176,7 @@
     "provider": {
       "gameExitedWithCodeExitCode": "游戏已退出，退出码: {exitCode}",
       "gameFullyStartedPidPidStoppedJvmTracking": "游戏已完全启动 (PID {pid})，停止 JVM 追踪",
+      "gameLaunchFailed": "游戏启动失败: {error}",
       "setTheMinecraftGameDirectory": "请设置 Minecraft 游戏目录",
       "setAJavaPath": "请设置 Java 路径",
       "selectAGameVersion": "请选择游戏版本",
@@ -334,6 +336,7 @@
       "theme": "主题模式",
       "light": "浅色",
       "dark": "深色",
+      "system": "跟随系统",
       "themeColor": "主题色",
       "reset": "重置",
       "fontSize": "字体大小",

@@ -47,6 +47,7 @@ output.log
 /src-tauri/bridge/
 /src-tauri/RTL/
 /src-tauri/instance/
+/src-tauri/minecraft/
 
 
 # Tauri signing keys (NEVER commit these!)
@@ -73,3 +74,4 @@ gen_latest_json.js
 /.tauri-codex-dev.json
 /.tauri-start.ps1
 /downloads/
+/RTLauncher-portable/
