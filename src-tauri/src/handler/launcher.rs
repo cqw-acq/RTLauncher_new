@@ -671,7 +671,7 @@ pub fn build_jvm_arguments(
 fn build_jvm_arguments_inner(
     _app_handle: tauri::AppHandle,
     minecraft_path: &str,
-    _java_path: &str,
+    java_path: &str,
     wrapper_path: &str,
     max_memory: &str,
     version_name: &str,
@@ -2095,30 +2095,40 @@ fn build_jvm_arguments_inner(
         "-Djdk.lang.Process.allowAmbiguousCommands=true".to_string(),
         "-Dfml.ignoreInvalidMinecraftCertificates=True".to_string(),
         "-Dfml.ignorePatchDiscrepancies=True".to_string(),
+    ]);
+
+    // 只在Java 9+才添加模块系统相关参数
+    // 检测Java版本，避免在旧版本Java上添加不支持的参数导致启动失败
+    let java_major_version = get_java_major_version(java_path);
+    let java_version_num: u32 = java_major_version.parse().unwrap_or(8);
+
+    if java_version_num >= 9 {
         // 标准的Java模块访问权限（适用于Java 9+）
         // 只针对 ALL-UNNAMED 开放权限，因为 Forge 会自己创建 ModuleLayer
         // 我们不需要让 Java 原生模块系统介入，否则会导致模块冲突
-        "--add-opens=java.base/java.lang=ALL-UNNAMED".to_string(),
-        "--add-opens=java.base/java.lang.invoke=ALL-UNNAMED".to_string(),
-        "--add-opens=java.base/java.lang.reflect=ALL-UNNAMED".to_string(),
-        "--add-opens=java.base/java.net=ALL-UNNAMED".to_string(),
-        "--add-opens=java.base/java.nio=ALL-UNNAMED".to_string(),
-        "--add-opens=java.base/java.util=ALL-UNNAMED".to_string(),
-        "--add-opens=java.base/java.util.concurrent=ALL-UNNAMED".to_string(),
-        "--add-opens=java.base/java.util.concurrent.atomic=ALL-UNNAMED".to_string(),
-        "--add-opens=java.base/jdk.internal.misc=ALL-UNNAMED".to_string(),
-        "--add-opens=java.base/sun.nio.ch=ALL-UNNAMED".to_string(),
-        "--add-opens=java.base/sun.security.util=ALL-UNNAMED".to_string(),
-        "--add-opens=java.base/sun.security.x509=ALL-UNNAMED".to_string(),
-        "--add-opens=java.base/sun.net.www.protocol.jar=ALL-UNNAMED".to_string(),
-        "--add-exports=java.base/sun.nio.ch=ALL-UNNAMED".to_string(),
-        "--add-exports=java.base/jdk.internal.misc=ALL-UNNAMED".to_string(),
-        "--add-exports=java.base/sun.security.util=ALL-UNNAMED".to_string(),
-        "--add-exports=java.desktop/sun.awt=ALL-UNNAMED".to_string(),
-        "--add-exports=java.desktop/sun.java2d=ALL-UNNAMED".to_string(),
-        // 不添加针对具名模块的 --add-opens 和 --add-reads
-        // 因为这些模块在 Java 启动时还不存在，Forge 会自己创建 ModuleLayer
-    ]);
+        args.extend(vec![
+            "--add-opens=java.base/java.lang=ALL-UNNAMED".to_string(),
+            "--add-opens=java.base/java.lang.invoke=ALL-UNNAMED".to_string(),
+            "--add-opens=java.base/java.lang.reflect=ALL-UNNAMED".to_string(),
+            "--add-opens=java.base/java.net=ALL-UNNAMED".to_string(),
+            "--add-opens=java.base/java.nio=ALL-UNNAMED".to_string(),
+            "--add-opens=java.base/java.util=ALL-UNNAMED".to_string(),
+            "--add-opens=java.base/java.util.concurrent=ALL-UNNAMED".to_string(),
+            "--add-opens=java.base/java.util.concurrent.atomic=ALL-UNNAMED".to_string(),
+            "--add-opens=java.base/jdk.internal.misc=ALL-UNNAMED".to_string(),
+            "--add-opens=java.base/sun.nio.ch=ALL-UNNAMED".to_string(),
+            "--add-opens=java.base/sun.security.util=ALL-UNNAMED".to_string(),
+            "--add-opens=java.base/sun.security.x509=ALL-UNNAMED".to_string(),
+            "--add-opens=java.base/sun.net.www.protocol.jar=ALL-UNNAMED".to_string(),
+            "--add-exports=java.base/sun.nio.ch=ALL-UNNAMED".to_string(),
+            "--add-exports=java.base/jdk.internal.misc=ALL-UNNAMED".to_string(),
+            "--add-exports=java.base/sun.security.util=ALL-UNNAMED".to_string(),
+            "--add-exports=java.desktop/sun.awt=ALL-UNNAMED".to_string(),
+            "--add-exports=java.desktop/sun.java2d=ALL-UNNAMED".to_string(),
+            // 不添加针对具名模块的 --add-opens 和 --add-reads
+            // 因为这些模块在 Java 启动时还不存在，Forge 会自己创建 ModuleLayer
+        ]);
+    }
     
     if let Some(logging) = &version_json.logging {
         if let Some(client) = &logging.client {
@@ -2165,8 +2175,16 @@ fn build_jvm_arguments_inner(
     // 确保 -Djava.library.path 参数总是被添加
     // 根据loadType和loadName来决定使用哪个版本名
     // 只在neoforge时使用loadName，其他modloader使用version_name
-    let is_neoforge =
-        loadType != "0" && !loadName.is_empty() && loadName.to_lowercase().contains("neoforge");
+    // 仅靠 loadName 是否包含 "neoforge" 判断不够可靠：
+    // 合并型整合包（如 "PVZ_Survive"）的目录名不含 neoforge 却仍是 NeoForge，
+    // 需要再从已解析的 version.json 主类/库坐标交叉确认。
+    let is_neoforge = loadType != "0"
+        && (!loadName.is_empty() && loadName.to_lowercase().contains("neoforge")
+            || version_json.main_class.to_lowercase().contains("neoforged")
+            || version_json
+                .libraries
+                .iter()
+                .any(|lib| lib.name.to_lowercase().contains("net.neoforged:neoforge:")));
     // 对于loadType为1的情况，如果是neoforge，使用loadName；否则使用version_name
     let native_version = if loadType == "1" && is_neoforge {
         &loadName
@@ -2567,6 +2585,12 @@ fn build_jvm_arguments_inner(
 fn get_java_major_version(java_path: &str) -> String {
     let output = std::process::Command::new(java_path)
         .arg("-version")
+        // 清除可能注入 --add-opens 等参数的全局 JAVA_* 选项环境变量：
+        // 这些选项会让部分 JVM（尤其是 Java 8，不识别 --add-opens）在
+        // `java -version` 时直接启动失败，导致 JVM 识别不可靠。
+        .env_remove("JAVA_TOOL_OPTIONS")
+        .env_remove("_JAVA_OPTIONS")
+        .env_remove("JDK_JAVA_OPTIONS")
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .output();
