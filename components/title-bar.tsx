@@ -1,12 +1,11 @@
 'use client'
 
 import { useCallback, useEffect, useState } from 'react'
-import { Copy, Maximize2, Minus, X, RotateCcw } from 'lucide-react'
+import { Copy, Maximize2, Minus, X } from 'lucide-react'
 
 import { ModeToggle } from '@/components/mode-toggle'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
-import { useUIConfigContext } from '@/components/ui-config/ui-config-provider'
 
 interface WindowApi {
   minimize: () => Promise<void>
@@ -76,7 +75,6 @@ export function TitleBar({ className }: TitleBarProps) {
   const [isMacOS, setIsMacOS] = useState(false)
   const [isMaximized, setIsMaximized] = useState(false)
   const [windowApi, setWindowApi] = useState<WindowApi | null>(null)
-  const { resetConfig } = useUIConfigContext()
 
   useEffect(() => {
     setIsMacOS(detectMacOS())
@@ -160,12 +158,6 @@ export function TitleBar({ className }: TitleBarProps) {
     }
   }, [windowApi])
 
-  const handleResetUIConfig = useCallback(() => {
-    if (confirm('确定要重置侧边栏配置吗？这将恢复所有标签页的默认显示状态。')) {
-      resetConfig()
-    }
-  }, [resetConfig])
-
   return (
     <div
       className={cn(
@@ -186,14 +178,6 @@ export function TitleBar({ className }: TitleBarProps) {
 
           <div className='no-drag absolute inset-y-0 right-0 flex items-center pr-3'>
             <ModeToggle />
-
-            <WindowButton
-              onClick={handleResetUIConfig}
-              title='重置侧边栏配置'
-              className='text-muted-foreground hover:text-foreground'
-            >
-              <RotateCcw className='size-3.5' />
-            </WindowButton>
           </div>
         </>
       ) : (
@@ -207,14 +191,6 @@ export function TitleBar({ className }: TitleBarProps) {
 
           <div className='no-drag flex h-full items-center gap-1 pr-3'>
             <ModeToggle />
-
-            <WindowButton
-              onClick={handleResetUIConfig}
-              title='重置侧边栏配置'
-              className='text-muted-foreground hover:text-foreground'
-            >
-              <RotateCcw className='size-3.5' />
-            </WindowButton>
 
             <div className='flex items-center gap-1'>
               <WindowButton onClick={handleMinimize} title='最小化'>
