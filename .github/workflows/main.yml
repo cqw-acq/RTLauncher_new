@@ -19,6 +19,10 @@ jobs:
             args: '--target x86_64-apple-darwin'
           - platform: 'ubuntu-22.04' # for Tauri v1 you could replace this with ubuntu-20.04.
             args: ''
+            name: 'linux-bundle'
+          - platform: 'ubuntu-22.04' # Linux portable binary
+            args: '--config src-tauri/tauri.linux.conf.json'
+            name: 'linux-portable'
           - platform: 'windows-latest'
             args: '--no-bundle'
 
@@ -106,14 +110,29 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
-      - name: upload artifacts (Ubuntu)
-        if: matrix.platform == 'ubuntu-22.04'
+      - name: upload artifacts (Ubuntu bundle)
+        if: matrix.platform == 'ubuntu-22.04' && matrix.name == 'linux-bundle'
         uses: actions/upload-artifact@v7
         with:
-          name: tauri-app-linux
+          name: tauri-app-linux-bundle
           path: |
-            src-tauri/target/release/bundle/**/*.AppImage
             src-tauri/target/release/bundle/**/*.deb
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: package portable version
+        if: matrix.platform == 'ubuntu-22.04' && matrix.name == 'linux-portable'
+        run: |
+          cd src-tauri/target/release
+          tar -czf RTLauncher-portable.tar.gz rtlauncher ../../install-deps.sh ../../PORTABLE_README.md
+          mv RTLauncher-portable.tar.gz ../../..
+
+      - name: upload artifacts (Ubuntu portable)
+        if: matrix.platform == 'ubuntu-22.04' && matrix.name == 'linux-portable'
+        uses: actions/upload-artifact@v7
+        with:
+          name: tauri-app-linux-portable
+          path: RTLauncher-portable.tar.gz
           if-no-files-found: warn
           retention-days: 7
 
