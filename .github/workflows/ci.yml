@@ -138,9 +138,9 @@ jobs:
       - name: Package portable version
         if: matrix.name == 'Linux Portable'
         run: |
-          cd src-tauri/target/release
-          tar -czf RTLauncher-portable.tar.gz rtlauncher ../../install-deps.sh ../../PORTABLE_README.md
-          mv RTLauncher-portable.tar.gz ../../..
+          tar -czf RTLauncher-portable.tar.gz \
+            -C src-tauri/target/release rtlauncher \
+            -C src-tauri install-deps.sh PORTABLE_README.md
 
       - name: Upload portable package
         if: matrix.name == 'Linux Portable'
@@ -148,7 +148,7 @@ jobs:
         with:
           name: ${{ matrix.artifact_name }}-bundle
           path: RTLauncher-portable.tar.gz
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 7
 
     outputs:

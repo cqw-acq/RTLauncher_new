@@ -123,9 +123,9 @@ jobs:
       - name: package portable version
         if: matrix.platform == 'ubuntu-22.04' && matrix.name == 'linux-portable'
         run: |
-          cd src-tauri/target/release
-          tar -czf RTLauncher-portable.tar.gz rtlauncher ../../install-deps.sh ../../PORTABLE_README.md
-          mv RTLauncher-portable.tar.gz ../../..
+          tar -czf RTLauncher-portable.tar.gz \
+            -C src-tauri/target/release rtlauncher \
+            -C src-tauri install-deps.sh PORTABLE_README.md
 
       - name: upload artifacts (Ubuntu portable)
         if: matrix.platform == 'ubuntu-22.04' && matrix.name == 'linux-portable'
@@ -133,7 +133,7 @@ jobs:
         with:
           name: tauri-app-linux-portable
           path: RTLauncher-portable.tar.gz
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 7
 
       - name: upload artifacts (Windows)
