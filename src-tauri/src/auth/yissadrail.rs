@@ -23,12 +23,21 @@ use sha2::{Digest, Sha256};
 use std::fs;
 use std::fs::File;
 use std::io::Write;
+use std::path::Path;
 
-const FOLDER_PATH: &str = "./.minecraft/versions";
+fn absolute_path(path: &Path) -> String {
+    fs::canonicalize(path)
+        .unwrap_or_else(|_| path.to_path_buf())
+        .to_string_lossy()
+        .to_string()
+}
 
 /// 获取或下载 authlib-injector，返回其文件路径
 /// 如果下载失败则返回空字符串
-pub fn get_or_download_authlib_injector() -> String {
+pub fn get_or_download_authlib_injector(minecraft_path: &Path) -> String {
+    // authlib-injector 是当前游戏目录的一部分。不能写入启动器工作目录下
+    // 硬编码的 `./.minecraft`，否则多游戏目录/便携版启动时 Java 找不到 agent。
+    let folder_path = minecraft_path.join("versions");
     // 初始化
     let URL_BMCL = "https://bmclapi2.bangbang93.com/mirrors/authlib-injector/artifact/latest.json";
     let URL_YUSHI = "https://authlib-injector.yushi.moe/artifact/latest.json";
@@ -38,11 +47,11 @@ pub fn get_or_download_authlib_injector() -> String {
         .unwrap_or_else(|_| reqwest::blocking::Client::new());
 
     // 先检查现有版本目录中是否已有 authlib-injector jar
-    if let Ok(entries) = fs::read_dir(FOLDER_PATH) {
+    if let Ok(entries) = fs::read_dir(&folder_path) {
         for entry in entries.flatten() {
             if let Ok(name) = entry.file_name().into_string() {
                 if name.starts_with("authlib-injector") && name.ends_with(".jar") {
-                    let path = format!("{}/{}", FOLDER_PATH, name);
+                    let path = absolute_path(&entry.path());
                     eprintln!("[AuthlibInjector] 找到现有文件: {}", path);
                     return path;
                 }
@@ -96,11 +105,11 @@ pub fn get_or_download_authlib_injector() -> String {
     let fileName = urlParts.last().unwrap_or(&"authlib-injector.jar");
     
     // 构造文件路径
-    let filePath = format!("{}/{}", FOLDER_PATH, fileName);
+    let file_path = folder_path.join(fileName);
     
     // 检查文件是否已存在
-    if fs::metadata(&filePath).is_ok() {
-        if let Ok(fileContent) = fs::read(&filePath) {
+    if fs::metadata(&file_path).is_ok() {
+        if let Ok(fileContent) = fs::read(&file_path) {
             let fileSha256 = hex::encode(Sha256::digest(&fileContent));
         
             // 获取校验和
@@ -110,8 +119,9 @@ pub fn get_or_download_authlib_injector() -> String {
                 .and_then(|s| s.as_str()) 
             {
                 if fileSha256 == checksumValue {
-                    info!("[AuthlibInjector] 文件已存在且校验成功: {}", filePath);
-                    return filePath;
+                    let path = absolute_path(&file_path);
+                    info!("[AuthlibInjector] 文件已存在且校验成功: {}", path);
+                    return path;
                 }
             }
         }
@@ -137,13 +147,13 @@ pub fn get_or_download_authlib_injector() -> String {
     eprintln!("[AuthlibInjector] 下载完成，大小: {} bytes", bytes.len());
 
     // 创建目录
-    if let Err(err) = fs::create_dir_all(FOLDER_PATH) {
+    if let Err(err) = fs::create_dir_all(&folder_path) {
         error!("创建目录失败: {}", err);
         return String::new();
     }
 
     // 保存文件
-    if let Err(err) = fs::write(&filePath, &bytes) {
+    if let Err(err) = fs::write(&file_path, &bytes) {
         error!("保存文件失败: {}", err);
         return String::new();
     }
@@ -156,17 +166,16 @@ pub fn get_or_download_authlib_injector() -> String {
     {
         let fileSha256 = hex::encode(Sha256::digest(&bytes));
         if fileSha256 == checksumValue {
-            info!("[AuthlibInjector] 文件下载成功，校验成功: {}", filePath);
+            info!(
+                "[AuthlibInjector] 文件下载成功，校验成功: {}",
+                file_path.display()
+            );
         } else {
             error!("[AuthlibInjector] 校验失败，但仍返回路径供尝试使用");
         }
     }
     
-    filePath
-}
-
-pub fn downloadInjecter() {
-    let _ = get_or_download_authlib_injector();
+    absolute_path(&file_path)
 }
 
 #[tauri::command]

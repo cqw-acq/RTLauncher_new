@@ -139,8 +139,9 @@ jobs:
         if: matrix.name == 'Linux Portable'
         run: |
           tar -czf RTLauncher-portable.tar.gz \
-            -C src-tauri/target/release rtlauncher \
-            -C src-tauri install-deps.sh PORTABLE_README.md
+            src-tauri/target/release/rtlauncher \
+            src-tauri/install-deps.sh \
+            src-tauri/PORTABLE_README.md
 
       - name: Upload portable package
         if: matrix.name == 'Linux Portable'

@@ -25,7 +25,6 @@ import type {
 
 /** 默认启动配置 */
 export const DEFAULT_INITIAL_JVM_ARGS = `-XX:+UnlockExperimentalVMOptions
--XX:+AlwaysPreTouch
 -XX:+DisableExplicitGC
 -XX:MaxGCPauseMillis=200
 -Dfml.ignorePatchDiscrepancies=true
@@ -41,7 +40,7 @@ const DEFAULT_LAUNCH_CONFIG: LaunchConfig = {
   minecraftPath: "",
   javaPath: "",
   wrapperPath: "",
-  maxMemory: "4096",
+  maxMemory: "2048",
   versionName: "",
   minecraftVersion: "",
   loadType: "0",
@@ -101,6 +100,7 @@ export function LaunchProvider({ children }: { children: React.ReactNode }) {
   const [launchEndedAt, setLaunchEndedAt] = useState<number | null>(null);
   const [lastExitCode, setLastExitCode] = useState<number | null>(null);
   const logIdRef = useRef(0);
+  const gameFullyStartedRef = useRef(false);
 
 
   // 本地配置先恢复，使首屏不必等待原生 I/O；原生路径查询完成后再无缝合并。
@@ -239,13 +239,17 @@ export function LaunchProvider({ children }: { children: React.ReactNode }) {
     let unlisten: (() => void) | null = null;
     listen<number>("game-exited", (event) => {
       const exitCode = event.payload;
+      // 退出码不为 0 并不必然表示“无法启动”：如果已收到运行完成事件，
+      // 代表游戏至少已打开。关闭时某些模组（如地图模组）可能触发看门狗，
+      // 仍会返回非零状态；保留日志供诊断，但不再误报为启动失败。
+      const hadFullyStarted = gameFullyStartedRef.current;
       const now = Date.now();
       const timeStr = new Date(now).toLocaleString();
       setLastLaunchTime(timeStr);
       setLaunchEndedAt(now);
       setLastExitCode(exitCode);
       try { localStorage.setItem("rtl-last-launch-time", timeStr); } catch { /* ignore */ }
-      setStatus(exitCode === 0 ? "stopped" : "error");
+      setStatus(exitCode === 0 || hadFullyStarted ? "stopped" : "error");
       setProgress(null); // 清理进度状态
       log4jParser.reset(); // 重置日志解析器
       setLogs((prev) => [
@@ -253,7 +257,7 @@ export function LaunchProvider({ children }: { children: React.ReactNode }) {
         {
           id: ++logIdRef.current,
           timestamp: new Date(now).toLocaleTimeString(),
-          level: exitCode === 0 ? "info" : "warn",
+          level: exitCode === 0 || hadFullyStarted ? "info" : "warn",
           message: t("launch.provider.gameExitedWithCodeExitCode", { exitCode: exitCode }),
         },
       ]);
@@ -268,6 +272,7 @@ export function LaunchProvider({ children }: { children: React.ReactNode }) {
     let unlisten: (() => void) | null = null;
     listen<number>("game-fully-started", (event) => {
       const pid = event.payload;
+      gameFullyStartedRef.current = true;
       setStatus("running");
       setProgress(null);
       setLogs((prev) => [
@@ -358,6 +363,7 @@ export function LaunchProvider({ children }: { children: React.ReactNode }) {
       setProgress(null);
       log4jParser.reset(); // 重置日志解析器
       const now = Date.now();
+      gameFullyStartedRef.current = false;
       setLaunchStartedAt(now);
       setLaunchEndedAt(null);
       setLastExitCode(null);
@@ -374,6 +380,20 @@ export function LaunchProvider({ children }: { children: React.ReactNode }) {
           addLog("info", t("launch.provider.loaderLoadName", { loadName: merged.loadName }));
         }
 
+        // 账户令牌和认证服务器必须与当前选中的账户绑定。此前这里优先使用
+        // localStorage 中的全局配置，切换账户后会把旧的第三方 token /
+        // Yggdrasil 地址带给新账户，最终在游戏内触发 401。
+        const isYggdrasilAccount =
+          selectedProfile.authType === "littleskin" ||
+          selectedProfile.authType === "third_party";
+        const accountAuthToken =
+          selectedProfile.authType === "offline"
+            ? "0"
+            : selectedProfile.accessToken || "";
+        const accountYggdrasilApi = isYggdrasilAccount
+          ? selectedProfile.yggdrasilUrl || merged.yggdrasilApi || ""
+          : "";
+
         const result = await invoke<string>("launch_game", {
           minecraftPath: merged.minecraftPath,
           javaPath: merged.javaPath,
@@ -382,11 +402,11 @@ export function LaunchProvider({ children }: { children: React.ReactNode }) {
           versionName: merged.versionName,
           minecraftVersion: merged.minecraftVersion,
           playerName: merged.playerName || selectedProfile.name,
-          authToken: merged.authToken || selectedProfile.accessToken || "",
+          authToken: accountAuthToken,
           uuid: merged.uuid || selectedProfile.uuid || selectedProfile.id,
           authlibInjectorPath: merged.authlibInjectorPath,
-          yggdrasilApi: merged.yggdrasilApi || selectedProfile.yggdrasilUrl || "",
-          prefetchedData: merged.prefetchedData,
+          yggdrasilApi: accountYggdrasilApi,
+          prefetchedData: accountYggdrasilApi ? merged.prefetchedData : "",
           loadType: merged.loadType,
           loadName: merged.loadName,
           windowWidth: merged.windowWidth || "873",

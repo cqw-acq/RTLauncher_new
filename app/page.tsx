@@ -74,9 +74,12 @@ export default function Home() {
       config.versionName &&
       selectedProfile,
   );
+  // 是否已在启动配置中选定版本；未选定时与启动设置界面保持一致，不展示任何实例
+  const hasSelectedVersion = Boolean(config.versionName || config.loadName);
   const versionName = selectedInstance?.minecraft_version || config.versionName || t("launch.noVersionSelected");
-  const loaderName =
-    selectedInstance?.loader || (config.loadType === "0" ? "Vanilla" : t("home.modLoader"));
+  const loaderName = !hasSelectedVersion
+    ? t("launch.noVersionSelected")
+    : selectedInstance?.loader || (config.loadType === "0" ? "Vanilla" : t("home.modLoader"));
 
   // 获取显示的整合包名称
   const displayInstanceName = config.loadName || config.versionName || t("launch.noVersionSelected");
@@ -250,7 +253,11 @@ export default function Home() {
                               </Badge>
                             ) : (
                               <Badge variant="outline">
-                                {selectedInstance ? t("home.currentInstance") : t("home.noInstanceSelected")}
+                                {selectedInstance
+                                  ? t("home.currentInstance")
+                                  : hasSelectedVersion
+                                    ? t("home.noInstanceSelected")
+                                    : t("launch.noVersionSelected")}
                               </Badge>
                             )}
                             <Badge variant="outline" className="text-muted-foreground">

@@ -235,6 +235,19 @@ export function LaunchConfigCard() {
       });
       if (!filePath) return;
 
+      // 导出的命令必须与实际启动完全一致：始终以当前账户的认证信息为准，
+      // 避免保存过的全局 token/Yggdrasil 地址污染其他账户。
+      const isYggdrasilAccount =
+        selectedProfile.authType === "littleskin" ||
+        selectedProfile.authType === "third_party";
+      const accountAuthToken =
+        selectedProfile.authType === "offline"
+          ? "0"
+          : selectedProfile.accessToken || "";
+      const accountYggdrasilApi = isYggdrasilAccount
+        ? selectedProfile.yggdrasilUrl || config.yggdrasilApi || ""
+        : "";
+
       // 构建完整的启动命令参数
       const result = await invoke<string>("build_jvm_arguments", {
         minecraftPath: config.minecraftPath,
@@ -244,11 +257,11 @@ export function LaunchConfigCard() {
         versionName: config.versionName,
         minecraftVersion: config.minecraftVersion,
         playerName: config.playerName || selectedProfile.name,
-        authToken: config.authToken || selectedProfile.accessToken || "",
+        authToken: accountAuthToken,
         uuid: config.uuid || selectedProfile.uuid || selectedProfile.id,
         authlibInjectorPath: config.authlibInjectorPath,
-        yggdrasilApi: config.yggdrasilApi || selectedProfile.yggdrasilUrl || "",
-        prefetchedData: config.prefetchedData,
+        yggdrasilApi: accountYggdrasilApi,
+        prefetchedData: accountYggdrasilApi ? config.prefetchedData : "",
         loadType: config.loadType,
         loadName: config.loadName,
         windowWidth: config.windowWidth || "873",

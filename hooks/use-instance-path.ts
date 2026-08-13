@@ -32,7 +32,7 @@ function ensureInstanceDirs(instanceDir: string): Promise<void> {
 export interface InstancePathInfo {
   /** <minecraftPath>/versions/<name>，无实例时为 undefined */
   instanceDir: string | undefined;
-  /** 当前选中的实例（可能为 null，此时需要用 fallback 逻辑） */
+  /** 当前选中的实例（仅当启动配置中确实选中且能匹配到已安装实例时才非空） */
   selectedInstance: InstanceData | null;
   /** 实例文件夹名（用于拼接子目录） */
   instanceFolderName: string | undefined;
@@ -99,8 +99,9 @@ export function useInstancePath(): InstancePathInfo {
       if (prefixMatch) return prefixMatch;
     }
 
-    // 方案4：fallback 到第一个实例
-    return instances[0];
+    // 没有任何与配置匹配的实例：保持 null，
+    // 避免把第一个实例冒充成“当前选中实例”，否则首页会与启动设置界面显示的版本不一致。
+    return null;
   }, [instances, config.loadName, config.versionName]);
 
   // 计算实例文件夹名：优先从 selectedInstance 获取，其次用 config.loadName，最后用 config.versionName

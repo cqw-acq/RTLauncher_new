@@ -983,6 +983,10 @@ pub async fn install(
     // 从 libraries 中解析真正的 forge/neoforge 版本号（用于 maven 路径匹配）
     // id 可能是 "1.21.4-neoforge-26.2.0.9-beta"，但我们真正需要的版本号是 "26.2.0.9-beta"
     let mut real_loader_version: Option<String> = None;
+    // 记录加载器真实坐标：net.neoforged:neoforge 或 net.minecraftforge:forge。
+    // 不能靠版本号里是否含 "neoforge" 判断——真实 NeoForge 版本号（如 26.2.0.9-beta）
+    // 往往不含 "neoforge"，否则会把 NeoForge 误当成 Forge。
+    let mut loader_group: Option<&'static str> = None;
     if let Some(libs) = version_json.get("libraries").and_then(|l| l.as_array()) {
         for lib in libs {
             if let Some(name) = lib.get("name").and_then(|n| n.as_str()) {
@@ -991,12 +995,14 @@ pub async fn install(
                     if parts[0].eq_ignore_ascii_case("net.neoforged")
                         && parts[1].eq_ignore_ascii_case("neoforge")
                     {
+                        loader_group = Some("neoforge");
                         real_loader_version = Some(parts[2].to_string());
                         break;
                     }
                     if parts[0].eq_ignore_ascii_case("net.minecraftforge")
                         && parts[1].eq_ignore_ascii_case("forge")
                     {
+                        loader_group = Some("forge");
                         real_loader_version = Some(parts[2].to_string());
                         break;
                     }
@@ -1096,7 +1102,8 @@ pub async fn install(
         }
     }
     let mut ip_model_mut = ip_model.clone();
-    let is_neoforge = forge_version.to_lowercase().contains("neoforge");
+    let is_neoforge = loader_group == Some("neoforge")
+        || (loader_group.is_none() && forge_version.to_lowercase().contains("neoforge"));
     let (maven_group, maven_artifact) = if is_neoforge {
         ("net.neoforged".to_string(), "neoforge".to_string())
     } else {

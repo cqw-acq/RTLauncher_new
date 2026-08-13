@@ -311,8 +311,10 @@ export function analyzeLaunchLogs(
       if (v) detectedMcVersion = v;
     }
 
-    if (!loader && FORGE_RE.test(log.message)) loader = "Forge";
+    // 必须先检测 NeoForge：NeoForge 的日志同时包含 ModLauncher/FML 等
+    // FORGE_RE 也会命中的串，先匹配 Forge 会把 NeoForge 误判成 Forge。
     if (!loader && NEOFORGE_RE.test(log.message)) loader = "NeoForge";
+    if (!loader && FORGE_RE.test(log.message)) loader = "Forge";
     if (!loader && FABRIC_RE.test(log.message)) loader = "Fabric";
     if (!loader && QUILT_RE.test(log.message)) loader = "Quilt";
     if (!loader && LITELOADER_RE.test(log.message)) loader = "LiteLoader";

@@ -24,8 +24,9 @@ fn get_java_version_full(java_path: &str) -> Option<ValidatedJava> {
         return None;
     }
     let detect_exe = pick_detect_exe(java_path);
-    let mut result = try_show_settings(&detect_exe, java_path)
-        .or_else(|| try_version_flag(&detect_exe, java_path))?;
+    // 优先使用简单的 -version 参数，避免兼容性问题
+    let mut result = try_version_flag(&detect_exe, java_path)
+        .or_else(|| try_show_settings(&detect_exe, java_path))?;
     if cfg!(windows) {
         result.installation.path = prefer_javaw(&result.installation.path);
     }
@@ -53,8 +54,14 @@ fn pick_detect_exe(java_path: &str) -> String {
     java_path.to_string()
 }
 fn try_show_settings(detect_exe: &str, java_path: &str) -> Option<ValidatedJava> {
+    // 使用 -version 而不是 -XshowSettings:properties，避免某些Java版本对额外参数的兼容性问题
     let output = Command::new(detect_exe)
-        .args(["-XshowSettings:properties", "-version"])
+        .arg("-version")
+        // 清除全局 JAVA_* 选项环境变量，避免混入 --add-opens 等参数导致
+        // 识别失败（尤其 Java 8 不识别 --add-opens 时 java -version 会直接报错）。
+        .env_remove("JAVA_TOOL_OPTIONS")
+        .env_remove("_JAVA_OPTIONS")
+        .env_remove("JDK_JAVA_OPTIONS")
         .stderr(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .output()
@@ -62,26 +69,20 @@ fn try_show_settings(detect_exe: &str, java_path: &str) -> Option<ValidatedJava>
     let stderr = String::from_utf8_lossy(&output.stderr);
     let stdout = String::from_utf8_lossy(&output.stdout);
     let combined = format!("{}{}", stderr, stdout);
-    let get_prop = |key: &str| -> Option<String> {
-        combined
-            .lines()
-            .find(|line| {
-                let t = line.trim();
-                t.starts_with(key) && t[key.len()..].trim_start().starts_with('=')
-            })
-            .and_then(|line| line.splitn(2, '=').nth(1))
-            .map(|v| v.trim().to_string())
-    };
-    let version = get_prop("java.version")?;
+
+    // 先尝试从版本输出中提取信息
+    let version_re = regex::Regex::new(r#"version "([^"]+)""#).ok()?;
+    let version = version_re.captures(&combined)?.get(1)?.as_str().to_string();
     let major_version = parse_major_version(&version)?;
-    let vendor = get_prop("java.vendor")
-        .map(|v| normalize_vendor(&v))
-        .unwrap_or_else(|| "Unknown".to_string());
-    let architecture = get_prop("os.arch")
-        .map(|a| normalize_arch(&a))
-        .unwrap_or_else(|| "Unknown".to_string());
+    let vendor = infer_vendor_from_version_output(&combined);
+    let architecture = if combined.contains("64-Bit") {
+        "x64".to_string()
+    } else {
+        "Unknown".to_string()
+    };
     let java_type = detect_java_type(java_path);
-    let java_home = get_prop("java.home").unwrap_or_default();
+    let java_home = canonical_path(java_path);
+
     Some(ValidatedJava {
         installation: JavaInstallation {
             path: java_path.to_string(),
@@ -97,6 +98,10 @@ fn try_show_settings(detect_exe: &str, java_path: &str) -> Option<ValidatedJava>
 fn try_version_flag(detect_exe: &str, java_path: &str) -> Option<ValidatedJava> {
     let output = Command::new(detect_exe)
         .arg("-version")
+        // 同上：清除全局 JAVA_* 选项环境变量，确保 java -version 结果可信
+        .env_remove("JAVA_TOOL_OPTIONS")
+        .env_remove("_JAVA_OPTIONS")
+        .env_remove("JDK_JAVA_OPTIONS")
         .stderr(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .output()
