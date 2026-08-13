@@ -40,6 +40,11 @@ jobs:
             name: 'Linux'
             artifact_name: 'linux'
             bundle_path: 'src-tauri/target/release/bundle/deb/*.deb'
+          - platform: 'ubuntu-22.04'
+            args: '--config src-tauri/tauri.linux.conf.json'
+            name: 'Linux Portable'
+            artifact_name: 'linux-portable'
+            bundle_path: 'src-tauri/target/release/rtlauncher'
           - platform: 'windows-latest'
             args: '--no-bundle'
             name: 'Windows'
@@ -122,10 +127,27 @@ jobs:
 
       # --- 5. 产物上传 (只提取 .dmg/.exe/.deb) ---
       - name: Upload Bundles
+        if: matrix.name != 'Linux Portable'
         uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.artifact_name }}-bundle
           path: ${{ matrix.bundle_path }}
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Package portable version
+        if: matrix.name == 'Linux Portable'
+        run: |
+          tar -czf RTLauncher-portable.tar.gz \
+            -C src-tauri/target/release rtlauncher \
+            -C src-tauri install-deps.sh PORTABLE_README.md
+
+      - name: Upload portable package
+        if: matrix.name == 'Linux Portable'
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.artifact_name }}-bundle
+          path: RTLauncher-portable.tar.gz
           if-no-files-found: error
           retention-days: 7
 
