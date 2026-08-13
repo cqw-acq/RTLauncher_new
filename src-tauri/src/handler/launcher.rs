@@ -2,6 +2,7 @@ use anyhow::Context;
 use os_info::Type;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+use sysinfo::System;
 use std::{
     collections::{HashMap, HashSet},
     path::PathBuf,
@@ -53,6 +54,109 @@ fn is_game_fully_started(line: &str) -> bool {
         || lower.contains("launching game")
         || lower.contains("loading complete") && lower.contains("mod")
         || lower.contains("minecraft client has started")
+        // 对于新版 Fabric/原版，未必输出上述固定文案；一旦已经进入世界、
+        // 显示主菜单或开始连接服务器，就说明客户端已经成功运行。
+        || lower.contains("title screen")
+        || lower.contains("connecting to ")
+        || lower.contains("joined the game")
+        || lower.contains("joined ") && lower.contains("server")
+}
+
+/// 将进程结束状态转换为可展示的退出码。
+/// Unix 上 `ExitStatus::code()` 在进程被信号终止时为 None；以前这类情况统一
+/// 显示为 -1，无法区分 SIGABRT/SIGKILL 等真实原因。约定用负信号号表示它们。
+fn display_exit_code(status: std::process::ExitStatus) -> i32 {
+    if let Some(code) = status.code() {
+        return code;
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        if let Some(signal) = status.signal() {
+            return -signal;
+        }
+    }
+
+    -1
+}
+
+/// 根据物理内存和当前可用内存，给 JVM 留出系统和启动器所需的余量。
+///
+/// `-Xmx` 是上限而非建议值。尤其配合 `-XX:+AlwaysPreTouch` 时，设置为
+/// 机器全部内存会在 JVM 初始化阶段立即占满内存，Linux 可能直接由 OOM
+/// killer 终止进程，并在启动器中只表现为不明确的 `-1` 退出码。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SafeMemoryLimit {
+    Unknown,
+    Insufficient { min_available_mb: u64 },
+    Limited(u64),
+}
+
+fn safe_max_memory_mb(requested_mb: u64, total_mb: u64, available_mb: u64) -> SafeMemoryLimit {
+    if total_mb == 0 || available_mb == 0 {
+        return SafeMemoryLimit::Unknown;
+    }
+
+    // 至少给桌面、启动器和原生库保留 512MB；内存较大的设备则保留总内存的 1/8，
+    // 上限为 2GB，避免游戏占用所有物理内存。
+    let reserve_mb = (total_mb / 8).clamp(512, 2048);
+    let total_limit_mb = total_mb.saturating_mul(3) / 4;
+    let available_limit_mb = available_mb.saturating_sub(reserve_mb);
+    let limit_mb = total_limit_mb.min(available_limit_mb);
+
+    if limit_mb < 512 {
+        return SafeMemoryLimit::Insufficient {
+            min_available_mb: reserve_mb + 512,
+        };
+    }
+
+    SafeMemoryLimit::Limited(requested_mb.min(limit_mb))
+}
+
+fn resolve_max_memory_mb(max_memory: &str) -> anyhow::Result<(u64, Option<String>)> {
+    let requested_mb = max_memory
+        .trim()
+        .parse::<u64>()
+        .map_err(|_| anyhow::anyhow!("最大内存必须是一个有效的 MB 数值，当前值为: {max_memory}"))?;
+
+    if requested_mb < 512 {
+        return Err(anyhow::anyhow!(
+            "最大内存不能低于 512MB，当前值为: {requested_mb}MB"
+        ));
+    }
+
+    let mut system = System::new();
+    system.refresh_memory();
+    let total_mb = system.total_memory() / 1024 / 1024;
+    let available_mb = system.available_memory() / 1024 / 1024;
+
+    let effective_mb = match safe_max_memory_mb(requested_mb, total_mb, available_mb) {
+        SafeMemoryLimit::Unknown => return Ok((requested_mb, None)),
+        SafeMemoryLimit::Insufficient { min_available_mb } => {
+            return Err(anyhow::anyhow!(
+                "当前可用内存不足，至少需要约 {min_available_mb}MB 可用内存后再启动游戏。（系统总内存 {total_mb}MB，当前可用 {available_mb}MB）"
+            ));
+        }
+        SafeMemoryLimit::Limited(effective_mb) => effective_mb,
+    };
+
+    let warning = (effective_mb < requested_mb).then(|| {
+        format!(
+            "已将最大内存从 {requested_mb}MB 调整为 {effective_mb}MB（系统总内存 {total_mb}MB，当前可用 {available_mb}MB），以避免系统内存不足导致游戏启动失败。"
+        )
+    });
+    Ok((effective_mb, warning))
+}
+
+fn is_heap_size_argument(argument: &str) -> bool {
+    argument.starts_with("-Xmx")
+        || argument.starts_with("-Xms")
+        || argument.starts_with("-Xmn")
+        || argument.starts_with("-XX:MaxHeapSize=")
+        || argument.starts_with("-XX:InitialHeapSize=")
+        || argument.starts_with("-XX:NewSize=")
+        || argument.starts_with("-XX:MaxNewSize=")
 }
 
 /// 游戏日志事件，发送给前端的结构体
@@ -203,6 +307,23 @@ fn is_valid_uuid(s: &str) -> bool {
     // 支持 xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx 或无连字符 32位 hex
     let trimmed = s.replace('-', "");
     trimmed.len() == 32 && trimmed.chars().all(|c| c.is_ascii_hexdigit())
+}
+
+/// 根据账户认证方式生成 Minecraft 的身份参数。
+///
+/// authlib-injector 使用 Yggdrasil 认证流程，而不是微软账号流程。把第三方
+/// access token 伪装成 `msa` 会让新版客户端访问 Minecraft Services 的
+/// `/player/attributes`，该服务会以 401 拒绝第三方 token。
+fn launch_auth_identity(auth_token: &str, yggdrasil_api: &str) -> (&'static str, &'static str) {
+    if !yggdrasil_api.trim().is_empty() {
+        ("mojang", "{}")
+    } else if auth_token.trim().is_empty() || auth_token.trim() == "0" {
+        ("legacy", "{}")
+    } else {
+        // 正版账户仍使用 Microsoft 登录流程；不要伪造 user properties，
+        // 客户端会在需要时自行从官方服务取得它们。
+        ("msa", "{}")
+    }
 }
 
 /// 将Maven库名称转换为文件系统路径
@@ -538,7 +659,7 @@ pub fn run_command(
 
                 let exit_code = if let Some(mut c) = child_to_wait {
                     match c.wait() {
-                        Ok(status) => status.code().unwrap_or(-1),
+                        Ok(status) => display_exit_code(status),
                         Err(e) => {
                             error!("等待游戏进程 {} 时出错: {}", pid, e);
                             -1
@@ -669,7 +790,7 @@ pub fn build_jvm_arguments(
 }
 
 fn build_jvm_arguments_inner(
-    _app_handle: tauri::AppHandle,
+    app_handle: tauri::AppHandle,
     minecraft_path: &str,
     java_path: &str,
     wrapper_path: &str,
@@ -689,6 +810,17 @@ fn build_jvm_arguments_inner(
     custom_jvm_args: &str,
 ) -> anyhow::Result<Vec<String>> {
     let minecraft_path_buf = PathBuf::from(minecraft_path);
+    let (effective_max_memory_mb, memory_warning) = resolve_max_memory_mb(max_memory)?;
+    if let Some(warning) = memory_warning.as_ref() {
+        warn!("{warning}");
+        let _ = app_handle.emit(
+            "game-log",
+            GameLogEvent {
+                level: "warn".to_string(),
+                message: warning.clone(),
+            },
+        );
+    }
     
     // 确定实际的游戏目录（用于运行游戏）
     let game_directory = if loadType != "0" && !loadName.is_empty() {
@@ -866,20 +998,40 @@ fn build_jvm_arguments_inner(
                                 if let Some(jvm_arr) =
                                     args_obj.get("jvm").and_then(|v| v.as_array())
                                 {
+                                    let natives_dir = minecraft_path_buf
+                                        .join("versions")
+                                        .join(version_name)
+                                        .join(format!("{}-natives", version_name))
+                                        .to_string_lossy()
+                                        .replace('\\', "/");
                                     for el in jvm_arr {
                                         fn apply_placeholder(
                                             s: &str,
                                             classpath_sep: &str,
                                             library_dir_str: &str,
                                             version_name: &str,
+                                            natives_dir: &str,
                                         ) -> String {
                                             let mut replaced = s.to_string();
                                             replaced = replaced
                                                 .replace("${classpath_separator}", classpath_sep);
                                             replaced = replaced
                                                 .replace("${library_directory}", library_dir_str);
+                                            replaced = replaced
+                                                .replace("${version_name}", version_name);
+                                            replaced = replaced
+                                                .replace("${natives_directory}", natives_dir);
                                             replaced =
-                                                replaced.replace("${version_name}", version_name);
+                                                replaced.replace("${launcher_name}", "RTLauncher");
+                                            replaced = replaced.replace(
+                                                "${launcher_version}",
+                                                env!("CARGO_PKG_VERSION"),
+                                            );
+                                            // 剩余的${}格式参数转换为{}格式（与游戏参数保持一致）
+                                            let re = Regex::new(r"\$\{[^}]+\}").unwrap();
+                                            replaced = re
+                                                .replace_all(&replaced, "{}")
+                                                .to_string();
                                             replaced.trim().to_string()
                                         }
 
@@ -887,8 +1039,15 @@ fn build_jvm_arguments_inner(
                                                            out: &mut Vec<String>,
                                                            classpath_sep: &str,
                                                            library_dir_str: &str,
-                                                           version_name: &str| {
-                                            let replaced = apply_placeholder(s, classpath_sep, library_dir_str, version_name);
+                                                           version_name: &str,
+                                                           natives_dir: &str| {
+                                            let replaced = apply_placeholder(
+                                                s,
+                                                classpath_sep,
+                                                library_dir_str,
+                                                version_name,
+                                                natives_dir,
+                                            );
                                             if !replaced.is_empty() {
                                                 out.push(replaced);
                                             }
@@ -948,6 +1107,7 @@ fn build_jvm_arguments_inner(
                                                 classpath_sep,
                                                 &library_dir_str,
                                                 &version_name,
+                                                &natives_dir,
                                             );
                                         } else if let Some(obj) = el.as_object() {
                                             if check_rules(obj) {
@@ -959,6 +1119,7 @@ fn build_jvm_arguments_inner(
                                                             classpath_sep,
                                                             &library_dir_str,
                                                             &version_name,
+                                                            &natives_dir,
                                                         );
                                                     } else if let Some(arr) = val.as_array() {
                                                         for item in arr {
@@ -969,6 +1130,7 @@ fn build_jvm_arguments_inner(
                                                                     classpath_sep,
                                                                     &library_dir_str,
                                                                     &version_name,
+                                                                    &natives_dir,
                                                                 );
                                                             }
                                                         }
@@ -1483,6 +1645,7 @@ fn build_jvm_arguments_inner(
     } else {
         auth_token
     };
+    let (user_type, user_properties) = launch_auth_identity(effective_token, yggdrasil_api);
 
     // 生成 UUID v3 (基于名称) 从玩家名
     fn generate_uuid_from_name(name: &str) -> String {
@@ -1533,7 +1696,7 @@ fn build_jvm_arguments_inner(
             .replace("${auth_session}", &effective_token)
             .replace("${auth_access_token}", &effective_token)
             .replace("${auth_uuid}", &effective_uuid)
-            .replace("${user_properties}", r#"{"issuer":["Mojang"]}"#)
+            .replace("${user_properties}", user_properties)
             .replace("${version_name}", version_name)
             .replace(
                 "${natives_directory}",
@@ -1560,7 +1723,7 @@ fn build_jvm_arguments_inner(
                     .map(|a| a.id.trim())
                     .unwrap_or(&String::new()),
             )
-            .replace("${user_type}", "msa")
+            .replace("${user_type}", user_type)
             .replace("${version_type}", "RTL");
 
         // 将剩余的${}格式参数转换为{}格式
@@ -1818,7 +1981,13 @@ fn build_jvm_arguments_inner(
     let cp_sep_for_replace = if is_windows { ";" } else { ":" };
     let class_path: String = class_path_entries.join(cp_sep_for_replace);
 
-    let mut args: Vec<String> = vec!["-Xmn768m".to_string(), format!("-Xmx{}m", max_memory)];
+    // 年轻代不应大于最大堆的三分之一；否则小内存设备即使 Xmx 合法也会
+    // 因固定的 `-Xmn768m` 产生不合理的初始化压力。
+    let young_generation_mb = 768_u64.min((effective_max_memory_mb / 3).max(256));
+    let mut args: Vec<String> = vec![
+        format!("-Xmn{young_generation_mb}m"),
+        format!("-Xmx{effective_max_memory_mb}m"),
+    ];
 
     // ===== 参照 HMCL：修正 load_jvm_params 中的 neoforge/forge jar 路径 =====
     // Forge JSON 中的 -p 参数可能包含 "neoforge-${version_name}.jar" 这样的引用，
@@ -1992,6 +2161,8 @@ fn build_jvm_arguments_inner(
                 result = result.replace("${classpath_separator}", classpath_sep);
                 result = result.replace("${library_directory}", &library_dir);
                 result = result.replace("${version_name}", &version_name);
+                result = result.replace("${launcher_name}", "RTLauncher");
+                result = result.replace("${launcher_version}", env!("CARGO_PKG_VERSION"));
 
                 // ===== 关键修复：替换 ${classpath} 占位符 =====
                 // Forge/NeoForge 在 -cp 参数的 value 里用 ${classpath} 来引用整个 classpath
@@ -2036,7 +2207,9 @@ fn build_jvm_arguments_inner(
                     }
                 }
 
-                result
+                // 将剩余的${}格式参数转换为{}格式（与 game 参数替换保持一致）
+                let re = Regex::new(r"\$\{[^}]+\}").unwrap();
+                re.replace_all(&result, "{}").to_string()
             };
 
             for arg in jvm_args {
@@ -2234,7 +2407,9 @@ fn build_jvm_arguments_inner(
             "[Launcher] 检测到 Yggdrasil API: {}, 自动获取 authlib-injector...",
             yggdrasil_api
         );
-        let downloaded = crate::auth::yissadrail::get_or_download_authlib_injector();
+        let downloaded = crate::auth::yissadrail::get_or_download_authlib_injector(
+            &minecraft_path_buf,
+        );
         if downloaded.is_empty() {
             warn!("[Launcher] 警告: 无法获取 authlib-injector，游戏内皮肤可能无法显示");
         } else {
@@ -2245,10 +2420,28 @@ fn build_jvm_arguments_inner(
         authlib_injector_path.to_string()
     };
 
-    if !effective_authlib_path.is_empty() && !yggdrasil_api.is_empty() {
+    if !yggdrasil_api.is_empty() {
+        if effective_authlib_path.trim().is_empty() {
+            return Err(anyhow::anyhow!(
+                "第三方登录需要 authlib-injector，但自动下载失败。请检查网络后重试，或在启动设置中指定有效的 authlib-injector.jar 路径。"
+            ));
+        }
+
+        let authlib_path = PathBuf::from(&effective_authlib_path);
+        if !authlib_path.is_file() {
+            return Err(anyhow::anyhow!(
+                "authlib-injector 文件不存在或不是文件: {}",
+                authlib_path.display()
+            ));
+        }
+
         args.push(format!(
             "-javaagent:{}={}",
-            effective_authlib_path, yggdrasil_api
+            authlib_path
+                .canonicalize()
+                .unwrap_or(authlib_path)
+                .to_string_lossy(),
+            yggdrasil_api.trim()
         ));
         // 对于 LittleSkin 等皮肤站，添加 no-verify 选项避免部分 SSL 问题
         args.push("-Dauthlibinjector.noVerify=true".to_string());
@@ -2558,6 +2751,28 @@ fn build_jvm_arguments_inner(
         for tok in tokens {
             let trimmed = tok.trim().to_string();
             if !trimmed.is_empty() {
+                // 最大堆由“最大内存”设置统一控制。允许自定义参数在末尾再次
+                // 写入 -Xmx/-Xms 会覆盖上面的安全上限，重新引入 OOM 风险。
+                if is_heap_size_argument(&trimmed) {
+                    warn!(
+                        "已忽略自定义 JVM 堆内存参数 {}；请在启动设置的最大内存中调整",
+                        trimmed
+                    );
+                    continue;
+                }
+                // 这两个参数会把新版客户端的用户属性请求强制导向 Mojang。
+                // 对 Yggdrasil/LittleSkin 账户，它们会绕过 authlib-injector 并导致
+                // `/player/attributes` 返回 401；官方账户不受影响，保留原行为。
+                if !yggdrasil_api.trim().is_empty()
+                    && (trimmed.starts_with("-Dminecraft.api.env=")
+                        || trimmed.starts_with("-Dminecraft.api.location="))
+                {
+                    warn!(
+                        "第三方账户已忽略会覆盖 authlib-injector 的 JVM 参数: {}",
+                        trimmed
+                    );
+                    continue;
+                }
                 args.push(trimmed);
             }
         }

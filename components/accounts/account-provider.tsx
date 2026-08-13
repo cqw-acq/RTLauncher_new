@@ -308,6 +308,19 @@ export function AccountProvider({ children }: { children: React.ReactNode }) {
                     : p
                 )
               );
+              // launchGame 使用的是 selectedProfile。若只更新 profiles，闭包中的
+              // selectedProfile 仍保留旧 access token，下一次启动依然会在游戏内
+              // 收到 Minecraft Services 的 401。
+              setSelectedProfile((current) =>
+                current?.id === pid
+                  ? {
+                      ...current,
+                      name: refreshed.name || pName,
+                      accessToken: refreshed.access_token,
+                      skinUrl: avatarSrc ?? current.skinUrl,
+                    }
+                  : current
+              );
               refreshedOk = true;
               console.log(
                 `[正版检测-前端] 步骤3：✓ 静默刷新成功！新 access_token 已应用，玩家名=${refreshed.name || pName}`

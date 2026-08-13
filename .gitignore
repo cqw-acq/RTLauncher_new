@@ -75,3 +75,4 @@ gen_latest_json.js
 /.tauri-start.ps1
 /downloads/
 /RTLauncher-portable/
+/pr_description
