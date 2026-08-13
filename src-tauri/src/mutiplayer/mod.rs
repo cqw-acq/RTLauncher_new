@@ -165,12 +165,27 @@ fn read_log_increment(path: &Path, offset: &Mutex<u64>) -> Vec<u8> {
     buffer
 }
 
+fn is_openp2p_process_name(name: &str) -> bool {
+    name.eq_ignore_ascii_case("openp2p") || name.eq_ignore_ascii_case("openp2p.exe")
+}
+
+/// 窗口关闭时的快速兜底清理：直接用系统进程 API 结束 openp2p，
+/// 不依赖 wmic/taskkill 等外部命令，避免触发杀毒软件拦截。
+pub fn quick_kill_openp2p() {
+    let system = sysinfo::System::new_all();
+    for process in system.processes().values() {
+        if is_openp2p_process_name(&process.name().to_string_lossy()) {
+            let _ = process.kill();
+        }
+    }
+}
+
 fn has_openp2p_system_process() -> bool {
     let system = sysinfo::System::new_all();
-    system.processes().values().any(|process| {
-        let name = process.name().to_string_lossy();
-        name.eq_ignore_ascii_case("openp2p") || name.eq_ignore_ascii_case("openp2p.exe")
-    })
+    system
+        .processes()
+        .values()
+        .any(|process| is_openp2p_process_name(&process.name().to_string_lossy()))
 }
 
 #[cfg(target_os = "windows")]
@@ -563,10 +578,11 @@ for ($i = 0; $i -lt 20; $i++) {
         for attempt in 0..12 {
             let system = sysinfo::System::new_all();
             let mut found = false;
-            for process in system.processes().values().filter(|process| {
-                let name = process.name().to_string_lossy();
-                name.eq_ignore_ascii_case("openp2p") || name.eq_ignore_ascii_case("openp2p.exe")
-            }) {
+            for process in system
+                .processes()
+                .values()
+                .filter(|process| is_openp2p_process_name(&process.name().to_string_lossy()))
+            {
                 found = true;
                 if attempt < 4 {
                     let _ = process.kill_with(Signal::Term);
@@ -681,6 +697,24 @@ mod tests {
     use std::io::Write;
     use std::sync::Mutex;
     use std::time::{SystemTime, UNIX_EPOCH};
+    use super::is_openp2p_process_name;
+
+    #[test]
+    fn openp2p_process_name_matches_exact_names_case_insensitively() {
+        assert!(is_openp2p_process_name("openp2p"));
+        assert!(is_openp2p_process_name("OpenP2P"));
+        assert!(is_openp2p_process_name("openp2p.exe"));
+        assert!(is_openp2p_process_name("OPENP2P.EXE"));
+    }
+
+    #[test]
+    fn openp2p_process_name_rejects_other_processes() {
+        assert!(!is_openp2p_process_name("openp2pd"));
+        assert!(!is_openp2p_process_name("myopenp2p"));
+        assert!(!is_openp2p_process_name("openp2p-helper"));
+        assert!(!is_openp2p_process_name("notepad.exe"));
+        assert!(!is_openp2p_process_name(""));
+    }
 
     #[test]
     fn log_reader_returns_only_new_bytes_and_handles_truncation() {
