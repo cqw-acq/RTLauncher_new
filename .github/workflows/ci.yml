@@ -91,7 +91,15 @@ jobs:
         # 核心修复：增加 --ignore-workspace 避免配置失效导致的 ERR_PNPM_INVALID_WORKSPACE_CONFIGURATION
         run: pnpm install --ignore-workspace
 
-      # --- 4. Windows 数字签名 ---
+      # --- 4. 构建 Tauri 应用 ---
+      - name: Build Tauri app
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          args: ${{ matrix.args }}
+
+      # --- 5. Windows 数字签名 ---
       - name: Sign Windows Executable
         if: matrix.platform == 'windows-latest'
         env:
