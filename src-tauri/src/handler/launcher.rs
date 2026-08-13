@@ -1484,12 +1484,12 @@ fn build_jvm_arguments_inner(
     
     // 确定基础 Minecraft 版本（用于定位游戏 JAR）
     // 优先级：传入的 minecraft_version > parent_version (inheritsFrom) > patches 中的 game 版本 > version_name
-    let supplied_version_jar = minecraft_path_buf
-        .join("versions")
-        .join(minecraft_version)
-        .join(format!("{}.jar", minecraft_version));
-    let supplied_version_is_trusted = !minecraft_version.is_empty()
-        && (is_plausible_minecraft_version(minecraft_version) || supplied_version_jar.is_file());
+    // 注意：不能因为 versions/<minecraft_version>/<minecraft_version>.jar 存在就信任该值。
+    // 例如整合包目录名 "SH的乌龟世界" 或旧实例遗留在 UI 配置里的过期 id 会指向一个与
+    // 当前实例无关的 JAR（如 Java 26 字节码的原版包），导致 classpath 混入错误版本。
+    // 只有形如 "1.20.1"/"26.2"/"24w14a" 的合法版本号才值得信任。
+    let supplied_version_is_trusted =
+        !minecraft_version.is_empty() && is_plausible_minecraft_version(minecraft_version);
 
     let base_minecraft_version = if supplied_version_is_trusted {
         println!("使用传入的 minecraft_version 作为基础版本: {}", minecraft_version);
@@ -2321,13 +2321,20 @@ fn build_jvm_arguments_inner(
                     }
                 }
             }
-            let log_path = format_path(log_file_path);
-            // Windows 上 Java 的 URI.toURL() 需要 file:/// 协议前缀
-            // 否则会把盘符 D: 误认为 URL scheme
-            if cfg!(windows) {
-                args.push(format!("-Dlog4j.configurationFile=file:///{}", log_path));
+            if log_file_path.is_file() {
+                let log_path = format_path(log_file_path);
+                // Windows 上 Java 的 URI.toURL() 需要 file:/// 协议前缀
+                // 否则会把盘符 D: 误认为 URL scheme
+                if cfg!(windows) {
+                    args.push(format!("-Dlog4j.configurationFile=file:///{}", log_path));
+                } else {
+                    args.push(format!("-Dlog4j.configurationFile=file:{}", log_path));
+                }
             } else {
-                args.push(format!("-Dlog4j.configurationFile=file:{}", log_path));
+                warn!(
+                    "未找到 Minecraft 日志配置文件 {}，跳过 -Dlog4j.configurationFile",
+                    log_file_path.display()
+                );
             }
         }
     }
@@ -2854,8 +2861,14 @@ fn major_version_to_runtime_name(major: u32) -> Option<&'static str> {
 fn required_java_major_from_jar(jar_path: &std::path::Path) -> Option<u32> {
     let file = std::fs::File::open(jar_path).ok()?;
     let mut archive = zip::ZipArchive::new(file).ok()?;
+    // 扫描整个 JAR 取最大字节码版本：整合包 JAR 可能混有不同 javac 编译的类，
+    // 只读第一个类文件会低估所需 Java 版本（如先扫到 Java 25 的类、后遇到 Java 26 的类）。
+    let mut max_major = 0_u32;
     for index in 0..archive.len() {
-        let mut entry = archive.by_index(index).ok()?;
+        let mut entry = match archive.by_index(index) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
         if !entry.name().ends_with(".class") || entry.name().starts_with("META-INF/versions/") {
             continue;
         }
@@ -2863,9 +2876,12 @@ fn required_java_major_from_jar(jar_path: &std::path::Path) -> Option<u32> {
         if entry.read_exact(&mut header).is_err() || header[..4] != [0xCA, 0xFE, 0xBA, 0xBE] {
             continue;
         }
-        return (u16::from_be_bytes([header[6], header[7]]) as u32).checked_sub(44);
+        let major = (u16::from_be_bytes([header[6], header[7]]) as u32).checked_sub(44);
+        if let Some(m) = major {
+            max_major = max_major.max(m);
+        }
     }
-    None
+    (max_major > 0).then_some(max_major)
 }
 
 fn is_plausible_minecraft_version(version: &str) -> bool {
@@ -3074,7 +3090,8 @@ pub fn launch_game(
 #[cfg(test)]
 mod tests {
     use super::{
-        append_loader_jvm_args, is_plausible_minecraft_version, launcher_rules_allow,
+        append_loader_jvm_args, display_exit_code, is_plausible_minecraft_version,
+        launch_auth_identity, launcher_rules_allow, safe_max_memory_mb, SafeMemoryLimit,
     };
     use serde_json::json;
 
@@ -3148,6 +3165,49 @@ mod tests {
         for instance_name in ["PVZ_Survive", "SHser-Basic-Package", "fabric-loader-0.15.0"] {
             assert!(!is_plausible_minecraft_version(instance_name), "{instance_name}");
         }
+    }
+
+    #[test]
+    fn chooses_auth_identity_that_matches_the_account_type() {
+        assert_eq!(
+            launch_auth_identity("third-party-token", "https://example.invalid/api/yggdrasil"),
+            ("mojang", "{}")
+        );
+        assert_eq!(launch_auth_identity("0", ""), ("legacy", "{}"));
+        assert_eq!(launch_auth_identity("microsoft-token", ""), ("msa", "{}"));
+    }
+
+    #[test]
+    fn limits_heap_to_memory_available_after_system_reserve() {
+        // 4GB 设备、约 2.3GB 当前可用时，不能预分配 4GB 堆。
+        assert_eq!(
+            safe_max_memory_mb(4096, 3819, 2335),
+            SafeMemoryLimit::Limited(1823)
+        );
+        assert_eq!(
+            safe_max_memory_mb(1024, 3819, 2335),
+            SafeMemoryLimit::Limited(1024)
+        );
+    }
+
+    #[test]
+    fn distinguishes_unknown_and_insufficient_memory() {
+        assert_eq!(safe_max_memory_mb(4096, 0, 2048), SafeMemoryLimit::Unknown);
+        assert_eq!(
+            safe_max_memory_mb(4096, 3819, 800),
+            SafeMemoryLimit::Insufficient {
+                min_available_mb: 1024
+            }
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn preserves_unix_termination_signal_in_exit_code() {
+        use std::os::unix::process::ExitStatusExt;
+
+        assert_eq!(display_exit_code(std::process::ExitStatus::from_raw(0)), 0);
+        assert_eq!(display_exit_code(std::process::ExitStatus::from_raw(6)), -6);
     }
 }
 
