@@ -6,12 +6,19 @@ import { motion } from "framer-motion";
 import {
   ArrowRight,
   Boxes,
+  Camera,
+  Database,
   Download,
   Gamepad2,
+  Globe,
   Loader2,
+  Map,
   Package,
+  Palette,
   Play,
+  Puzzle,
   Shirt,
+  Sparkles,
   User,
   UserPlus,
   Users,
@@ -95,6 +102,15 @@ export default function Home() {
   const quickActions = [
     { href: "/download", title: t("home.downloads"), description: t("home.gameLoadersAndResources"), icon: Download, iconClassName: "bg-sky-500/10 text-sky-600 dark:text-sky-400" },
     { href: "/game-settings", title: t("home.gameManagement"), description: t("home.modsWorldsAndResourcePacks"), icon: Gamepad2, iconClassName: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400" },
+  ];
+  const gameQuickActions = [
+    { href: "/game-settings/mods", title: t("home.cardGrid.mods"), icon: Puzzle, iconClassName: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400" },
+    { href: "/game-settings/screenshots", title: t("home.cardGrid.screenshots"), icon: Camera, iconClassName: "bg-cyan-500/10 text-cyan-600 dark:text-cyan-400" },
+    { href: "/game-settings/schematics", title: t("home.cardGrid.schematics"), icon: Map, iconClassName: "bg-teal-500/10 text-teal-600 dark:text-teal-400" },
+    { href: "/game-settings/resources", title: t("home.cardGrid.resourcePacks"), icon: Palette, iconClassName: "bg-blue-500/10 text-blue-600 dark:text-blue-400" },
+    { href: "/game-settings/datapacks", title: t("gameSettings.datapacks"), icon: Database, iconClassName: "bg-fuchsia-500/10 text-fuchsia-600 dark:text-fuchsia-400" },
+    { href: "/game-settings/shaders", title: t("home.cardGrid.shaders"), icon: Sparkles, iconClassName: "bg-violet-500/10 text-violet-600 dark:text-violet-400" },
+    { href: "/game-settings/worlds", title: t("home.cardGrid.worlds"), icon: Globe, iconClassName: "bg-amber-500/10 text-amber-600 dark:text-amber-400" },
   ];
 
   const handleProfileSelect = (profile: Account) => {
@@ -343,6 +359,23 @@ export default function Home() {
                           <span className="block truncate text-xs text-muted-foreground">{description}</span>
                         </span>
                         <ArrowRight className="size-3.5 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
+                      </Link>
+                    ))}
+                  </div>
+
+                  <div className="h-px bg-border" />
+
+                  <div className="grid grid-cols-4 gap-2">
+                    {gameQuickActions.map(({ href, title, icon: Icon, iconClassName }) => (
+                      <Link
+                        key={href}
+                        href={href}
+                        className="group flex flex-col items-center justify-center gap-1.5 rounded-xl border border-transparent p-3 transition-colors hover:border-border hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                      >
+                        <span className={`flex size-8 shrink-0 items-center justify-center rounded-lg ${iconClassName}`}>
+                          <Icon className="size-4" />
+                        </span>
+                        <span className="text-xs font-medium">{title}</span>
                       </Link>
                     ))}
                   </div>
