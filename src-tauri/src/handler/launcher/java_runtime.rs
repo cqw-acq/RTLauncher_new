@@ -25,6 +25,12 @@ pub(super) fn get_java_major_version(java_path: &str) -> String {
                 if let Some(ver_start) = lower.find("version") {
                     let after = &line[ver_start + "version".len()..].trim();
                     let after = after.trim_matches(|c: char| c == '"' || c == ' ');
+                    if let Some(legacy) = after.strip_prefix("1.") {
+                        let major = legacy.split(['.', '_']).next().unwrap_or_default();
+                        if major.chars().all(|c| c.is_ascii_digit()) {
+                            return major.to_string();
+                        }
+                    }
                     // 提取第一个 . 之前的数字
                     if let Some(dot) = after.find('.') {
                         let major = &after[..dot];
@@ -92,4 +98,30 @@ pub(super) fn is_plausible_minecraft_version(version: &str) -> bool {
             .expect("valid Minecraft version regex")
         })
         .is_match(version)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::get_java_major_version;
+
+    #[test]
+    #[cfg(unix)]
+    fn reads_java_8_from_the_legacy_version_format() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let path = std::env::temp_dir().join(format!(
+            "rtlauncher-java-version-{}-{}",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("test")
+        ));
+        std::fs::write(&path, "#!/bin/sh\necho 'java version \"1.8.0_301\"' >&2\n")
+            .expect("write Java version fixture");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700))
+            .expect("make Java version fixture executable");
+
+        let major = get_java_major_version(path.to_str().expect("UTF-8 fixture path"));
+        let _ = std::fs::remove_file(&path);
+
+        assert_eq!(major, "8");
+    }
 }

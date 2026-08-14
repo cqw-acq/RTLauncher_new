@@ -2,15 +2,15 @@ use serde::Serialize;
 use std::{
     io::{BufRead, BufReader},
     path::PathBuf,
-    process::{Child, Command, Stdio},
+    process::{Command, Stdio},
     sync::{Mutex, OnceLock},
     thread,
 };
 use tauri::Emitter;
 
-/// 全局游戏进程跟踪（存储 Child 所有权 + PID，便于 kill）
+/// 全局游戏进程跟踪。
+/// 等待线程持有 Child，避免终止命令提前清除状态并漏掉进程回收。
 struct GameProcess {
-    child: Option<Child>,
     pid: u32,
     fully_started: bool,
 }
@@ -18,6 +18,26 @@ struct GameProcess {
 fn game_process_store() -> &'static Mutex<Option<GameProcess>> {
     static STORE: OnceLock<Mutex<Option<GameProcess>>> = OnceLock::new();
     STORE.get_or_init(|| Mutex::new(None))
+}
+
+fn insert_process_if_empty(
+    store: &mut Option<GameProcess>,
+    process: GameProcess,
+) -> Result<(), String> {
+    if let Some(current) = store.as_ref() {
+        return Err(format!("已有游戏进程正在运行 (PID {})", current.pid));
+    }
+    *store = Some(process);
+    Ok(())
+}
+
+fn clear_process_if_pid(store: &mut Option<GameProcess>, pid: u32) -> bool {
+    if store.as_ref().is_some_and(|process| process.pid == pid) {
+        *store = None;
+        true
+    } else {
+        false
+    }
 }
 
 /// 检测游戏是否完全启动（JVM 启动、加载完资源、主窗口就绪）
@@ -70,19 +90,23 @@ pub(super) struct GameLogEvent {
 /// 解析 Minecraft log4j 日志行，提取日志级别
 /// 支持格式: [HH:MM:SS] [Thread/LEVEL]: message
 fn parse_log_level(line: &str) -> &'static str {
-    // 查找 [XXX/LEVEL] 模式（log4j2 标准格式）
-    if let Some(start) = line.find('[') {
-        if let Some(end) = line[start..].find(']') {
-            let tag = &line[start + 1..start + end];
-            if let Some(slash) = tag.rfind('/') {
-                let level = &tag[slash + 1..];
-                match level.to_uppercase().as_str() {
-                    "ERROR" | "FATAL" => return "error",
-                    "WARN" | "WARNING" => return "warn",
-                    _ => {}
-                }
+    // 跳过时间戳等标签，查找 [线程/LEVEL] 模式。
+    let mut remaining = line;
+    while let Some(start) = remaining.find('[') {
+        let after_start = &remaining[start + 1..];
+        let Some(end) = after_start.find(']') else {
+            break;
+        };
+        let tag = &after_start[..end];
+        if let Some(slash) = tag.rfind('/') {
+            let level = &tag[slash + 1..];
+            match level.to_uppercase().as_str() {
+                "ERROR" | "FATAL" => return "error",
+                "WARN" | "WARNING" => return "warn",
+                _ => {}
             }
         }
+        remaining = &after_start[end + 1..];
     }
     // fallback: 全文扫描关键词
     let u = line.to_uppercase();
@@ -93,6 +117,42 @@ fn parse_log_level(line: &str) -> &'static str {
     } else {
         "info"
     }
+}
+
+fn claim_startup_transition(started: &std::sync::atomic::AtomicBool) -> bool {
+    started
+        .compare_exchange(
+            false,
+            true,
+            std::sync::atomic::Ordering::SeqCst,
+            std::sync::atomic::Ordering::SeqCst,
+        )
+        .is_ok()
+}
+
+#[cfg(unix)]
+fn ensure_owner_executable(path: &std::path::Path) -> Result<(), String> {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+    let metadata = std::fs::metadata(path).map_err(|e| format!("无法读取 Java 文件信息: {}", e))?;
+    let permissions = metadata.permissions();
+    if permissions.mode() & 0o100 != 0 {
+        return Ok(());
+    }
+
+    let current_uid = nix::unistd::Uid::effective().as_raw();
+    if metadata.uid() != current_uid {
+        return Err(format!(
+            "Java 文件不属于当前用户，不能修改执行权限: {}",
+            path.display()
+        ));
+    }
+
+    info!("Java 缺少所有者执行权限，正在修复: {}", path.display());
+    let mut new_permissions = permissions;
+    new_permissions.set_mode(new_permissions.mode() | 0o100);
+    std::fs::set_permissions(path, new_permissions)
+        .map_err(|e| format!("无法设置 Java 执行权限: {}", e))
 }
 
 pub fn run_command(
@@ -119,17 +179,7 @@ pub fn run_command(
     // 在 Unix 系统上检查并修复执行权限
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        let metadata =
-            std::fs::metadata(&javaPath).map_err(|e| format!("无法读取 Java 文件信息: {}", e))?;
-        let permissions = metadata.permissions();
-        if permissions.mode() & 0o111 == 0 {
-            info!("Java 缺少执行权限，正在修复: {}", javaPath.display());
-            let mut new_perms = permissions.clone();
-            new_perms.set_mode(permissions.mode() | 0o755);
-            std::fs::set_permissions(&javaPath, new_perms)
-                .map_err(|e| format!("无法设置 Java 执行权限: {}", e))?;
-        }
+        ensure_owner_executable(&javaPath)?;
     }
 
     // 确保工作目录存在
@@ -156,6 +206,14 @@ pub fn run_command(
     command.stdout(Stdio::piped());
     command.stderr(Stdio::piped());
 
+    // 持有同一个锁完成“检查 + 启动 + 登记”。这样两个并发请求不能覆盖彼此。
+    let mut store = game_process_store()
+        .lock()
+        .map_err(|e| format!("无法读取游戏进程状态: {}", e))?;
+    if let Some(current) = store.as_ref() {
+        return Err(format!("已有游戏进程正在运行 (PID {})", current.pid).into());
+    }
+
     match command.spawn() {
         Ok(mut child) => {
             let pid = child.id();
@@ -165,15 +223,15 @@ pub fn run_command(
             let stdout = child.stdout.take();
             let stderr = child.stderr.take();
 
-            // 存储到全局进程表（启动中，尚未完成初始化）
-            {
-                let mut store = game_process_store().lock().unwrap();
-                *store = Some(GameProcess {
-                    child: Some(child),
+            // 存储到全局进程表（启动中，尚未完成初始化）。
+            insert_process_if_empty(
+                &mut store,
+                GameProcess {
                     pid,
                     fully_started: false,
-                });
-            }
+                },
+            )?;
+            drop(store);
 
             // 用于检测"完全启动"的共享 flag
             let fully_started_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -196,17 +254,19 @@ pub fn run_command(
                                 },
                             );
                             // 检测游戏是否已完全启动
-                            if !flag.load(std::sync::atomic::Ordering::SeqCst)
-                                && is_game_fully_started(&line)
-                            {
-                                flag.store(true, std::sync::atomic::Ordering::SeqCst);
-                                {
+                            if is_game_fully_started(&line) && claim_startup_transition(&flag) {
+                                let is_current_process = {
                                     let mut store = game_process_store().lock().unwrap();
-                                    if let Some(gp) = store.as_mut() {
+                                    if let Some(gp) = store.as_mut().filter(|gp| gp.pid == pid) {
                                         gp.fully_started = true;
+                                        true
+                                    } else {
+                                        false
                                     }
+                                };
+                                if is_current_process {
+                                    let _ = handle.emit("game-fully-started", pid);
                                 }
-                                let _ = handle.emit("game-fully-started", pid);
                             }
                         }
                     }
@@ -231,17 +291,19 @@ pub fn run_command(
                                 },
                             );
                             // 同样在 stderr 中检测启动完成（有些启动日志走 stderr）
-                            if !flag.load(std::sync::atomic::Ordering::SeqCst)
-                                && is_game_fully_started(&line)
-                            {
-                                flag.store(true, std::sync::atomic::Ordering::SeqCst);
-                                {
+                            if is_game_fully_started(&line) && claim_startup_transition(&flag) {
+                                let is_current_process = {
                                     let mut store = game_process_store().lock().unwrap();
-                                    if let Some(gp) = store.as_mut() {
+                                    if let Some(gp) = store.as_mut().filter(|gp| gp.pid == pid) {
                                         gp.fully_started = true;
+                                        true
+                                    } else {
+                                        false
                                     }
+                                };
+                                if is_current_process {
+                                    let _ = handle.emit("game-fully-started", pid);
                                 }
-                                let _ = handle.emit("game-fully-started", pid);
                             }
                         }
                     }
@@ -250,33 +312,24 @@ pub fn run_command(
 
             // 在后台线程中等待进程结束，结束时向前端发送事件
             thread::spawn(move || {
-                // 从全局 store 中取出 child 所有权以 wait
-                let child_to_wait = {
-                    let mut store = game_process_store().lock().unwrap();
-                    store.as_mut().and_then(|gp| gp.child.take())
-                };
-
-                let exit_code = if let Some(mut c) = child_to_wait {
-                    match c.wait() {
-                        Ok(status) => display_exit_code(status),
-                        Err(e) => {
-                            error!("等待游戏进程 {} 时出错: {}", pid, e);
-                            -1
-                        }
+                let exit_code = match child.wait() {
+                    Ok(status) => display_exit_code(status),
+                    Err(e) => {
+                        error!("等待游戏进程 {} 时出错: {}", pid, e);
+                        -1
                     }
-                } else {
-                    -1
                 };
 
                 info!("游戏进程 {} 已结束，退出码: {}", pid, exit_code);
 
-                // 清空全局进程表
-                {
-                    let mut store = game_process_store().lock().unwrap();
-                    *store = None;
+                // 仅清除此等待线程对应的进程。旧线程不能清除或上报新进程。
+                let should_emit = game_process_store()
+                    .lock()
+                    .map(|mut store| clear_process_if_pid(&mut store, pid))
+                    .unwrap_or(false);
+                if should_emit {
+                    let _ = app_handle.emit("game-exited", exit_code);
                 }
-
-                let _ = app_handle.emit("game-exited", exit_code);
             });
             Ok(())
         }
@@ -288,57 +341,143 @@ pub fn run_command(
     }
 }
 
+#[cfg(windows)]
+fn terminate_process(pid: u32) -> Result<(), String> {
+    let output = Command::new("taskkill")
+        .args(["/F", "/PID", &pid.to_string()])
+        .output()
+        .map_err(|e| format!("无法运行 taskkill: {}", e))?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "taskkill 失败: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ))
+    }
+}
+
+#[cfg(not(windows))]
+fn terminate_process(pid: u32) -> Result<(), String> {
+    let output = Command::new("kill")
+        .args(["-9", &pid.to_string()])
+        .output()
+        .map_err(|e| format!("无法运行 kill: {}", e))?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "kill 失败: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ))
+    }
+}
+
 /// 终止当前游戏进程（在游戏未完全启动前可调用）
 #[tauri::command]
 pub fn kill_game_process() -> Result<String, String> {
-    let mut store = game_process_store().lock().map_err(|e| e.to_string())?;
+    // 终止期间保留进程槽。等待线程会回收 Child，然后清除相同 PID 的槽。
+    let store = game_process_store().lock().map_err(|e| e.to_string())?;
+    let process = store
+        .as_ref()
+        .ok_or_else(|| "当前没有运行中的游戏进程".to_string())?;
+    let pid = process.pid;
+    let started = process.fully_started;
+    terminate_process(pid)?;
 
-    let process_info = match store.as_mut() {
-        Some(gp) => {
-            let pid = gp.pid;
-            let started = gp.fully_started;
-            // 尝试直接 kill
-            let result = if let Some(c) = gp.child.as_mut() {
-                c.kill().map(|_| ()).map_err(|e| e.to_string())
-            } else {
-                Err("没有进程句柄".to_string())
-            };
+    if started {
+        Ok(format!("游戏进程 (PID {}) 已终止", pid))
+    } else {
+        Ok(format!("启动中的游戏进程 (PID {}) 已取消", pid))
+    }
+}
 
-            // 跨平台兜底：如果 child.kill() 失败，用系统命令 kill
-            if result.is_err() {
-                #[cfg(windows)]
-                {
-                    let _ = std::process::Command::new("taskkill")
-                        .args(["/F", "/PID", &pid.to_string()])
-                        .output();
-                }
-                #[cfg(not(windows))]
-                {
-                    let _ = std::process::Command::new("kill")
-                        .args(["-9", &pid.to_string()])
-                        .output();
-                }
-            }
-
-            Some((pid, started))
-        }
-        None => None,
+#[cfg(test)]
+mod tests {
+    use super::{
+        claim_startup_transition, clear_process_if_pid, insert_process_if_empty, parse_log_level,
+        GameProcess,
     };
+    use std::sync::atomic::{AtomicBool, Ordering};
 
-    // 清空 store
-    *store = None;
+    #[test]
+    fn reads_the_level_from_the_thread_tag_after_a_timestamp() {
+        assert_eq!(
+            parse_log_level("[12:00:00] [Render thread/ERROR]: failed"),
+            "error"
+        );
+        assert_eq!(parse_log_level("[12:00:00] [Worker/WARN]: delayed"), "warn");
+        assert_eq!(
+            parse_log_level("[12:00:00] [Render thread/INFO]: ready"),
+            "info"
+        );
+    }
 
-    match process_info {
-        Some((pid, started)) => {
-            let msg = if started {
-                format!("游戏进程 (PID {}) 已终止", pid)
-            } else {
-                format!("启动中的游戏进程 (PID {}) 已取消", pid)
-            };
-            // 注意：这里无法发送事件，因为没有 app_handle
-            // 前端会根据返回的成功结果自行更新状态
-            Ok(msg)
-        }
-        None => Err("当前没有运行中的游戏进程".to_string()),
+    #[test]
+    fn claims_the_startup_transition_only_once() {
+        let started = AtomicBool::new(false);
+
+        assert!(claim_startup_transition(&started));
+        assert!(!claim_startup_transition(&started));
+        assert!(started.load(Ordering::SeqCst));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn adds_only_the_owner_execute_permission() {
+        use super::ensure_owner_executable;
+        use std::os::unix::fs::PermissionsExt;
+
+        let path = std::env::temp_dir().join(format!(
+            "rtlauncher-java-permissions-{}-{}",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("test")
+        ));
+        std::fs::write(&path, []).expect("create temporary Java executable");
+        let mut permissions = std::fs::metadata(&path)
+            .expect("read temporary file metadata")
+            .permissions();
+        permissions.set_mode(0o640);
+        std::fs::set_permissions(&path, permissions).expect("set initial permissions");
+
+        ensure_owner_executable(&path).expect("add owner execute permission");
+
+        let mode = std::fs::metadata(&path)
+            .expect("read updated metadata")
+            .permissions()
+            .mode()
+            & 0o777;
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(mode, 0o740);
+    }
+
+    #[test]
+    fn keeps_the_current_process_until_its_waiter_clears_it() {
+        let mut store = None;
+
+        insert_process_if_empty(
+            &mut store,
+            GameProcess {
+                pid: 100,
+                fully_started: false,
+            },
+        )
+        .expect("insert the first process");
+
+        let second = insert_process_if_empty(
+            &mut store,
+            GameProcess {
+                pid: 200,
+                fully_started: false,
+            },
+        );
+        assert!(second.is_err());
+        assert_eq!(store.as_ref().map(|process| process.pid), Some(100));
+
+        assert!(!clear_process_if_pid(&mut store, 200));
+        assert_eq!(store.as_ref().map(|process| process.pid), Some(100));
+
+        assert!(clear_process_if_pid(&mut store, 100));
+        assert!(store.is_none());
     }
 }
