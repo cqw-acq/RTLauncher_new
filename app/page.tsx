@@ -286,37 +286,37 @@ export default function Home() {
                           </p>
 
                           <div className="mt-4">
-                            <p className="text-xs font-medium text-muted-foreground mb-2">{t("launch.config.gameVersion")}</p>
-                            <VersionSelectorDialog compact />
+                            <div className="flex flex-wrap items-center gap-2">
+                              {isLaunchActive || canLaunch ? (
+                                <Button
+                                  size="lg"
+                                  className="gap-2"
+                                  disabled={!configLoaded}
+                                  onClick={() => void handlePrimaryAction()}
+                                >
+                                  {isLaunchActive ? (
+                                    <Loader2 className="size-4 animate-spin" />
+                                  ) : (
+                                    <Play className="size-4" />
+                                  )}
+                                  {primaryActionLabel}
+                                </Button>
+                              ) : null}
+                              <div className="min-w-0 flex-1">
+                                <VersionSelectorDialog compact />
+                              </div>
+                              <Button variant="outline" size="lg" asChild>
+                                <Link href="/launch" className="gap-2">
+                                  {t("home.viewLaunchDetails")}
+                                  <ArrowRight className="size-4" />
+                                </Link>
+                              </Button>
+                            </div>
                           </div>
                         </div>
                         <div className="flex size-11 shrink-0 items-center justify-center rounded-2xl bg-primary text-primary-foreground shadow-sm">
                           <Boxes className="size-5" />
                         </div>
-                      </div>
-
-                      <div className="flex flex-wrap items-center gap-2">
-                        {isLaunchActive || canLaunch ? (
-                          <Button
-                            size="lg"
-                            className="gap-2"
-                            disabled={!configLoaded}
-                            onClick={() => void handlePrimaryAction()}
-                          >
-                            {isLaunchActive ? (
-                              <Loader2 className="size-4 animate-spin" />
-                            ) : (
-                              <Play className="size-4" />
-                            )}
-                            {primaryActionLabel}
-                          </Button>
-                        ) : null}
-                        <Button variant="outline" size="lg" asChild>
-                          <Link href="/launch" className="gap-2">
-                            {t("home.viewLaunchDetails")}
-                            <ArrowRight className="size-4" />
-                          </Link>
-                        </Button>
                       </div>
 
                       {errorMessage && (
