@@ -9,6 +9,7 @@ mod downloader;
 mod handler;
 mod http_client;
 mod mutiplayer;
+mod themes;
 mod updater;
 mod version_management;
 use auth::littleskinLoader::{useMethod, use_method_with_credentials};
