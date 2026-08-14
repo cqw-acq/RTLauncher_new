@@ -1,4 +1,4 @@
-/// 为离线玩家生成稳定的 UUID v3（基于玩家名称）
+/// 为离线玩家生成稳定的 UUID（基于玩家名称；算法不保证与 RFC 4122 v3 完全一致）
 pub(super) fn offline_uuid(player_name: &str) -> String {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
