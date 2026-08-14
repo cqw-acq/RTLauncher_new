@@ -104,13 +104,13 @@ export default function Home() {
     { href: "/game-settings", title: t("home.gameManagement"), description: t("home.modsWorldsAndResourcePacks"), icon: Gamepad2, iconClassName: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400" },
   ];
   const gameQuickActions = [
-    { href: "/game-settings/mods", title: t("home.cardGrid.mods"), icon: Puzzle, iconClassName: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400" },
-    { href: "/game-settings/screenshots", title: t("home.cardGrid.screenshots"), icon: Camera, iconClassName: "bg-cyan-500/10 text-cyan-600 dark:text-cyan-400" },
-    { href: "/game-settings/schematics", title: t("home.cardGrid.schematics"), icon: Map, iconClassName: "bg-teal-500/10 text-teal-600 dark:text-teal-400" },
-    { href: "/game-settings/resources", title: t("home.cardGrid.resourcePacks"), icon: Palette, iconClassName: "bg-blue-500/10 text-blue-600 dark:text-blue-400" },
-    { href: "/game-settings/datapacks", title: t("gameSettings.datapacks"), icon: Database, iconClassName: "bg-fuchsia-500/10 text-fuchsia-600 dark:text-fuchsia-400" },
-    { href: "/game-settings/shaders", title: t("home.cardGrid.shaders"), icon: Sparkles, iconClassName: "bg-violet-500/10 text-violet-600 dark:text-violet-400" },
-    { href: "/game-settings/worlds", title: t("home.cardGrid.worlds"), icon: Globe, iconClassName: "bg-amber-500/10 text-amber-600 dark:text-amber-400" },
+    { href: "/game-settings/mods", title: t("home.cardGrid.mods"), description: t("home.cardGrid.manageYourMods"), icon: Puzzle, iconClassName: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400" },
+    { href: "/game-settings/screenshots", title: t("home.cardGrid.screenshots"), description: t("home.cardGrid.manageGameScreenshots"), icon: Camera, iconClassName: "bg-cyan-500/10 text-cyan-600 dark:text-cyan-400" },
+    { href: "/game-settings/schematics", title: t("home.cardGrid.schematics"), description: t("home.cardGrid.manageBuildingDesigns"), icon: Map, iconClassName: "bg-teal-500/10 text-teal-600 dark:text-teal-400" },
+    { href: "/game-settings/resources", title: t("home.cardGrid.resourcePacks"), description: t("home.cardGrid.manageGameTextures"), icon: Palette, iconClassName: "bg-blue-500/10 text-blue-600 dark:text-blue-400" },
+    { href: "/game-settings/datapacks", title: t("gameSettings.datapacks"), description: t("gameSettings.manageMinecraftDatapacks"), icon: Database, iconClassName: "bg-fuchsia-500/10 text-fuchsia-600 dark:text-fuchsia-400" },
+    { href: "/game-settings/shaders", title: t("home.cardGrid.shaders"), description: t("home.cardGrid.enhancedVisualEffects"), icon: Sparkles, iconClassName: "bg-violet-500/10 text-violet-600 dark:text-violet-400" },
+    { href: "/game-settings/worlds", title: t("home.cardGrid.worlds"), description: t("home.cardGrid.manageWorldSaves"), icon: Globe, iconClassName: "bg-amber-500/10 text-amber-600 dark:text-amber-400" },
   ];
 
   const handleProfileSelect = (profile: Account) => {
@@ -363,19 +363,23 @@ export default function Home() {
                     ))}
                   </div>
 
-                  <div className="h-px bg-border" />
+                  <div className="h-px bg-border my-2" />
 
-                  <div className="grid grid-cols-4 gap-2">
-                    {gameQuickActions.map(({ href, title, icon: Icon, iconClassName }) => (
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    {gameQuickActions.map(({ href, title, description, icon: Icon, iconClassName }) => (
                       <Link
                         key={href}
                         href={href}
-                        className="group flex flex-col items-center justify-center gap-1.5 rounded-xl border border-transparent p-3 transition-colors hover:border-border hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                        className="group flex min-w-0 items-center gap-3 rounded-xl border border-transparent p-3 transition-colors hover:border-border hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                       >
-                        <span className={`flex size-8 shrink-0 items-center justify-center rounded-lg ${iconClassName}`}>
+                        <span className={`flex size-9 shrink-0 items-center justify-center rounded-xl ${iconClassName}`}>
                           <Icon className="size-4" />
                         </span>
-                        <span className="text-xs font-medium">{title}</span>
+                        <span className="min-w-0 flex-1">
+                          <span className="block text-sm font-medium">{title}</span>
+                          <span className="block truncate text-xs text-muted-foreground">{description}</span>
+                        </span>
+                        <ArrowRight className="size-3.5 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
                       </Link>
                     ))}
                   </div>
