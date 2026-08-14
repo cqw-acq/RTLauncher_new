@@ -239,6 +239,20 @@ export interface ThemeInstanceSummary {
   minecraftVersion?: string;
   loader?: string;
   path?: string;
+  modsCount?: number;
+}
+
+export interface ThemeDownloadTask {
+  id: string | number;
+  label: string;
+  status: string;
+  progress?: number;
+}
+
+export interface ThemePlatformInfo {
+  os: "windows" | "macos" | "linux";
+  appVersion: string;
+  themeApiVersion: string;
 }
 
 export interface RTLauncherThemeSDK {
@@ -256,11 +270,35 @@ export interface RTLauncherThemeSDK {
     stop(): Promise<void>;
     getStatus(): string;
   };
+  downloads: {
+    list(): readonly ThemeDownloadTask[];
+    cancel(taskId: string | number): Promise<void>;
+  };
   router: {
     navigate(target: string): Promise<void>;
     back(): void;
     getLocation(): string;
   };
+  settings: {
+    get(): Readonly<Record<string, JsonValue>>;
+    update(patch: Readonly<Record<string, JsonValue>>): Promise<void>;
+    subscribe(listener: () => void): ThemeUnsubscribe;
+  };
+  i18n: {
+    t(key: string): string;
+    getLocale(): string;
+  };
+  ui: {
+    toast(message: string): string;
+    confirm(message: string): Promise<boolean>;
+  };
+  storage: {
+    get<T extends JsonValue = JsonValue>(key: string): Promise<T | null>;
+    set(key: string, value: JsonValue): Promise<void>;
+    remove(key: string): Promise<void>;
+  };
+  events: ThemeEventService;
+  platform: ThemePlatformInfo;
   unsafe: {
     invoke<T>(
       command: string,
