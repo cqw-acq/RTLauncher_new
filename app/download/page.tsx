@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { VersionList } from "@/components/download/version-list";
 import { VersionDetail } from "@/components/download/version-detail";
+import { FavoriteModList } from "@/components/download/favorite-mod-list";
 import {
   VersionFilterBar,
 } from "@/components/download/version-filter-bar";
@@ -128,7 +129,7 @@ export default function DownloadPage() {
   const [selectedVersion, setSelectedVersion] =
     useState<MinecraftVersion | null>(null);
 
-  const [tab, setTab] = useState<"minecraft" | "java" | "chinese" | "english">("minecraft");
+  const [tab, setTab] = useState<"minecraft" | "java" | "chinese" | "english" | "favorites">("minecraft");
 
   // Java 下载状态
   const [javaVersions, setJavaVersions] = useState<{ name: string; version: string }[]>([]);
@@ -157,6 +158,10 @@ export default function DownloadPage() {
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
+    if (params.get("tab") === "favorites") {
+      setTab("favorites");
+      return;
+    }
     if (params.get("tab") !== "english") return;
 
     const category = params.get("category");
@@ -577,6 +582,14 @@ export default function DownloadPage() {
                 onClick={() => setTab("english")}
               >
                 全部平台搜索
+              </button>
+              <button
+                className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
+                  tab === "favorites" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
+                }`}
+                onClick={() => setTab("favorites")}
+              >
+                收藏夹
               </button>
             </div>
 
@@ -1143,6 +1156,8 @@ export default function DownloadPage() {
                 )}
               </AnimatePresence>
             </div>}
+
+            {tab === "favorites" && <FavoriteModList />}
           </div>
         </motion.div>
       )}

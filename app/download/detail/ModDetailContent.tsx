@@ -1,13 +1,15 @@
 "use client";
 
 import { useState, useEffect, useMemo, useCallback } from "react";
-import { ArrowLeft, ChevronDown, Shield, FlaskConical, Loader2, Download, CheckCircle2, XCircle, Package, ExternalLink } from "lucide-react";
+import { ArrowLeft, ChevronDown, Shield, FlaskConical, Loader2, Download, CheckCircle2, XCircle, Package, ExternalLink, Star } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { invoke } from "@tauri-apps/api/core";
 import { useDownloadManager } from "@/components/download/download-provider";
 import { useSettings } from "@/components/settings/settings-provider";
 import { useRouter } from "next/navigation";
+import { useModFavorites } from "@/hooks/use-mod-favorites";
+import type { ModFavorite } from "@/lib/mod-favorites";
 
 const openExternalUrl = async (url: string) => {
   try {
@@ -377,6 +379,7 @@ export default function ModDetailContent({ modId }: { modId: string }) {
   const [dataSource, setDataSource] = useState<string | null>(null);
   const { startModDownload, startResourceDownload, tasks } = useDownloadManager();
   const { settings } = useSettings();
+  const { favorites, toggleFavorite } = useModFavorites();
 
   const urlParams = typeof window !== "undefined" ? new URLSearchParams(window.location.search) : null;
   const forceType = urlParams?.get("forceType") || null;
@@ -776,6 +779,33 @@ export default function ModDetailContent({ modId }: { modId: string }) {
     });
   };
 
+  const getModLoader = (file: ParsedFile) => {
+    if (file.loaderLabel && file.loaderLabel !== "Universal") return file.loaderLabel;
+    if (file.hasNeoForge) return "neoforge";
+    if (file.hasFabric) return "fabric";
+    if (file.hasQuilt) return "quilt";
+    if (file.hasLiteLoader) return "liteloader";
+    if (file.hasOrnithe) return "ornithe";
+    if (file.hasForge) return "forge";
+    return "universal";
+  };
+
+  const isModProject = () => {
+    const type = (forceType || liveInfo?.projectType || "mod").toLowerCase();
+    return type === "mod" || type === "minecraft mod";
+  };
+
+  const favoriteForFile = (file: ParsedFile, mcVersion: string): ModFavorite => ({
+    id: file.url,
+    slug: liveInfo?.slug || modId,
+    name: liveInfo?.title || liveInfo?.slug || modId,
+    versionLabel: file.versionLabel,
+    mcVersion,
+    modLoader: getModLoader(file),
+    downloadUrl: file.url,
+    addedAt: 0,
+  });
+
   const handleDownload = async (file: ParsedFile, mcVersion: string) => {
     const status = getDownloadStatus(file.url);
     if (status === "downloading") return;
@@ -787,17 +817,7 @@ export default function ModDetailContent({ modId }: { modId: string }) {
     // Infer mod loader from file information (unified parsing by tags, not file extension)
     // Priority: 1. UI subtitle loaderLabel (e.g., "Ornithe", "NeoForge")
     //           2. Fallback to hasXxx flag inference
-    let modLoader = "universal";
-    if (file.loaderLabel && file.loaderLabel !== "Universal") {
-      modLoader = file.loaderLabel;
-    } else {
-      if (file.hasNeoForge) modLoader = "neoforge";
-      else if (file.hasFabric) modLoader = "fabric";
-      else if (file.hasQuilt) modLoader = "quilt";
-      else if (file.hasLiteLoader) modLoader = "liteloader";
-      else if (file.hasOrnithe) modLoader = "ornithe";
-      else if (file.hasForge) modLoader = "forge";
-    }
+    const modLoader = getModLoader(file);
 
     // Determine resource kind based on project type (affects cache directory)
     // - mod / minecraft mod -> "mod"
@@ -1095,6 +1115,8 @@ export default function ModDetailContent({ modId }: { modId: string }) {
                       <div className="border-t border-border divide-y divide-border/60 bg-muted/10">
                         {files.map((file, index) => {
                           const status = getDownloadStatus(file.url);
+                          const favorite = favoriteForFile(file, mcVersion);
+                          const isFavorite = favorites.some((item) => item.id === favorite.id);
                           return (
                             <div key={index} className="flex items-center gap-3 px-4 py-3 hover:bg-accent/20 transition-colors">
                               <div className="flex items-center gap-2 shrink-0 w-16 justify-center">
@@ -1124,6 +1146,18 @@ export default function ModDetailContent({ modId }: { modId: string }) {
                                 </div>
                               </div>
 
+                              {isModProject() && (
+                                <Button
+                                  variant="ghost"
+                                  size="icon-sm"
+                                  className="size-8 shrink-0"
+                                  title={isFavorite ? "移出收藏夹" : "加入收藏夹"}
+                                  aria-label={`${isFavorite ? "移出收藏夹" : "加入收藏夹"}：${favorite.name} ${favorite.versionLabel}`}
+                                  onClick={() => toggleFavorite(favorite)}
+                                >
+                                  <Star className={isFavorite ? "size-4 fill-amber-400 text-amber-500" : "size-4"} />
+                                </Button>
+                              )}
                               <Button size="sm" variant={status === "success" ? "secondary" : status === "error" ? "destructive" : "default"} disabled={status === "downloading" || status === "success"} onClick={() => handleDownload(file, mcVersion)} className="shrink-0">
                                 {status === "downloading" && (<><Loader2 className="mr-1.5 size-3.5 animate-spin" /> Downloading</>)}
                                 {status === "success" && (<><CheckCircle2 className="mr-1.5 size-3.5" /> Downloaded</>)}

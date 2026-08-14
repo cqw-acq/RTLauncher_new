@@ -38,6 +38,7 @@ export function makeStartDownloadFn(
       if (isDownloading) return prev;
 
       const task: DownloadTask = {
+        clientId: `client-${taskId}`,
         taskId,
         label,
         mcVersion,
@@ -52,11 +53,28 @@ export function makeStartDownloadFn(
       const returnedTaskId = await invoke<number>(tauriCommand, params);
       // 如果后端返回的 taskId 与我们生成的不一样，替换掉
       if (returnedTaskId !== taskId) {
-        setTasks((prev) =>
-          prev.map((t) =>
-            t.taskId === taskId ? { ...t, taskId: returnedTaskId } : t
-          )
-        );
+        setTasks((prev) => {
+          const localTask = prev.find((task) => task.taskId === taskId);
+          if (!localTask) return prev;
+
+          // 进度事件可能在 invoke 返回前到达。合并该事件创建的占位任务，
+          // 保留前端 clientId，避免同一个后端任务在列表中出现两次。
+          const eventTask = prev.find(
+            (task) => task.taskId === returnedTaskId && task.clientId !== localTask.clientId,
+          );
+          return prev.flatMap((task) => {
+            if (task === eventTask) return [];
+            if (task !== localTask) return [task];
+            return [{
+              ...localTask,
+              taskId: returnedTaskId,
+              status: eventTask?.status ?? localTask.status,
+              progress: eventTask?.progress ?? localTask.progress,
+              error: eventTask?.error ?? localTask.error,
+              failedCount: eventTask?.failedCount ?? localTask.failedCount,
+            }];
+          });
+        });
       }
       return returnedTaskId;
     } catch (err) {

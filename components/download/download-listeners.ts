@@ -43,6 +43,7 @@ function makeProgressHandler(
         });
       }
       const newTask: DownloadTask = {
+        clientId: `backend-${task_id}`,
         taskId: task_id,
         label: "Java 运行时",
         mcVersion: "Java",
@@ -79,6 +80,7 @@ function makeFinishedHandler(
         });
       }
       const newTask: DownloadTask = {
+        clientId: `backend-${task_id}`,
         taskId: task_id,
         label: "Java 运行时",
         mcVersion: "Java",
