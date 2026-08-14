@@ -17,6 +17,7 @@ import { slideInFromRight, fadeIn } from "@/lib/motion";
 import type { LoaderVersion } from "@/types";
 import { invoke } from "@tauri-apps/api/core";
 import { useDownloadManager } from "@/components/download/download-provider";
+import { useI18n } from "@/components/i18n/use-i18n";
 
 interface QuiltApiDetailProps {
   mcVersion: string;
@@ -26,6 +27,7 @@ interface QuiltApiDetailProps {
 const QUILT_LOADER_DEFAULT = "0.26.0";
 
 export function QuiltApiDetail({ mcVersion, onBack }: QuiltApiDetailProps) {
+  const { t } = useI18n();
   const [apiVersions, setApiVersions] = useState<LoaderVersion[]>([]);
   const [loading, setLoading] = useState(false);
   const [showNameDialog, setShowNameDialog] = useState(false);
@@ -97,7 +99,7 @@ export function QuiltApiDetail({ mcVersion, onBack }: QuiltApiDetailProps) {
           variant="ghost"
           size="icon-sm"
           onClick={onBack}
-          aria-label="返回"
+          aria-label={t("download.back")}
         >
           <ArrowLeft className="size-4" />
         </Button>
@@ -114,10 +116,10 @@ export function QuiltApiDetail({ mcVersion, onBack }: QuiltApiDetailProps) {
       {/* 子标题区域 */}
       <div className="shrink-0">
         <h3 className="text-sm font-medium text-muted-foreground">
-          选择 Quilt API 版本
+          {t("download.selectQuiltApiVersion")}
         </h3>
         <p className="text-xs text-muted-foreground/70 mt-0.5">
-          选择一个 Quilt API 版本进行安装
+          {t("download.selectQuiltApiVersionHint")}
         </p>
       </div>
 
@@ -134,7 +136,7 @@ export function QuiltApiDetail({ mcVersion, onBack }: QuiltApiDetailProps) {
               exit="exit"
             >
               <Loader2 className="size-8 animate-spin" />
-              <p className="text-sm">正在获取版本列表...</p>
+              <p className="text-sm">{t("download.loadingVersionList")}</p>
             </motion.div>
           ) : (
             <motion.div
@@ -158,12 +160,12 @@ export function QuiltApiDetail({ mcVersion, onBack }: QuiltApiDetailProps) {
     <Dialog open={showNameDialog} onOpenChange={setShowNameDialog}>
       <DialogContent className="!max-w-lg p-0">
         <DialogHeader>
-          <DialogTitle>实例名称</DialogTitle>
+          <DialogTitle>{t("download.instanceName")}</DialogTitle>
         </DialogHeader>
         <div className="p-5 space-y-4">
           <div className="space-y-2">
             <p className="text-sm text-muted-foreground">
-              请为这个实例命名，未填写则使用默认名称：
+              {t("download.instanceNameHintApi")}
               <code className="mx-1 px-1.5 py-0.5 rounded bg-muted text-xs">
                 {pendingApi ? defaultName(pendingApi.version) : ""}
               </code>
@@ -186,9 +188,9 @@ export function QuiltApiDetail({ mcVersion, onBack }: QuiltApiDetailProps) {
                 setPendingApi(null);
               }}
             >
-              取消
+              {t("download.cancel")}
             </Button>
-            <Button onClick={confirmDownload}>开始下载</Button>
+            <Button onClick={confirmDownload}>{t("download.startDownload")}</Button>
           </div>
         </div>
       </DialogContent>

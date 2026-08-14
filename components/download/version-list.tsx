@@ -4,6 +4,7 @@ import { motion } from "framer-motion";
 import { VersionListItem } from "@/components/download/version-list-item";
 import { PackageOpen } from "lucide-react";
 import { fadeSlideUp } from "@/lib/motion";
+import { useI18n } from "@/components/i18n/use-i18n";
 import type { MinecraftVersion } from "@/types";
 
 interface VersionListProps {
@@ -12,6 +13,7 @@ interface VersionListProps {
 }
 
 export function VersionList({ versions, onSelectVersion }: VersionListProps) {
+  const { t } = useI18n();
   if (versions.length === 0) {
     return (
       <motion.div
@@ -21,7 +23,7 @@ export function VersionList({ versions, onSelectVersion }: VersionListProps) {
         className="flex flex-1 flex-col items-center justify-center gap-3 text-muted-foreground py-16"
       >
         <PackageOpen className="size-10 opacity-40" />
-        <p className="text-sm">没有找到匹配的版本</p>
+        <p className="text-sm">{t("download.noMatchingVersions")}</p>
       </motion.div>
     );
   }

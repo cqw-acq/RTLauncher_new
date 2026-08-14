@@ -5,10 +5,12 @@ import { useState } from "react";
 import { useDownloadManager } from "@/components/download/download-provider";
 import { Button } from "@/components/ui/button";
 import { useModFavorites } from "@/hooks/use-mod-favorites";
+import { useI18n } from "@/components/i18n/use-i18n";
 
 export function FavoriteModList() {
   const { favorites, removeFavorite } = useModFavorites();
   const { startResourceDownload } = useDownloadManager();
+  const { t } = useI18n();
   const [downloading, setDownloading] = useState(false);
   const [showTip, setShowTip] = useState(true);
 
@@ -38,13 +40,13 @@ export function FavoriteModList() {
       {showTip && (
         <div className="flex items-center gap-2 rounded-lg border border-amber-500/25 bg-amber-500/10 px-3 py-2 text-xs text-amber-800 dark:text-amber-300">
           <Star className="size-3.5 shrink-0 fill-amber-400 text-amber-500" aria-hidden="true" />
-          <span className="min-w-0 flex-1">看到这些star了吗 那么...Thanks for Star on github.com/cqw-acq/RTLauncher_new</span>
+          <span className="min-w-0 flex-1">{t("download.favorites.starTip")}</span>
           <Button
             variant="ghost"
             size="icon-sm"
             className="size-6 shrink-0 text-amber-800 hover:bg-amber-500/15 hover:text-amber-900 dark:text-amber-300 dark:hover:text-amber-100"
-            title="关闭提示"
-            aria-label="关闭提示"
+            title={t("download.favorites.closeTip")}
+            aria-label={t("download.favorites.closeTip")}
             onClick={() => setShowTip(false)}
           >
             <X className="size-3.5" />
@@ -53,9 +55,9 @@ export function FavoriteModList() {
       )}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h2 className="text-sm font-semibold">收藏夹</h2>
+          <h2 className="text-sm font-semibold">{t("download.favorites.title")}</h2>
           <p className="mt-1 text-xs text-muted-foreground">
-            已保存 {favorites.length} 个可直接下载的 Mod 文件。
+            {t("download.favorites.savedCount", { count: favorites.length })}
           </p>
         </div>
         <Button
@@ -65,7 +67,7 @@ export function FavoriteModList() {
           onClick={() => void downloadAll()}
         >
           {downloading ? <Loader2 className="size-3.5 animate-spin" /> : <Download className="size-3.5" />}
-          全部下载到 Cache
+          {t("download.favorites.downloadAllToCache")}
         </Button>
       </div>
 
@@ -88,14 +90,14 @@ export function FavoriteModList() {
                   onClick={() => void startResourceDownload("mod", favorite.slug, favorite.name, favorite.mcVersion, favorite.modLoader, favorite.downloadUrl)}
                 >
                   <Download className="size-3.5" />
-                  下载
+                  {t("download.favorites.download")}
                 </Button>
                 <Button
                   variant="ghost"
                   size="icon-sm"
                   className="size-7 shrink-0 text-muted-foreground hover:text-destructive"
-                  title="移出收藏夹"
-                  aria-label={`移出收藏夹：${favorite.name}`}
+                  title={t("download.favorites.removeFromFavorites")}
+                  aria-label={t("download.favorites.removeFromFavoritesNamed", { name: favorite.name })}
                   onClick={() => removeFavorite(favorite.id)}
                 >
                   <Trash2 className="size-3.5" />
@@ -107,8 +109,8 @@ export function FavoriteModList() {
       ) : (
         <div className="flex flex-1 flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-border bg-card/50 p-8 text-center">
           <Star className="size-7 text-muted-foreground" />
-          <p className="text-sm font-medium">收藏夹还是空的</p>
-          <p className="text-xs text-muted-foreground">在 Mod 文件选择页点击 Star，即可将指定版本加入收藏。</p>
+          <p className="text-sm font-medium">{t("download.favorites.empty")}</p>
+          <p className="text-xs text-muted-foreground">{t("download.favorites.emptyHint")}</p>
         </div>
       )}
     </div>

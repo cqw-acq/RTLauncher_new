@@ -16,6 +16,7 @@ import { LoaderVersionList } from "@/components/download/loader-version-list";
 import { FabricApiDetail } from "@/components/download/fabric-api-detail";
 import { QuiltApiDetail } from "@/components/download/quilt-api-detail";
 import { useDownloadManager } from "@/components/download/download-provider";
+import { useI18n, type TranslationKey } from "@/components/i18n/use-i18n";
 import { ArrowLeft, Loader2 } from "lucide-react";
 import { slideInFromRight, slideInFromLeft, fadeIn } from "@/lib/motion";
 import type { MinecraftVersion, LoaderType, LoaderVersion } from "@/types";
@@ -23,11 +24,11 @@ import { LOADER_OPTIONS, LOADER_VERSIONS } from "@/constants/data";
 import { invoke } from "@tauri-apps/api/core";
 import { useLaunchContext } from "@/components/launch/launch-provider";
 
-const versionTypeLabels: Record<string, string> = {
-  release: "正式版",
-  snapshot: "快照",
-  april_fools: "愚人节",
-  old_version: "远古版",
+const versionTypeLabelKeys: Record<string, TranslationKey> = {
+  release: "download.versionType.release",
+  snapshot: "download.versionType.snapshot",
+  april_fools: "download.versionType.aprilFools",
+  old_version: "download.versionType.oldVersion",
 };
 
 interface VersionDetailProps {
@@ -43,6 +44,7 @@ interface PendingDownloadInfo {
 }
 
 export function VersionDetail({ version, onBack }: VersionDetailProps) {
+  const { t } = useI18n();
   const [selectedLoader, setSelectedLoader] = useState<LoaderType | null>(null);
   const [showFabricApi, setShowFabricApi] = useState(false);
   const [showQuiltApi, setShowQuiltApi] = useState(false);
@@ -377,7 +379,7 @@ export function VersionDetail({ version, onBack }: VersionDetailProps) {
               onBack();
             }
           }}
-          aria-label={showFabricApi ? "返回加载器选择" : showQuiltApi ? "返回加载器选择" : selectedLoader ? "返回加载器选择" : "返回版本列表"}
+          aria-label={showFabricApi ? t("download.backToLoaderSelection") : showQuiltApi ? t("download.backToLoaderSelection") : selectedLoader ? t("download.backToLoaderSelection") : t("download.backToVersionList")}
         >
           <ArrowLeft className="size-4" />
         </Button>
@@ -388,19 +390,19 @@ export function VersionDetail({ version, onBack }: VersionDetailProps) {
           <div className="flex items-center gap-1.5">
             {version.isLatest && (
               <Badge variant="default" className="text-[10px] px-1.5 py-0">
-                最新
+                {t("download.latest")}
               </Badge>
             )}
             <Badge
               variant={version.type === "release" ? "secondary" : "outline"}
               className="text-[10px] px-1.5 py-0"
             >
-              {versionTypeLabels[version.type] ?? version.type}
+              {versionTypeLabelKeys[version.type] ? t(versionTypeLabelKeys[version.type]) : version.type}
             </Badge>
           </div>
         </div>
         <span className="text-xs text-muted-foreground ml-auto">
-          发布于 {version.releaseDate}
+          {t("download.released", { date: version.releaseDate })}
         </span>
       </div>
 
@@ -411,10 +413,10 @@ export function VersionDetail({ version, onBack }: VersionDetailProps) {
             <div className="flex items-center justify-between">
               <div>
                 <h3 className="text-sm font-medium text-muted-foreground">
-                  选择 {selectedLoaderInfo.name} 版本
+                  {t("download.selectLoaderVersion", { name: selectedLoaderInfo.name })}
                 </h3>
                 <p className="text-xs text-muted-foreground/70 mt-0.5">
-                  选择一个 {selectedLoaderInfo.name} 版本进行安装
+                  {t("download.selectLoaderVersionHint", { name: selectedLoaderInfo.name })}
                 </p>
               </div>
               {selectedLoader === "fabric" && (
@@ -424,7 +426,7 @@ export function VersionDetail({ version, onBack }: VersionDetailProps) {
                   className="text-xs"
                   onClick={() => setShowFabricApi(true)}
                 >
-                  查看 Fabric API 版本
+                  {t("download.viewFabricApiVersions")}
                 </Button>
               )}
               {selectedLoader === "quilt" && (
@@ -434,7 +436,7 @@ export function VersionDetail({ version, onBack }: VersionDetailProps) {
                   className="text-xs"
                   onClick={() => setShowQuiltApi(true)}
                 >
-                  查看 Quilt API 版本
+                  {t("download.viewQuiltApiVersions")}
                 </Button>
               )}
             </div>
@@ -442,10 +444,10 @@ export function VersionDetail({ version, onBack }: VersionDetailProps) {
         ) : (
           <>
             <h3 className="text-sm font-medium text-muted-foreground">
-              选择加载器
+              {t("download.selectLoader")}
             </h3>
             <p className="text-xs text-muted-foreground/70 mt-0.5">
-              选择一个加载器来安装此版本
+              {t("download.selectLoaderHint")}
             </p>
           </>
         )}
@@ -499,7 +501,7 @@ export function VersionDetail({ version, onBack }: VersionDetailProps) {
                     exit="exit"
                   >
                     <Loader2 className="size-8 animate-spin" />
-                    <p className="text-sm">正在获取版本列表...</p>
+                    <p className="text-sm">{t("download.loadingVersionList")}</p>
                   </motion.div>
                 ) : (
                   <motion.div
@@ -541,13 +543,13 @@ export function VersionDetail({ version, onBack }: VersionDetailProps) {
       <DialogContent className="!max-w-lg p-0">
         <DialogHeader>
           <DialogTitle>
-            实例名称
+            {t("download.instanceName")}
           </DialogTitle>
         </DialogHeader>
         <div className="p-5 space-y-4">
           <div className="space-y-2">
             <p className="text-sm text-muted-foreground">
-              请为这个 Minecraft 实例命名，未填写则使用默认名称：
+              {t("download.instanceNameHint")}
               <code className="mx-1 px-1.5 py-0.5 rounded bg-muted text-xs">
                 {pendingDownload?.defaultName}
               </code>
@@ -572,10 +574,10 @@ export function VersionDetail({ version, onBack }: VersionDetailProps) {
                 setPendingDownload(null);
               }}
             >
-              取消
+              {t("download.cancel")}
             </Button>
             <Button onClick={confirmDownload}>
-              开始下载
+              {t("download.startDownload")}
             </Button>
           </div>
         </div>
