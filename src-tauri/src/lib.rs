@@ -84,7 +84,7 @@ use handler::mod_links::{get_modrinth_required_dependencies, get_curseforge_requ
 use mutiplayer::{
     ensure_openp2p_stopped, mp_check_openp2p, mp_encode_room_info, mp_get_openp2p_dir,
     mp_get_openp2p_path, mp_install_openp2p, mp_is_openp2p_running, mp_poll_log,
-    mp_start_openp2p_host, mp_start_openp2p_join, mp_stop_openp2p,
+    mp_start_openp2p_host, mp_start_openp2p_join, mp_stop_openp2p, quick_kill_openp2p,
 };
 use updater::handler::{
     cancel_update, can_check_update, check_for_updates, create_updater_state, download_update,
@@ -322,10 +322,8 @@ pub fn run() {
                             .args(["/F", "/T", "/IM", "openp2p"])
                             .creation_flags(CREATE_NO_WINDOW)
                             .output();
-                        let _ = std::process::Command::new("wmic")
-                            .args(["process", "where", "name='openp2p.exe'", "delete"])
-                            .creation_flags(CREATE_NO_WINDOW)
-                            .output();
+                        // 用系统进程 API 兜底结束 openp2p，替代已弃用且会被杀毒软件拦截的 wmic
+                        quick_kill_openp2p();
                     }
                     #[cfg(any(target_os = "linux", target_os = "macos"))]
                     {
