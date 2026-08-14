@@ -1,7 +1,6 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { motion } from "framer-motion";
 import {
@@ -12,7 +11,6 @@ import {
   Loader2,
   Package,
   Play,
-  Rocket,
   Shirt,
   User,
   UserPlus,
@@ -46,7 +44,6 @@ import type { Account } from "@/types";
 
 /** 首页仪表盘：把启动状态、实例资源与账户操作集中在一个可滚动页面。 */
 export default function Home() {
-  const router = useRouter();
   const [isProfileSelectorOpen, setIsProfileSelectorOpen] = useState(false);
   const [isSkinManagerOpen, setIsSkinManagerOpen] = useState(false);
   const { selectedProfile, selectProfile } = useAccountContext();
@@ -96,7 +93,6 @@ export default function Home() {
     ? profileStatusMap[selectedProfile.status] ?? selectedProfile.status
     : t("home.addAnAccountToLaunchTheGame");
   const quickActions = [
-    { href: "/launch", title: t("home.launchSettings"), description: t("home.versionJavaAndMemory"), icon: Rocket, iconClassName: "bg-primary/10 text-primary" },
     { href: "/download", title: t("home.downloads"), description: t("home.gameLoadersAndResources"), icon: Download, iconClassName: "bg-sky-500/10 text-sky-600 dark:text-sky-400" },
     { href: "/game-settings", title: t("home.gameManagement"), description: t("home.modsWorldsAndResourcePacks"), icon: Gamepad2, iconClassName: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400" },
   ];
@@ -110,10 +106,6 @@ export default function Home() {
       await cancelLaunch();
       return;
     }
-    if (!canLaunch) {
-      router.push("/launch");
-      return;
-    }
     await launchGame();
   };
 
@@ -121,9 +113,7 @@ export default function Home() {
     ? status === "running"
       ? t("launch.stopGame")
       : t("home.cancelLaunch")
-    : canLaunch
-      ? t("home.launchNow")
-      : t("home.finishLaunchSetup");
+    : t("home.launchNow");
 
   return (
     <div className="h-full overflow-y-auto">
@@ -290,19 +280,21 @@ export default function Home() {
                       </div>
 
                       <div className="flex flex-wrap items-center gap-2">
-                        <Button
-                          size="lg"
-                          className="gap-2"
-                          disabled={!configLoaded}
-                          onClick={() => void handlePrimaryAction()}
-                        >
-                          {isLaunchActive ? (
-                            <Loader2 className="size-4 animate-spin" />
-                          ) : (
-                            <Play className="size-4" />
-                          )}
-                          {primaryActionLabel}
-                        </Button>
+                        {isLaunchActive || canLaunch ? (
+                          <Button
+                            size="lg"
+                            className="gap-2"
+                            disabled={!configLoaded}
+                            onClick={() => void handlePrimaryAction()}
+                          >
+                            {isLaunchActive ? (
+                              <Loader2 className="size-4 animate-spin" />
+                            ) : (
+                              <Play className="size-4" />
+                            )}
+                            {primaryActionLabel}
+                          </Button>
+                        ) : null}
                         <Button variant="outline" size="lg" asChild>
                           <Link href="/launch" className="gap-2">
                             {t("home.viewLaunchDetails")}
@@ -336,7 +328,7 @@ export default function Home() {
                   <CardDescription>{t("home.accessCommonFeaturesWithoutNavigatingMultipleMenus")}</CardDescription>
                 </CardHeader>
                 <CardContent>
-                  <div className="grid gap-2 sm:grid-cols-3">
+                  <div className="grid gap-2 sm:grid-cols-2">
                     {quickActions.map(({ href, title, description, icon: Icon, iconClassName }) => (
                       <Link
                         key={href}
