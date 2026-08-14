@@ -13,6 +13,7 @@ use tauri::Emitter;
 struct GameProcess {
     pid: u32,
     fully_started: bool,
+    termination_requested: bool,
 }
 
 fn game_process_store() -> &'static Mutex<Option<GameProcess>> {
@@ -37,6 +38,24 @@ fn clear_process_if_pid(store: &mut Option<GameProcess>, pid: u32) -> bool {
         true
     } else {
         false
+    }
+}
+
+fn claim_termination_request(store: &mut Option<GameProcess>) -> Result<(u32, bool), String> {
+    let process = store
+        .as_mut()
+        .ok_or_else(|| "当前没有运行中的游戏进程".to_string())?;
+    if process.termination_requested {
+        return Err(format!("游戏进程 (PID {}) 正在终止", process.pid));
+    }
+
+    process.termination_requested = true;
+    Ok((process.pid, process.fully_started))
+}
+
+fn reset_termination_request_if_pid(store: &mut Option<GameProcess>, pid: u32) {
+    if let Some(process) = store.as_mut().filter(|process| process.pid == pid) {
+        process.termination_requested = false;
     }
 }
 
@@ -229,6 +248,7 @@ pub fn run_command(
                 GameProcess {
                     pid,
                     fully_started: false,
+                    termination_requested: false,
                 },
             )?;
             drop(store);
@@ -376,14 +396,18 @@ fn terminate_process(pid: u32) -> Result<(), String> {
 /// 终止当前游戏进程（在游戏未完全启动前可调用）
 #[tauri::command]
 pub fn kill_game_process() -> Result<String, String> {
-    // 终止期间保留进程槽。等待线程会回收 Child，然后清除相同 PID 的槽。
-    let store = game_process_store().lock().map_err(|e| e.to_string())?;
-    let process = store
-        .as_ref()
-        .ok_or_else(|| "当前没有运行中的游戏进程".to_string())?;
-    let pid = process.pid;
-    let started = process.fully_started;
-    terminate_process(pid)?;
+    // 先在锁内登记终止请求，再释放锁运行外部命令。
+    let (pid, started) = {
+        let mut store = game_process_store().lock().map_err(|e| e.to_string())?;
+        claim_termination_request(&mut store)?
+    };
+
+    if let Err(error) = terminate_process(pid) {
+        if let Ok(mut store) = game_process_store().lock() {
+            reset_termination_request_if_pid(&mut store, pid);
+        }
+        return Err(error);
+    }
 
     if started {
         Ok(format!("游戏进程 (PID {}) 已终止", pid))
@@ -395,8 +419,8 @@ pub fn kill_game_process() -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        claim_startup_transition, clear_process_if_pid, insert_process_if_empty, parse_log_level,
-        GameProcess,
+        claim_startup_transition, claim_termination_request, clear_process_if_pid,
+        insert_process_if_empty, parse_log_level, reset_termination_request_if_pid, GameProcess,
     };
     use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -460,6 +484,7 @@ mod tests {
             GameProcess {
                 pid: 100,
                 fully_started: false,
+                termination_requested: false,
             },
         )
         .expect("insert the first process");
@@ -469,6 +494,7 @@ mod tests {
             GameProcess {
                 pid: 200,
                 fully_started: false,
+                termination_requested: false,
             },
         );
         assert!(second.is_err());
@@ -479,5 +505,33 @@ mod tests {
 
         assert!(clear_process_if_pid(&mut store, 100));
         assert!(store.is_none());
+    }
+
+    #[test]
+    fn rejects_a_repeated_termination_request() {
+        let mut store = Some(GameProcess {
+            pid: 100,
+            fully_started: false,
+            termination_requested: false,
+        });
+
+        assert_eq!(claim_termination_request(&mut store), Ok((100, false)));
+        assert!(claim_termination_request(&mut store).is_err());
+    }
+
+    #[test]
+    fn resets_a_failed_termination_request_only_for_the_same_pid() {
+        let mut store = Some(GameProcess {
+            pid: 100,
+            fully_started: false,
+            termination_requested: false,
+        });
+        claim_termination_request(&mut store).expect("claim the first termination request");
+
+        reset_termination_request_if_pid(&mut store, 200);
+        assert!(claim_termination_request(&mut store).is_err());
+
+        reset_termination_request_if_pid(&mut store, 100);
+        assert_eq!(claim_termination_request(&mut store), Ok((100, false)));
     }
 }
