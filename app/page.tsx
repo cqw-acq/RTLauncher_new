@@ -248,7 +248,7 @@ export default function Home() {
                 >
                   <Card className="relative min-h-[280px] overflow-hidden border-primary/20 bg-gradient-to-br from-primary/12 via-card to-card shadow-sm">
                     <div className="pointer-events-none absolute -right-12 -top-16 size-52 rounded-full bg-primary/10 blur-3xl" />
-                    <CardContent className="relative flex h-full min-h-[280px] flex-col justify-between gap-4 p-5 sm:p-6">
+                    <CardContent className="relative flex h-full min-h-[280px] flex-col p-5 sm:p-6">
                       <div className="flex items-start justify-between gap-3">
                         <div className="min-w-0 flex-1">
                           <div className="mb-3 flex flex-wrap items-center gap-2">
@@ -285,37 +285,38 @@ export default function Home() {
                             )}
                           </p>
 
-                          <div className="mt-4">
-                            <div className="flex flex-wrap items-center gap-2">
-                              {isLaunchActive || canLaunch ? (
-                                <Button
-                                  size="lg"
-                                  className="gap-2"
-                                  disabled={!configLoaded}
-                                  onClick={() => void handlePrimaryAction()}
-                                >
-                                  {isLaunchActive ? (
-                                    <Loader2 className="size-4 animate-spin" />
-                                  ) : (
-                                    <Play className="size-4" />
-                                  )}
-                                  {primaryActionLabel}
-                                </Button>
-                              ) : null}
-                              <div className="min-w-0 flex-1">
-                                <VersionSelectorDialog compact />
-                              </div>
-                              <Button variant="outline" size="lg" asChild>
-                                <Link href="/launch" className="gap-2">
-                                  {t("home.viewLaunchDetails")}
-                                  <ArrowRight className="size-4" />
-                                </Link>
-                              </Button>
-                            </div>
-                          </div>
                         </div>
                         <div className="flex size-11 shrink-0 items-center justify-center rounded-2xl bg-primary text-primary-foreground shadow-sm">
                           <Boxes className="size-5" />
+                        </div>
+                      </div>
+
+                      <div className="mt-auto mb-8">
+                        <div className="flex flex-wrap items-center gap-2">
+                          {isLaunchActive || canLaunch ? (
+                            <Button
+                              size="lg"
+                              className="gap-2"
+                              disabled={!configLoaded}
+                              onClick={() => void handlePrimaryAction()}
+                            >
+                              {isLaunchActive ? (
+                                <Loader2 className="size-4 animate-spin" />
+                              ) : (
+                                <Play className="size-4" />
+                              )}
+                              {primaryActionLabel}
+                            </Button>
+                          ) : null}
+                          <div className="min-w-0 flex-1">
+                            <VersionSelectorDialog compact />
+                          </div>
+                          <Button variant="outline" size="lg" asChild>
+                            <Link href="/launch" className="gap-2">
+                              {t("home.viewLaunchDetails")}
+                              <ArrowRight className="size-4" />
+                            </Link>
+                          </Button>
                         </div>
                       </div>
 
