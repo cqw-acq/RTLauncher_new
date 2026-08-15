@@ -634,7 +634,7 @@
     "installNow": "Install now",
     "downloadingUpdate": "Downloading update package. Please do not close the app...",
     "installingUpdate": "Installing update. The app will restart...",
-    "updateIntervalNotice": "To ensure service stability, update checks are limited to at least 24-hour intervals.",
+    "updateIntervalNotice": "To ensure service stability, manual update checks are limited to at least 60-second intervals.",
     "lastCheckTime": "Last check time",
     "checkUpdateButton": "Check Updates",
     "willRestartShortly": "Once installed, the launcher will automatically close and restart. Please wait..."

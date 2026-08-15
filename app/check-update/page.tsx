@@ -116,7 +116,7 @@ export default function CheckUpdatePage() {
   };
 
   /**
-   * @param force 是否强制跳过 24 小时间隔（启动自动跳转时传 true）
+   * @param force 是否强制跳过 60 秒间隔（启动自动跳转时传 true）
    * @returns 是否发现有新版本可用
    */
   const handleCheck = async (force = false): Promise<boolean> => {

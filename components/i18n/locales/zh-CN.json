@@ -634,7 +634,7 @@
     "installNow": "立即安装",
     "downloadingUpdate": "正在下载更新包，请勿关闭应用...",
     "installingUpdate": "正在安装更新，应用即将重启...",
-    "updateIntervalNotice": "为保证服务稳定，更新检查间隔至少为 24 小时。",
+    "updateIntervalNotice": "为保证服务稳定，手动检查更新的间隔至少为 60 秒。",
     "lastCheckTime": "上次检查时间",
     "checkUpdateButton": "检查更新",
     "willRestartShortly": "安装完成后会自动关闭启动器并重启应用，请稍候..."

@@ -82,7 +82,7 @@ async function checkInBackground(showError = false, language: AppLanguage = "zh-
 }
 
 /**
- * 启动器启动时调用：强制跳过 24 小时限制检查更新。
+ * 启动器启动时调用：强制跳过 60 秒限制检查更新。
  * 如发现新版本 → 自动跳转到 /check-update 页面并触发下载流程。
  * @param router useRouter() 返回的路由实例，用于跳转子页面
  * @returns true = 发现更新且已经跳转
