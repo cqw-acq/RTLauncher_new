@@ -4,8 +4,8 @@ use super::manifest::{
 };
 use super::ThemeStoreError;
 use semver::Version;
-use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use serde::{Deserialize, Deserializer, Serialize};
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::{Read, Seek};
 use std::path::{Path, PathBuf};
@@ -31,8 +31,30 @@ pub struct ThemeStoreState {
     pub pending_theme_id: Option<String>,
     #[serde(default)]
     packages: Vec<ThemePackage>,
-    #[serde(default)]
-    trusted_packages: BTreeMap<String, String>,
+    #[serde(default, deserialize_with = "deserialize_trusted_packages")]
+    trusted_packages: BTreeMap<String, BTreeSet<String>>,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum StoredTrustedPackages {
+    Current(BTreeMap<String, BTreeSet<String>>),
+    Legacy(BTreeMap<String, String>),
+}
+
+fn deserialize_trusted_packages<'de, D>(
+    deserializer: D,
+) -> Result<BTreeMap<String, BTreeSet<String>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Ok(match StoredTrustedPackages::deserialize(deserializer)? {
+        StoredTrustedPackages::Current(packages) => packages,
+        StoredTrustedPackages::Legacy(packages) => packages
+            .into_iter()
+            .map(|(theme_id, version)| (theme_id, BTreeSet::from([version])))
+            .collect(),
+    })
 }
 
 impl Default for ThemeStoreState {
@@ -257,16 +279,16 @@ impl ThemeStore {
             self.state.last_healthy_theme_id = BUILTIN_THEME_ID.into();
             self.state.pending_theme_id = None;
         }
-        if self
-            .state
-            .trusted_packages
-            .get(theme_id)
-            .is_some_and(|trusted_version| {
-                removed
-                    .iter()
-                    .any(|package| package.manifest.version == *trusted_version)
-            })
-        {
+        let remove_trust_entry =
+            if let Some(trusted_versions) = self.state.trusted_packages.get_mut(theme_id) {
+                for package in &removed {
+                    trusted_versions.remove(&package.manifest.version);
+                }
+                trusted_versions.is_empty()
+            } else {
+                false
+            };
+        if remove_trust_entry {
             self.state.trusted_packages.remove(theme_id);
         }
         self.save()
@@ -299,7 +321,7 @@ impl ThemeStore {
         self.state
             .trusted_packages
             .get(theme_id)
-            .is_some_and(|trusted_version| trusted_version == version)
+            .is_some_and(|trusted_versions| trusted_versions.contains(version))
     }
 
     pub fn set_trusted(
@@ -321,14 +343,21 @@ impl ThemeStore {
         if trusted {
             self.state
                 .trusted_packages
-                .insert(theme_id.into(), version.into());
-        } else if self
-            .state
-            .trusted_packages
-            .get(theme_id)
-            .is_some_and(|trusted_version| trusted_version == version)
-        {
-            self.state.trusted_packages.remove(theme_id);
+                .entry(theme_id.into())
+                .or_default()
+                .insert(version.into());
+        } else {
+            let remove_trust_entry =
+                self.state
+                    .trusted_packages
+                    .get_mut(theme_id)
+                    .is_some_and(|trusted_versions| {
+                        trusted_versions.remove(version);
+                        trusted_versions.is_empty()
+                    });
+            if remove_trust_entry {
+                self.state.trusted_packages.remove(theme_id);
+            }
         }
         self.save()
     }
@@ -674,6 +703,68 @@ mod tests {
             .set_trusted("com.example.nebula", "1.0.0", false)
             .unwrap();
         assert!(!reopened.is_trusted("com.example.nebula", "1.0.0"));
+    }
+
+    #[test]
+    fn trust_is_kept_for_each_installed_theme_version() {
+        let directory = TempDir::new().expect("create temporary directory");
+        let first = write_archive(directory.path(), "1.0.0", b"one");
+        let second = write_archive(directory.path(), "1.1.0", b"two");
+        let store_path = directory.path().join("store");
+        let mut store = ThemeStore::open(&store_path).unwrap();
+        store.install_archive(&first).unwrap();
+        store.install_archive(&second).unwrap();
+
+        store
+            .set_trusted("com.example.nebula", "1.0.0", true)
+            .unwrap();
+        store
+            .set_trusted("com.example.nebula", "1.1.0", true)
+            .unwrap();
+
+        drop(store);
+        let mut store = ThemeStore::open(&store_path).unwrap();
+
+        assert!(store.is_trusted("com.example.nebula", "1.0.0"));
+        assert!(store.is_trusted("com.example.nebula", "1.1.0"));
+
+        store.remove("com.example.nebula", Some("1.0.0")).unwrap();
+
+        assert!(!store.is_trusted("com.example.nebula", "1.0.0"));
+        assert!(store.is_trusted("com.example.nebula", "1.1.0"));
+    }
+
+    #[test]
+    fn legacy_trust_record_is_migrated_to_a_version_set() {
+        let directory = TempDir::new().expect("create temporary directory");
+        let store_path = directory.path().join("store");
+        fs::create_dir_all(&store_path).expect("create Theme store directory");
+        fs::write(
+            store_path.join(REGISTRY_FILE),
+            serde_json::to_vec(&json!({
+                "activeThemeId": "builtin.default",
+                "lastHealthyThemeId": "builtin.default",
+                "pendingThemeId": null,
+                "packages": [],
+                "trustedPackages": {
+                    "com.example.nebula": "1.0.0"
+                }
+            }))
+            .expect("serialize legacy registry"),
+        )
+        .expect("write legacy registry");
+
+        let store = ThemeStore::open(&store_path).expect("open legacy Theme store");
+
+        assert!(store.is_trusted("com.example.nebula", "1.0.0"));
+        let saved: Value = serde_json::from_slice(
+            &fs::read(store_path.join(REGISTRY_FILE)).expect("read migrated registry"),
+        )
+        .expect("parse migrated registry");
+        assert_eq!(
+            saved["trustedPackages"]["com.example.nebula"],
+            json!(["1.0.0"])
+        );
     }
 
     #[test]
