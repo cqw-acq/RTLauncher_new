@@ -19,6 +19,7 @@ export interface ThemeRuntimeOptions {
   routes: ThemeRouteRegistry;
   slots: ThemeSlotRegistry;
   createContextServices(manifest: ThemeManifest): ThemeContextServices;
+  isDevelopmentTheme?(manifest: ThemeManifest): boolean;
   setupTimeoutMs?: number;
   activateTimeoutMs?: number;
   deactivateTimeoutMs?: number;
@@ -186,7 +187,7 @@ export class ThemeRuntime {
         appVersion: this.options.appVersion,
         themeApiVersion: THEME_API_VERSION,
         platform: this.options.platform,
-        development: false,
+        development: this.options.isDevelopmentTheme?.(manifest) ?? false,
         activeThemeId: this.snapshot.activeThemeId,
       },
       routes: this.options.routes.forOwner(owner),

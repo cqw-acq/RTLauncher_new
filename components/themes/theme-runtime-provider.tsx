@@ -25,6 +25,8 @@ import {
   type LoadedThemeBundle,
 } from "@/lib/themes/bundle-loader";
 import { ThemeEventBus } from "@/lib/themes/events";
+import { DevelopmentThemeWatcher } from "@/lib/themes/development-watcher";
+import { ThemeHealthMonitor } from "@/lib/themes/health-monitor";
 import type {
   JsonValue,
   ThemeAssetService,
@@ -64,6 +66,11 @@ export interface ThemeHostDependencies {
     manifest: ThemeManifest,
     assets: ThemeAssetService,
   ): ThemeContextServices;
+  healthDelayMs?: number;
+  watchDevelopmentTheme?(
+    themePackage: ThemeInstalledPackage,
+    notifyChange: () => void,
+  ): () => void;
 }
 
 export interface ThemeRuntimeContextValue {
@@ -76,6 +83,7 @@ export interface ThemeRuntimeContextValue {
   activateTheme(themeId: string): Promise<boolean>;
   reloadTheme(themeId: string): Promise<boolean>;
   refreshThemes(): Promise<void>;
+  reportThemeError(error: Error): void;
 }
 
 interface ThemeRuntimeProviderProps {
@@ -105,6 +113,11 @@ function ThemeRuntimeProviderCore({
     platform: detectPlatform(),
     routes,
     slots,
+    isDevelopmentTheme(manifest) {
+      return packagesRef.current.some(
+        (item) => item.development && item.manifest.id === manifest.id,
+      );
+    },
     createContextServices(manifest) {
       const assets = bundles.current.get(manifest.id)?.assets ?? EMPTY_ASSETS;
       return dependenciesRef.current.createContextServices(manifest, assets);
@@ -118,6 +131,18 @@ function ThemeRuntimeProviderCore({
   const [packages, setPackages] = useState<ThemeInstalledPackage[]>([]);
   const [ready, setReady] = useState(false);
   const [error, setError] = useState<Error | null>(null);
+  const activateThemeRef = useRef<(themeId: string) => Promise<boolean>>(async () => false);
+  const healthMonitor = useMemo(() => new ThemeHealthMonitor({
+    healthyDelayMs: dependencies.healthDelayMs,
+    onHealthy(themeId) {
+      return dependenciesRef.current.markHealthy(themeId).catch((cause) => {
+        setError(cause instanceof Error ? cause : new Error(String(cause)));
+      });
+    },
+    async onRollback() {
+      await activateThemeRef.current(BUILTIN_THEME_ID);
+    },
+  }), [dependencies.healthDelayMs]);
 
   const refreshThemes = useCallback(async () => {
     const store = await dependenciesRef.current.loadStore();
@@ -152,7 +177,7 @@ function ThemeRuntimeProviderCore({
       if (themeId !== BUILTIN_THEME_ID) await prepareTheme(themeId);
       await dependenciesRef.current.setActive(themeId);
       await runtime.activateTheme(themeId);
-      await dependenciesRef.current.markHealthy(themeId);
+      healthMonitor.start(themeId);
       return true;
     } catch (cause) {
       const nextError = cause instanceof Error ? cause : new Error(String(cause));
@@ -162,11 +187,19 @@ function ThemeRuntimeProviderCore({
           await runtime.activateTheme(previousThemeId);
         }
         await dependenciesRef.current.setActive(previousThemeId);
-        await dependenciesRef.current.markHealthy(previousThemeId);
+        healthMonitor.start(previousThemeId);
       } catch {}
       return false;
     }
-  }, [prepareTheme, runtime]);
+  }, [healthMonitor, prepareTheme, runtime]);
+  activateThemeRef.current = activateTheme;
+
+  const reportThemeError = useCallback((themeError: Error) => {
+    const activeThemeId = runtime.getSnapshot().activeThemeId;
+    if (activeThemeId === BUILTIN_THEME_ID) return;
+    console.error(`[Theme ${activeThemeId}] Runtime contribution failed.`, themeError);
+    healthMonitor.reportError(activeThemeId);
+  }, [healthMonitor, runtime]);
 
   const reloadTheme = useCallback(async (themeId: string): Promise<boolean> => {
     const themePackage = findPackage(themeId);
@@ -204,7 +237,12 @@ function ThemeRuntimeProviderCore({
       if (store.activeThemeId !== BUILTIN_THEME_ID) {
         try {
           await prepareTheme(store.activeThemeId);
-          if (!cancelled) await runtime.activateTheme(store.activeThemeId);
+          if (!cancelled) {
+            await runtime.activateTheme(store.activeThemeId);
+            if (store.pendingThemeId === store.activeThemeId) {
+              healthMonitor.start(store.activeThemeId);
+            }
+          }
         } catch (cause) {
           if (!cancelled) {
             setError(cause instanceof Error ? cause : new Error(String(cause)));
@@ -224,8 +262,46 @@ function ThemeRuntimeProviderCore({
       cancelled = true;
       bundles.current.forEach((bundle) => bundle.unload());
       bundles.current.clear();
+      healthMonitor.dispose();
     };
-  }, [prepareTheme, runtime]);
+  }, [healthMonitor, prepareTheme, runtime]);
+
+  useEffect(() => {
+    if (snapshot.activeThemeId === BUILTIN_THEME_ID) return;
+    const onError = (event: ErrorEvent) => reportThemeError(
+      event.error instanceof Error ? event.error : new Error(event.message),
+    );
+    const onRejection = (event: PromiseRejectionEvent) => reportThemeError(
+      event.reason instanceof Error ? event.reason : new Error(String(event.reason)),
+    );
+    window.addEventListener("error", onError);
+    window.addEventListener("unhandledrejection", onRejection);
+    return () => {
+      window.removeEventListener("error", onError);
+      window.removeEventListener("unhandledrejection", onRejection);
+    };
+  }, [reportThemeError, snapshot.activeThemeId]);
+
+  useEffect(() => {
+    const activePackage = packages.find(
+      (item) => item.development && item.manifest.id === snapshot.activeThemeId,
+    );
+    if (!activePackage || !dependenciesRef.current.watchDevelopmentTheme) return;
+    const watcher = new DevelopmentThemeWatcher({
+      async reload(themeId) {
+        await refreshThemes();
+        await reloadTheme(themeId);
+      },
+    });
+    const stop = dependenciesRef.current.watchDevelopmentTheme(
+      activePackage,
+      () => watcher.notifyChange(activePackage.manifest.id),
+    );
+    return () => {
+      stop();
+      watcher.dispose();
+    };
+  }, [packages, refreshThemes, reloadTheme, snapshot.activeThemeId]);
 
   useEffect(() => {
     document.documentElement.setAttribute("data-rtl-theme", snapshot.activeThemeId);
@@ -242,7 +318,8 @@ function ThemeRuntimeProviderCore({
     activateTheme,
     reloadTheme,
     refreshThemes,
-  }), [activateTheme, error, packages, ready, refreshThemes, reloadTheme, routes, slots, snapshot]);
+    reportThemeError,
+  }), [activateTheme, error, packages, ready, refreshThemes, reloadTheme, reportThemeError, routes, slots, snapshot]);
 
   return <ThemeRuntimeContext.Provider value={value}>{children}</ThemeRuntimeContext.Provider>;
 }
@@ -273,6 +350,7 @@ function ConnectedThemeRuntimeProvider({ children }: { children: ReactNode }) {
     }),
     setActive: (themeId) => invoke("theme_set_active", { themeId }),
     markHealthy: (themeId) => invoke("theme_mark_healthy", { themeId }),
+    watchDevelopmentTheme: watchNativeDevelopmentTheme,
     createContextServices(themeManifest, assets) {
       const themeSettings = createThemeSettingsService(themeManifest.id);
       const sdk = createThemeSDK(themeManifest.id, {
@@ -401,6 +479,37 @@ function detectPlatform(): "windows" | "macos" | "linux" {
   if (platform.includes("win")) return "windows";
   if (platform.includes("mac")) return "macos";
   return "linux";
+}
+
+function watchNativeDevelopmentTheme(
+  themePackage: ThemeInstalledPackage,
+  notifyChange: () => void,
+): () => void {
+  let stopped = false;
+  let previous: string | undefined;
+  let reading = false;
+  const read = async () => {
+    if (stopped || reading) return;
+    reading = true;
+    try {
+      const paths = [themePackage.manifest.entry.script];
+      if (themePackage.manifest.entry.style) paths.push(themePackage.manifest.entry.style);
+      const contents = await Promise.all(paths.map((path) => invoke<string>(
+        "theme_read_text",
+        { themeId: themePackage.manifest.id, path },
+      )));
+      const signature = contents.join("\u0000");
+      if (previous !== undefined && signature !== previous) notifyChange();
+      previous = signature;
+    } catch {}
+    finally { reading = false; }
+  };
+  void read();
+  const interval = window.setInterval(() => void read(), 750);
+  return () => {
+    stopped = true;
+    window.clearInterval(interval);
+  };
 }
 
 export function useThemeRuntime(): ThemeRuntimeContextValue {

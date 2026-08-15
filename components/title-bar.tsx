@@ -74,8 +74,8 @@ function WindowButton({ onClick, title, children, className }: WindowButtonProps
 }
 
 export function TitleBar({ className }: TitleBarProps) {
-  const { slots, snapshot } = useThemeRuntime()
-  const themeSlot = { registry: slots, owner: snapshot.activeOwner }
+  const { slots, snapshot, reportThemeError } = useThemeRuntime()
+  const themeSlot = { registry: slots, owner: snapshot.activeOwner, onError: reportThemeError }
   const [isMacOS, setIsMacOS] = useState(false)
   const [isMaximized, setIsMaximized] = useState(false)
   const [windowApi, setWindowApi] = useState<WindowApi | null>(null)

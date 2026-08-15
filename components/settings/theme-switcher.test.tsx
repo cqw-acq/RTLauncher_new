@@ -49,6 +49,7 @@ function createRuntime(activeThemeId = "builtin.default"): ThemeRuntimeContextVa
     activateTheme: vi.fn(async () => true),
     reloadTheme: vi.fn(async () => true),
     refreshThemes: vi.fn(async () => undefined),
+    reportThemeError: vi.fn(),
   };
 }
 

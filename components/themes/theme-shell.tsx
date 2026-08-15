@@ -29,7 +29,7 @@ function routeIdFromPathname(pathname: string): CoreRouteId | undefined {
 
 export function ThemeShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
-  const { routes, slots, snapshot } = useThemeRuntime();
+  const { routes, slots, snapshot, reportThemeError } = useThemeRuntime();
   const owner = snapshot.activeOwner;
 
   return (
@@ -38,16 +38,17 @@ export function ThemeShell({ children }: { children: ReactNode }) {
       <div className="flex flex-1 overflow-hidden">
         <Sidebar />
         <main className="flex-1 overflow-hidden [view-transition-name:page-content]">
-          <ThemeSlot registry={slots} owner={owner} slotId="app.content.before" />
+          <ThemeSlot registry={slots} owner={owner} slotId="app.content.before" onError={reportThemeError} />
           <ThemeRoute
             registry={routes}
             owner={owner}
             routeId={routeIdFromPathname(pathname)}
             pathname={pathname}
+            onError={reportThemeError}
           >
             <PageTransition>{children}</PageTransition>
           </ThemeRoute>
-          <ThemeSlot registry={slots} owner={owner} slotId="app.content.after" />
+          <ThemeSlot registry={slots} owner={owner} slotId="app.content.after" onError={reportThemeError} />
         </main>
       </div>
     </>

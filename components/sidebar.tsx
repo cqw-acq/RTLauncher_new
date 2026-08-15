@@ -218,7 +218,7 @@ export function Sidebar({ className }: SidebarProps) {
   const pathname = usePathname()
   const { config, configLoaded } = useUIConfigContext()
   const { t } = useI18n()
-  const { slots, snapshot } = useThemeRuntime()
+  const { slots, snapshot, reportThemeError } = useThemeRuntime()
   const allNavItems = NAV_ITEM_BASE.map((item) => ({
     ...item,
     label: NAV_LABELS[item.id] ? t(NAV_LABELS[item.id]) : item.id,
@@ -247,8 +247,8 @@ export function Sidebar({ className }: SidebarProps) {
         className
       )}
     >
-      <ThemeSlot registry={slots} owner={snapshot.activeOwner} slotId="app.sidebar.header" />
-      <ThemeSlot registry={slots} owner={snapshot.activeOwner} slotId="app.sidebar.navigation">
+      <ThemeSlot registry={slots} owner={snapshot.activeOwner} slotId="app.sidebar.header" onError={reportThemeError} />
+      <ThemeSlot registry={slots} owner={snapshot.activeOwner} slotId="app.sidebar.navigation" onError={reportThemeError}>
         <nav className="flex flex-1 flex-col items-center gap-2 p-2">
           {topNavItems.map((item) => (
             <NavButton key={item.href} item={item} isActive={isActive(item.href)} isExactActive={isExactActive(item.href)} />
@@ -256,7 +256,7 @@ export function Sidebar({ className }: SidebarProps) {
         </nav>
       </ThemeSlot>
 
-      <ThemeSlot registry={slots} owner={snapshot.activeOwner} slotId="app.sidebar.footer">
+      <ThemeSlot registry={slots} owner={snapshot.activeOwner} slotId="app.sidebar.footer" onError={reportThemeError}>
         <div className="flex flex-col items-center gap-2 border-t border-border p-2">
           {bottomNavItems.map((item) => (
             <NavButton key={item.href} item={item} isActive={isActive(item.href)} isExactActive={isExactActive(item.href)} />
@@ -267,7 +267,7 @@ export function Sidebar({ className }: SidebarProps) {
   )
 
   return (
-    <ThemeSlot registry={slots} owner={snapshot.activeOwner} slotId="app.sidebar">
+    <ThemeSlot registry={slots} owner={snapshot.activeOwner} slotId="app.sidebar" onError={reportThemeError}>
       {builtInSidebar}
     </ThemeSlot>
   )

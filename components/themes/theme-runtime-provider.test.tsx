@@ -49,6 +49,7 @@ function dependencies(activeThemeId = "builtin.default"): ThemeHostDependencies 
     })),
     setActive: vi.fn(async () => undefined),
     markHealthy: vi.fn(async () => undefined),
+    healthDelayMs: 0,
     createContextServices: () => ({
       sdk: {} as never,
       assets: { async url(path: string) { return path; }, release() {} },
@@ -116,7 +117,7 @@ describe("ThemeRuntimeProvider", () => {
 
     expect(screen.getByTestId("active").textContent).toBe("com.example.nebula");
     expect(host.setActive).toHaveBeenCalledWith("com.example.nebula");
-    expect(host.markHealthy).toHaveBeenCalledWith("com.example.nebula");
+    await waitFor(() => expect(host.markHealthy).toHaveBeenCalledWith("com.example.nebula"));
   });
 
   it("keeps the previous Theme when activation fails", async () => {
@@ -138,7 +139,9 @@ describe("ThemeRuntimeProvider", () => {
     await act(async () => screen.getByRole("button", { name: "switch" }).click());
 
     expect(screen.getByTestId("active").textContent).toBe("builtin.default");
-    expect(host.markHealthy).toHaveBeenLastCalledWith("builtin.default");
+    await waitFor(() => {
+      expect(host.markHealthy).toHaveBeenLastCalledWith("builtin.default");
+    });
   });
 
   it("updates the root Theme attribute", async () => {
