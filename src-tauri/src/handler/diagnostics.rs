@@ -1658,6 +1658,7 @@ pub async fn export_launch_report(
     launch_parameters: String,
     account_type: String,
     report_json: String,
+    console_logs: String,
 ) -> Result<String, String> {
     let mc_path = PathBuf::from(&minecraft_path);
 
@@ -1705,6 +1706,16 @@ pub async fn export_launch_report(
             zip.write_all(log_content.as_bytes())
                 .map_err(|e| format!("写入latest.log失败: {}", e))?;
         }
+    }
+
+    if !console_logs.trim().is_empty() {
+        zip.start_file(
+            "console.log",
+            FileOptions::default().compression_method(CompressionMethod::Deflated),
+        )
+        .map_err(|e| format!("添加console.log失败: {}", e))?;
+        zip.write_all(console_logs.as_bytes())
+            .map_err(|e| format!("写入console.log失败: {}", e))?;
     }
 
     let result = zip.finish();
