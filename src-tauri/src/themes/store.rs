@@ -106,8 +106,8 @@ impl ThemeStore {
         &mut self,
         archive_path: &Path,
     ) -> Result<ThemePackage, ThemeStoreError> {
-        let file = fs::File::open(archive_path).map_err(store_io)?;
-        let inspected = inspect_theme_archive(file, ArchiveLimits::default())?;
+        let mut file = fs::File::open(archive_path).map_err(store_io)?;
+        let inspected = inspect_theme_archive(&mut file, ArchiveLimits::default())?;
         let manifest = inspected.manifest;
         let target = self
             .root
@@ -132,9 +132,10 @@ impl ThemeStore {
             std::process::id()
         ));
         fs::create_dir(&staging).map_err(store_io)?;
-        let extraction = fs::File::open(archive_path)
+        let extraction = file
+            .rewind()
             .map_err(store_io)
-            .and_then(|file| extract_archive(file, &staging));
+            .and_then(|()| extract_archive(&mut file, &staging));
         if let Err(error) = extraction {
             let _ = fs::remove_dir_all(&staging);
             return Err(error);

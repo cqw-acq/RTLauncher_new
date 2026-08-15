@@ -174,15 +174,16 @@ pub fn inspect_theme_archive<R: Read + Seek>(
             continue;
         }
 
+        let declared_size = entry.size();
         file_count += 1;
-        if file_count > limits.max_files || entry.size() > limits.max_file_size {
+        if file_count > limits.max_files || declared_size > limits.max_file_size {
             return Err(archive_error(
                 "THEME_ARCHIVE_LIMIT_EXCEEDED",
                 format!("Archive entry exceeds a package limit: {normalized}"),
             ));
         }
         total_uncompressed_size = total_uncompressed_size
-            .checked_add(entry.size())
+            .checked_add(declared_size)
             .ok_or_else(|| {
                 archive_error("THEME_ARCHIVE_LIMIT_EXCEEDED", "Archive size overflowed.")
             })?;
@@ -193,14 +194,18 @@ pub fn inspect_theme_archive<R: Read + Seek>(
             ));
         }
 
-        let mut content = Vec::with_capacity(entry.size() as usize);
-        entry.read_to_end(&mut content).map_err(|error| {
-            archive_error(
-                "THEME_ARCHIVE_INVALID",
-                format!("Cannot read {normalized}: {error}"),
-            )
-        })?;
-        if content.len() as u64 != entry.size() {
+        let mut content = Vec::with_capacity(declared_size as usize);
+        entry
+            .by_ref()
+            .take(declared_size.saturating_add(1))
+            .read_to_end(&mut content)
+            .map_err(|error| {
+                archive_error(
+                    "THEME_ARCHIVE_INVALID",
+                    format!("Cannot read {normalized}: {error}"),
+                )
+            })?;
+        if content.len() as u64 != declared_size {
             return Err(archive_error(
                 "THEME_ARCHIVE_INVALID",
                 format!("Archive entry size changed while reading: {normalized}"),
@@ -395,7 +400,11 @@ mod tests {
     use super::*;
     use serde_json::{json, Value};
     use sha2::{Digest, Sha256};
-    use std::io::{Cursor, Write};
+    use std::io::{Cursor, Read, Seek, SeekFrom, Write};
+    use std::sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    };
     use zip::write::FileOptions;
     use zip::{CompressionMethod, ZipWriter};
 
@@ -449,6 +458,46 @@ mod tests {
             ("dist/theme.js".into(), script.to_vec()),
             ("dist/theme.css".into(), b"body{}".to_vec()),
         ])
+    }
+
+    struct CountingReader {
+        inner: Cursor<Vec<u8>>,
+        bytes_read: Arc<AtomicU64>,
+    }
+
+    impl Read for CountingReader {
+        fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+            let count = self.inner.read(buffer)?;
+            self.bytes_read.fetch_add(count as u64, Ordering::Relaxed);
+            Ok(count)
+        }
+    }
+
+    impl Seek for CountingReader {
+        fn seek(&mut self, position: SeekFrom) -> std::io::Result<u64> {
+            self.inner.seek(position)
+        }
+    }
+
+    fn set_central_declared_size(archive: &mut [u8], name: &str, size: u32) {
+        let mut offset = 0;
+        while offset + 46 <= archive.len() {
+            if &archive[offset..offset + 4] != b"PK\x01\x02" {
+                offset += 1;
+                continue;
+            }
+            let name_length = u16::from_le_bytes([archive[offset + 28], archive[offset + 29]]) as usize;
+            let extra_length = u16::from_le_bytes([archive[offset + 30], archive[offset + 31]]) as usize;
+            let comment_length = u16::from_le_bytes([archive[offset + 32], archive[offset + 33]]) as usize;
+            let name_start = offset + 46;
+            let name_end = name_start + name_length;
+            if name_end <= archive.len() && &archive[name_start..name_end] == name.as_bytes() {
+                archive[offset + 24..offset + 28].copy_from_slice(&size.to_le_bytes());
+                return;
+            }
+            offset = name_end + extra_length + comment_length;
+        }
+        panic!("central ZIP entry not found: {name}");
     }
 
     #[test]
@@ -543,6 +592,32 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(too_large.code, "THEME_ARCHIVE_LIMIT_EXCEEDED");
+    }
+
+    #[test]
+    fn archive_stops_after_a_declared_size_mismatch() {
+        let script = vec![b'x'; 512 * 1024];
+        let manifest = serde_json::to_vec(&valid_manifest(&script)).expect("serialize manifest");
+        let mut bytes = archive(vec![
+            ("manifest.json".into(), manifest),
+            ("dist/theme.js".into(), script),
+            ("dist/theme.css".into(), b"body{}".to_vec()),
+        ])
+        .into_inner();
+        set_central_declared_size(&mut bytes, "dist/theme.js", 1);
+        let bytes_read = Arc::new(AtomicU64::new(0));
+        let reader = CountingReader {
+            inner: Cursor::new(bytes),
+            bytes_read: Arc::clone(&bytes_read),
+        };
+
+        let error = inspect_theme_archive(reader, ArchiveLimits::default()).unwrap_err();
+
+        assert_eq!(error.code, "THEME_ARCHIVE_INVALID");
+        assert!(
+            bytes_read.load(Ordering::Relaxed) < 128 * 1024,
+            "the archive reader consumed the oversized entry"
+        );
     }
 
     #[test]
