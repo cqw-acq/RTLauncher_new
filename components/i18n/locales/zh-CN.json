@@ -354,6 +354,19 @@
       "appearance": "外观",
       "themeColorFontSizeAndPageBackground": "主题、配色、字体大小与页面背景"
     },
+    "themeManager": {
+      "selectTheme": "前端主题",
+      "builtIn": "RTLauncher 内置主题",
+      "development": "开发模式",
+      "description": "主题是受信任的本地 React 代码。主题未覆盖的路由和插槽会继续使用内置界面。",
+      "install": "安装主题包",
+      "addDevelopment": "添加开发目录",
+      "reload": "重新加载",
+      "remove": "移除",
+      "trustWarning": "此主题可以运行本地代码并调用启动器接口。仅在你信任主题作者时启用。",
+      "removeWarning": "移除此主题并返回内置界面吗？",
+      "switchFailed": "主题无法启用。当前主题保持不变。"
+    },
     "sidebarConfig": {
       "resetAllSidebarTabsToTheirDefaultVisibility": "确定要重置所有标签页配置吗？这将恢复默认设置。",
       "sidebarTabs": "侧边栏标签页配置",

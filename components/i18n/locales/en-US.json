@@ -354,6 +354,19 @@
       "appearance": "Appearance",
       "themeColorFontSizeAndPageBackground": "Theme, color, font size, and page background"
     },
+    "themeManager": {
+      "selectTheme": "Frontend theme",
+      "builtIn": "RTLauncher built-in",
+      "development": "Development",
+      "description": "Themes are trusted local React code. Unset routes and slots continue to use the built-in interface.",
+      "install": "Install package",
+      "addDevelopment": "Add development folder",
+      "reload": "Reload",
+      "remove": "Remove",
+      "trustWarning": "This theme can run local code and call launcher APIs. Activate it only if you trust its author.",
+      "removeWarning": "Remove this theme and return to the built-in interface?",
+      "switchFailed": "The theme could not be activated. The previous theme is still active."
+    },
     "sidebarConfig": {
       "resetAllSidebarTabsToTheirDefaultVisibility": "Reset all sidebar tabs to their default visibility?",
       "sidebarTabs": "Sidebar tabs",

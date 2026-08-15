@@ -75,6 +75,7 @@ export interface ThemeRuntimeContextValue {
   slots: ThemeSlotRegistry;
   activateTheme(themeId: string): Promise<boolean>;
   reloadTheme(themeId: string): Promise<boolean>;
+  refreshThemes(): Promise<void>;
 }
 
 interface ThemeRuntimeProviderProps {
@@ -117,6 +118,12 @@ function ThemeRuntimeProviderCore({
   const [packages, setPackages] = useState<ThemeInstalledPackage[]>([]);
   const [ready, setReady] = useState(false);
   const [error, setError] = useState<Error | null>(null);
+
+  const refreshThemes = useCallback(async () => {
+    const store = await dependenciesRef.current.loadStore();
+    packagesRef.current = store.packages;
+    setPackages(store.packages);
+  }, []);
 
   const findPackage = useCallback((themeId: string) => {
     return packagesRef.current.find((item) => item.manifest.id === themeId);
@@ -234,7 +241,8 @@ function ThemeRuntimeProviderCore({
     slots,
     activateTheme,
     reloadTheme,
-  }), [activateTheme, error, packages, ready, reloadTheme, routes, slots, snapshot]);
+    refreshThemes,
+  }), [activateTheme, error, packages, ready, refreshThemes, reloadTheme, routes, slots, snapshot]);
 
   return <ThemeRuntimeContext.Provider value={value}>{children}</ThemeRuntimeContext.Provider>;
 }
