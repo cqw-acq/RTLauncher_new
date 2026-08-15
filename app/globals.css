@@ -143,6 +143,26 @@
   --tw-ring-color: color-mix(in oklch, var(--background) 95%, var(--foreground) 5%);
 }
 
+/* 深色模式下输入框/按钮等控件的 focus ring 使用不透明色，
+   与上面同理，避免半透明 box-shadow 描边在圆角处抗锯齿粗糙 */
+.dark [data-slot="input"]:focus-visible,
+.dark [data-slot="textarea"]:focus-visible,
+.dark [data-slot="button"]:focus-visible,
+.dark [data-slot="badge"]:focus-visible,
+.dark [data-slot="select-trigger"]:focus-visible,
+.dark [data-slot="combobox-chips"]:focus-within,
+.dark [data-slot="input-group"]:has([data-slot="input-group-control"]:focus-visible) {
+  --tw-ring-color: color-mix(in oklch, var(--background) 50%, var(--ring) 50%);
+}
+
+.dark [data-slot="input"][aria-invalid="true"],
+.dark [data-slot="textarea"][aria-invalid="true"],
+.dark [data-slot="select-trigger"][aria-invalid="true"],
+.dark [data-slot="button"][data-variant="destructive"]:focus-visible,
+.dark [data-slot="badge"][data-variant="destructive"]:focus-visible {
+  --tw-ring-color: color-mix(in oklch, var(--background) 60%, var(--destructive) 40%);
+}
+
 /* ============================================================
    字体大小：仅缩放文字，不改变组件与布局
    —— body 的 font-size 由 JS 直接设置（style.fontSize）

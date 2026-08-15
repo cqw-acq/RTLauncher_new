@@ -37,7 +37,7 @@ interface NavItem {
 }
 
 let activeNavigation: {
-  transition: ViewTransition
+  transition?: ViewTransition
   controller: AbortController
 } | null = null
 
@@ -48,6 +48,7 @@ function waitForPageContent(
 ) {
   return new Promise<void>((resolve) => {
     let settled = false
+    let contentChanged = false
     let settleTimer: number | undefined
 
     const finish = () => {
@@ -60,12 +61,25 @@ function waitForPageContent(
       resolve()
     }
 
+    // 新页面往往先渲染出加载中指示器(spinner)再显示真实内容；
+    // 只有等指示器消失后才算内容就绪，否则淡入的是空白/加载圈，观感像"先清空再加载"。
+    const trySettle = () => {
+      if (!contentChanged) return
+      if (main.querySelector(".animate-spin")) {
+        // 出现新的加载指示器时取消已安排的收尾，继续等待。
+        window.clearTimeout(settleTimer)
+        settleTimer = undefined
+        return
+      }
+      if (settleTimer !== undefined) return
+      // 内容更新且无加载指示器后，稍等让入场动画稳定几帧再交叉淡入。
+      settleTimer = window.setTimeout(finish, 100)
+    }
+
     const observer = new MutationObserver(() => {
       if (main.innerText === previousText) return
-      if (settleTimer !== undefined) return
-
-      // 首批新内容出现后稍等几帧即开始交叉淡入，不再等待后续列表更新。
-      settleTimer = window.setTimeout(finish, 60)
+      contentChanged = true
+      trySettle()
     })
 
     observer.observe(main, {
@@ -74,7 +88,7 @@ function waitForPageContent(
       characterData: true,
     })
 
-    const timeoutTimer = window.setTimeout(finish, 700)
+    const timeoutTimer = window.setTimeout(finish, 1200)
 
     if (signal.aborted) {
       finish()
@@ -125,20 +139,52 @@ function NavButton({ item, isActive, isExactActive }: { item: NavItem; isActive:
       return
     }
 
-    const startViewTransition = document.startViewTransition?.bind(document)
-    if (!startViewTransition) return
-
+    event.preventDefault()
     const main = document.querySelector<HTMLElement>("main")
     if (!main) return
 
-    event.preventDefault()
     const previousText = main.innerText
 
     activeNavigation?.controller.abort()
-    activeNavigation?.transition.skipTransition()
+    activeNavigation?.transition?.skipTransition()
 
     const controller = new AbortController()
-    const transition = startViewTransition(async () => {
+
+    const startViewTransition = document.startViewTransition?.bind(document)
+    if (startViewTransition) {
+      const transition = startViewTransition(async () => {
+        const contentReady = waitForPageContent(
+          main,
+          previousText,
+          controller.signal
+        )
+        router.push(item.href)
+        await contentReady
+      })
+
+      const navigation = { transition, controller }
+      activeNavigation = navigation
+
+      void transition.finished
+        .catch(() => undefined)
+        .finally(() => {
+          if (activeNavigation === navigation) activeNavigation = null
+        })
+      return
+    }
+
+    // 无 View Transitions 支持（旧版 WebKitGTK）：
+    // 退化为 CSS 过渡做等价的淡出 → 等待内容就绪 → 淡入。
+    const navigation = { controller }
+    activeNavigation = navigation
+    const previousTransition = main.style.transition
+    const previousPointerEvents = main.style.pointerEvents
+
+    main.style.pointerEvents = "none"
+    main.style.transition = "opacity 0.14s ease-out"
+    main.style.opacity = "0"
+
+    window.setTimeout(async () => {
       const contentReady = waitForPageContent(
         main,
         previousText,
@@ -146,16 +192,21 @@ function NavButton({ item, isActive, isExactActive }: { item: NavItem; isActive:
       )
       router.push(item.href)
       await contentReady
-    })
 
-    const navigation = { transition, controller }
-    activeNavigation = navigation
-
-    void transition.finished
-      .catch(() => undefined)
-      .finally(() => {
-        if (activeNavigation === navigation) activeNavigation = null
+      if (activeNavigation !== navigation) return
+      requestAnimationFrame(() => {
+        if (!main.isConnected) return
+        main.style.transition = "opacity 0.24s ease-out"
+        main.style.opacity = "1"
+        window.setTimeout(() => {
+          if (main.isConnected) {
+            main.style.transition = previousTransition
+            main.style.pointerEvents = previousPointerEvents
+          }
+          if (activeNavigation === navigation) activeNavigation = null
+        }, 260)
       })
+    }, 150)
   }
 
   return (
