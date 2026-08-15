@@ -2,6 +2,8 @@
 
 简体中文 | [English](./README.md)
 
+第一次编写 Theme？请先阅读 [Theme 开发者快速上手](./DEVELOPER-GUIDE.zh-CN.md)，再查阅 [Theme SDK 1.0 参考](./SDK-REFERENCE.zh-CN.md)。
+
 Theme API 允许用户替换指定的 React 路由和界面插槽。Theme 也可以添加本地路由。对于 Theme 未替换的路由或插槽，RTLauncher 继续使用内置界面。
 
 ## 安全模型
@@ -24,7 +26,7 @@ RTLauncher 对 Theme 包执行以下检查：
 RTLauncher 接受两种 Theme 包：
 
 1. 用于正常安装的 `.rtltheme` ZIP 归档。
-2. 用于开发的源码目录。RTLauncher 直接读取此目录，并在入口文件变化后重新加载 Theme。
+2. 用于开发的构建输出目录。该目录必须包含 `build` 生成的 `manifest.json` 和可执行入口。修改源码后，请重新构建并在 RTLauncher 中重新加载 Theme。
 
 构建后的归档具有以下结构：
 
