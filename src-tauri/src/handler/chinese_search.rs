@@ -11,8 +11,20 @@ fn get_moddata_connection() -> &'static Mutex<Option<Connection>> {
     MDDATA_CONN.get_or_init(|| Mutex::new(None))
 }
 
-/// 获取 moddata.db 的目标路径（可执行文件同目录）
+/// 获取 moddata.db 的隐藏存放目录（各平台用户数据目录，默认均不直接暴露）：
+///   Linux:   $XDG_DATA_HOME/rtlauncher 或 ~/.local/share/rtlauncher（.local 为隐藏目录）
+///   macOS:   ~/Library/Application Support/rtlauncher（Library 在 Finder 中默认隐藏）
+///   Windows: %APPDATA%\rtlauncher（AppData 目录默认隐藏）
+fn get_moddata_data_dir() -> Option<PathBuf> {
+    dirs::data_dir().map(|dir| dir.join("rtlauncher"))
+}
+
+/// 获取 moddata.db 的目标路径（优先存放于隐藏的用户数据目录）
 fn get_moddata_target_path() -> PathBuf {
+    if let Some(dir) = get_moddata_data_dir() {
+        return dir.join("moddata.db");
+    }
+    // 兜底：无用户数据目录时退回可执行文件同目录
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
             return dir.join("moddata.db");
@@ -23,18 +35,27 @@ fn get_moddata_target_path() -> PathBuf {
 
 /// 获取 moddata.db 的文件路径
 /// 查找顺序：
-///   1. 程序当前目录下的 moddata.db
-///   2. 程序可执行文件同目录下的 moddata.db
-///   3. 上层目录的 moddata.db（开发环境）
+///   1. 隐藏的用户数据目录（新版本默认位置）
+///   2. 程序当前目录下的 moddata.db（旧版本遗留）
+///   3. 程序可执行文件同目录下的 moddata.db（旧版本遗留）
+///   4. 上层目录的 moddata.db（开发环境）
 fn resolve_moddata_path() -> Option<PathBuf> {
-    // 1) 当前工作目录
+    // 1) 隐藏的用户数据目录
+    if let Some(dir) = get_moddata_data_dir() {
+        let p = dir.join("moddata.db");
+        if p.exists() {
+            return Some(p);
+        }
+    }
+
+    // 2) 当前工作目录（旧版本遗留）
     let cwd = PathBuf::from(".");
     let p1 = cwd.join("moddata.db");
     if p1.exists() {
         return Some(p1);
     }
 
-    // 2) 可执行文件目录
+    // 3) 可执行文件目录（旧版本遗留）
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
             let p = dir.join("moddata.db");
@@ -44,13 +65,13 @@ fn resolve_moddata_path() -> Option<PathBuf> {
         }
     }
 
-    // 3) 上层目录（开发环境，项目根）
+    // 4) 上层目录（开发环境，项目根）
     let p3 = cwd.join("..").join("moddata.db");
     if p3.exists() {
         return Some(p3);
     }
 
-    // 4) src-tauri 上层
+    // 5) src-tauri 上层
     let p4 = cwd.join("..").join("..").join("moddata.db");
     if p4.exists() {
         return Some(p4);
@@ -59,32 +80,70 @@ fn resolve_moddata_path() -> Option<PathBuf> {
     None
 }
 
+/// 远程数据库的候选下载地址（按顺序尝试，成功后即停止）
+/// 新源可在此追加：GitHub 优先，GitHub 不可达或资源不存在时回退到 GitCode
+const MODDATA_DOWNLOAD_URLS: &[&str] = &[
+    // 首选：GitHub（需在 https://github.com/cqw-acq/RTLauncher_new 的
+    //       "工具" 标签发布 moddata.db 资源后才生效）
+    "https://github.com/cqw-acq/RTLauncher_new/releases/download/%E5%B7%A5%E5%85%B7/moddata.db",
+    // 备选：GitCode（GitHub 无法访问时的镜像）
+    "https://gitcode.com/bubulaladdi/RTLauncher/releases/download/%E5%B7%A5%E5%85%B7/moddata.db",
+];
+
 /// 从远程下载 moddata.db
 fn download_moddata_db() -> Result<PathBuf, String> {
-    let url = "https://gitcode.com/bubulaladdi/RTLauncher/releases/download/%E5%B7%A5%E5%85%B7/moddata.db";
     let target_path = get_moddata_target_path();
-    
-    println!("[moddata] 正在下载数据库文件: {}", url);
-    
-    let response = reqwest::blocking::get(url).map_err(|e| format!("下载数据库失败: {}", e))?;
-    
-    if !response.status().is_success() {
-        return Err(format!("下载数据库失败，HTTP状态码: {}", response.status()));
-    }
-    
-    let bytes = response
-        .bytes()
-        .map_err(|e| format!("读取下载内容失败: {}", e))?;
-    
+
     // 确保目标目录存在
     if let Some(parent) = target_path.parent() {
         fs::create_dir_all(parent).map_err(|e| format!("创建目录失败: {}", e))?;
     }
-    
-    fs::write(&target_path, bytes).map_err(|e| format!("写入数据库文件失败: {}", e))?;
-    
-    println!("[moddata] 数据库文件已下载到: {}", target_path.display());
-    Ok(target_path)
+
+    let client = reqwest::blocking::Client::builder()
+        // GitHub 无法访问时连接会挂起，限制连接超时以便快速回退到下一源
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .timeout(std::time::Duration::from_secs(60))
+        .build()
+        .map_err(|e| format!("创建 HTTP 客户端失败: {}", e))?;
+
+    let mut last_error: Option<String> = None;
+    for url in MODDATA_DOWNLOAD_URLS {
+        println!("[moddata] 正在下载数据库文件: {}", url);
+        match download_from_url(&client, url, &target_path) {
+            Ok(()) => {
+                println!("[moddata] 数据库文件已下载到: {}", target_path.display());
+                return Ok(target_path);
+            }
+            Err(e) => {
+                println!("[moddata] 从 {} 下载失败: {}", url, e);
+                last_error = Some(e);
+            }
+        }
+    }
+
+    Err(last_error.unwrap_or_else(|| "所有下载源均不可用".to_string()))
+}
+
+fn download_from_url(
+    client: &reqwest::blocking::Client,
+    url: &str,
+    target_path: &PathBuf,
+) -> Result<(), String> {
+    let response = client
+        .get(url)
+        .send()
+        .map_err(|e| format!("网络请求失败: {}", e))?;
+
+    if !response.status().is_success() {
+        return Err(format!("HTTP状态码: {}", response.status()));
+    }
+
+    let bytes = response
+        .bytes()
+        .map_err(|e| format!("读取下载内容失败: {}", e))?;
+
+    fs::write(target_path, bytes).map_err(|e| format!("写入数据库文件失败: {}", e))?;
+    Ok(())
 }
 
 /// 打开 moddata 数据库连接（首次调用时建立，之后复用）
