@@ -6,6 +6,10 @@ import type {
   MinecraftVersionType,
 } from "@/types";
 
+/** 会话级缓存：重复进入下载页/整合包页时直接使用上次结果，
+    避免每次导航都先渲染加载圈再闪现内容 */
+let cachedVersions: MinecraftVersion[] | null = null;
+
 /**
  * 判断版本ID是否可能是快照版本
  */
@@ -23,12 +27,12 @@ function isLikelySnapshot(versionId: string): boolean {
  * 调用 Tauri 命令 classify_minecraft_versions 获取真实数据
  */
 export function useMinecraftVersions() {
-  const [versions, setVersions] = useState<MinecraftVersion[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [versions, setVersions] = useState<MinecraftVersion[]>(cachedVersions ?? []);
+  const [loading, setLoading] = useState(cachedVersions === null);
   const [error, setError] = useState<string | null>(null);
 
   const fetchVersions = useCallback(async () => {
-    setLoading(true);
+    if (cachedVersions === null) setLoading(true);
     setError(null);
     try {
       let data: ClassifiedVersions;
@@ -122,6 +126,7 @@ export function useMinecraftVersions() {
         latestRelease.isLatest = true;
       }
 
+      cachedVersions = allVersions;
       setVersions(allVersions);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));

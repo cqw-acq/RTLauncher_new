@@ -22,6 +22,8 @@ export type DownloadTaskStatus =
   | "cancelled";
 
 export interface DownloadTask {
+  /** React 渲染用的稳定本地标识；后端 taskId 更新时不变。 */
+  clientId: string;
   taskId: number;
   label: string;
   mcVersion: string;
@@ -191,6 +193,7 @@ export function DownloadProvider({ children }: { children: React.ReactNode }) {
         try {
           const taskId = await invoke<number>("download_patcher", { mcVersion, instanceName: instanceName ?? null });
           const task: DownloadTask = {
+            clientId: `server-${taskId}`,
             taskId,
             label,
             mcVersion,
@@ -207,6 +210,7 @@ export function DownloadProvider({ children }: { children: React.ReactNode }) {
         const localId = localIdCounterRef.current--;
         pendingQueueRef.current.push({ localId, label, mcVersion, instanceName });
         const task: DownloadTask = {
+          clientId: `client-${localId}`,
           taskId: localId,
           label,
           mcVersion,
@@ -238,6 +242,7 @@ export function DownloadProvider({ children }: { children: React.ReactNode }) {
       );
       if (isDownloading) return prev;
       const task: DownloadTask = {
+        clientId: `client-${taskId}`,
         taskId,
         label: runtimeName,
         mcVersion: "Java",

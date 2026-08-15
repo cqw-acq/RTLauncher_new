@@ -4,6 +4,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Search } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useI18n, type TranslationKey } from "@/components/i18n/use-i18n";
 import type { MinecraftVersionType } from "@/types";
 
 type VersionFilter = MinecraftVersionType;
@@ -15,11 +16,11 @@ interface VersionFilterBarProps {
   onSearchChange: (query: string) => void;
 }
 
-const filterOptions: { label: string; value: VersionFilter }[] = [
-  { label: "正式版", value: "release" },
-  { label: "快照", value: "snapshot" },
-  { label: "愚人节", value: "april_fools" },
-  { label: "远古版", value: "old_version" },
+const filterOptions: { labelKey: TranslationKey; value: VersionFilter }[] = [
+  { labelKey: "download.versionType.release", value: "release" },
+  { labelKey: "download.versionType.snapshot", value: "snapshot" },
+  { labelKey: "download.versionType.aprilFools", value: "april_fools" },
+  { labelKey: "download.versionType.oldVersion", value: "old_version" },
 ];
 
 export function VersionFilterBar({
@@ -28,6 +29,7 @@ export function VersionFilterBar({
   searchQuery,
   onSearchChange,
 }: VersionFilterBarProps) {
+  const { t } = useI18n();
   return (
     <div className="flex items-center justify-between gap-4">
       {/* 版本类型筛选 */}
@@ -45,7 +47,7 @@ export function VersionFilterBar({
                 : "text-muted-foreground hover:text-foreground"
             )}
           >
-            {option.label}
+            {t(option.labelKey)}
           </Button>
         ))}
       </div>
@@ -54,7 +56,7 @@ export function VersionFilterBar({
       <div className="relative w-64">
         <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
         <Input
-          placeholder="搜索版本号..."
+          placeholder={t("download.searchVersionPlaceholder")}
           value={searchQuery}
           onChange={(e) => onSearchChange(e.target.value)}
           className="pl-9 h-8 text-sm"

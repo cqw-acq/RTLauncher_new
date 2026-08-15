@@ -2,13 +2,14 @@
 
 import { Badge } from "@/components/ui/badge";
 import { ChevronRight } from "lucide-react";
+import { useI18n, type TranslationKey } from "@/components/i18n/use-i18n";
 import type { MinecraftVersion } from "@/types";
 
-const versionTypeLabels: Record<string, string> = {
-  release: "正式版",
-  snapshot: "快照",
-  april_fools: "愚人节",
-  old_version: "远古版",
+const versionTypeLabelKeys: Record<string, TranslationKey> = {
+  release: "download.versionType.release",
+  snapshot: "download.versionType.snapshot",
+  april_fools: "download.versionType.aprilFools",
+  old_version: "download.versionType.oldVersion",
 };
 
 interface VersionListItemProps {
@@ -17,6 +18,7 @@ interface VersionListItemProps {
 }
 
 export function VersionListItem({ version, onSelect }: VersionListItemProps) {
+  const { t } = useI18n();
   return (
     <button
       type="button"
@@ -39,14 +41,14 @@ export function VersionListItem({ version, onSelect }: VersionListItemProps) {
       <div className="ml-auto flex items-center gap-2">
         {version.isLatest && (
           <Badge variant="default" className="text-[10px] px-1.5 py-0">
-            最新
+            {t("download.latest")}
           </Badge>
         )}
         <Badge
           variant={version.type === "release" ? "secondary" : "outline"}
           className="text-[10px] px-1.5 py-0"
         >
-          {versionTypeLabels[version.type] ?? version.type}
+          {versionTypeLabelKeys[version.type] ? t(versionTypeLabelKeys[version.type]) : version.type}
         </Badge>
       </div>
 

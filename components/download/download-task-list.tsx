@@ -285,7 +285,7 @@ export function DownloadTaskList() {
                   <AnimatePresence initial={false}>
                     {tasks.map((task) => (
                       <TaskRow
-                        key={task.taskId}
+                        key={task.clientId}
                         task={task}
                         onRemove={() => removeTask(task.taskId)}
                         onCancel={() => cancelDownload(task.taskId)}

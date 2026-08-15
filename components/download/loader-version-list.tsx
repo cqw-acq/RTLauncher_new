@@ -3,6 +3,7 @@
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Download, Star } from "lucide-react";
+import { useI18n } from "@/components/i18n/use-i18n";
 import type { LoaderVersion } from "@/types";
 
 interface LoaderVersionListProps {
@@ -16,10 +17,11 @@ export function LoaderVersionList({
   versions,
   onInstall,
 }: LoaderVersionListProps) {
+  const { t } = useI18n();
   if (versions.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center gap-2 py-12 text-muted-foreground">
-        <p className="text-sm">暂无可用的 {loaderName} 版本</p>
+        <p className="text-sm">{t("download.noAvailableLoaderVersions", { name: loaderName })}</p>
       </div>
     );
   }
@@ -51,7 +53,7 @@ export function LoaderVersionList({
                 className="text-[10px] px-1.5 py-0 gap-1"
               >
                 <Star className="size-2.5" />
-                推荐
+                {t("download.recommended")}
               </Badge>
             )}
           </div>
@@ -62,7 +64,7 @@ export function LoaderVersionList({
             size="icon-sm"
             className="opacity-0 group-hover:opacity-100 transition-opacity duration-200"
             onClick={() => onInstall(version)}
-            aria-label={`安装 ${version.version}`}
+            aria-label={t("download.installVersion", { version: version.version })}
           >
             <Download className="size-4" />
           </Button>

@@ -23,6 +23,7 @@ node_modules/
 # misc
 .DS_Store
 *.pem
+.markdownlint.json
 
 # debug
 npm-debug.log*

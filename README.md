@@ -15,7 +15,7 @@
 -  **主题切换** — 亮/暗主题无缝切换
 -  **低体积** — Rust 原生打包，安装包体积小、内存占用低
 
-##  技术栈
+## 技术栈
 
 | 层级 | 技术 |
 |------|------|
@@ -99,7 +99,7 @@ Crowdin 使用 `components/i18n/locales/en-US.json` 作为英文源文件，并�
 | OptiFine | ✅ | ✅ | ✅ |
 | LiteLoader | ✅ | ✅ | ✅ |
 
-##  账户系统
+## 账户系统
 
 - **Microsoft 账户** — Device Code OAuth 登录
 - **LittleSkin** — 第三方皮肤站认证

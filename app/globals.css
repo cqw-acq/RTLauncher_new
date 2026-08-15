@@ -105,8 +105,11 @@
   --accent: oklch(0.268 0.007 34.298);
   --accent-foreground: oklch(0.985 0.001 106.423);
   --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
+  /* 深色模式下用不透明描边色替代半透明白色：
+     WebKitGTK 对半透明 1px 描边的圆角抗锯齿较差，会显得粗糙；
+     不透明色观感不变（等价于白色叠加在 card 上的结果），但边缘更平滑 */
+  --border: color-mix(in oklch, var(--card) 90%, var(--foreground) 10%);
+  --input: color-mix(in oklch, var(--card) 85%, var(--foreground) 15%);
   --ring: oklch(0.553 0.013 58.071);
   --chart-1: oklch(0.488 0.243 264.376);
   --chart-2: oklch(0.696 0.17 162.48);
@@ -119,8 +122,45 @@
   --sidebar-primary-foreground: oklch(0.985 0.001 106.423);
   --sidebar-accent: oklch(0.268 0.007 34.298);
   --sidebar-accent-foreground: oklch(0.985 0.001 106.423);
-  --sidebar-border: oklch(1 0 0 / 10%);
+  --sidebar-border: color-mix(in oklch, var(--sidebar) 90%, var(--foreground) 10%);
   --sidebar-ring: oklch(0.553 0.013 58.071);
+}
+
+/* 深色模式下卡片/弹层使用不透明 ring 色，
+   与上面 border 同理，避免半透明 box-shadow 描边在圆角处抗锯齿粗糙 */
+.dark [data-slot="card"] {
+  --tw-ring-color: color-mix(in oklch, var(--card) 90%, var(--foreground) 10%);
+}
+
+.dark [data-slot="dropdown-menu-content"],
+.dark [data-slot="dropdown-menu-sub-content"],
+.dark [data-slot="select-content"],
+.dark [data-slot="combobox-content"] {
+  --tw-ring-color: color-mix(in oklch, var(--popover) 95%, var(--foreground) 5%);
+}
+
+.dark [data-slot="alert-dialog-content"] {
+  --tw-ring-color: color-mix(in oklch, var(--background) 95%, var(--foreground) 5%);
+}
+
+/* 深色模式下输入框/按钮等控件的 focus ring 使用不透明色，
+   与上面同理，避免半透明 box-shadow 描边在圆角处抗锯齿粗糙 */
+.dark [data-slot="input"]:focus-visible,
+.dark [data-slot="textarea"]:focus-visible,
+.dark [data-slot="button"]:focus-visible,
+.dark [data-slot="badge"]:focus-visible,
+.dark [data-slot="select-trigger"]:focus-visible,
+.dark [data-slot="combobox-chips"]:focus-within,
+.dark [data-slot="input-group"]:has([data-slot="input-group-control"]:focus-visible) {
+  --tw-ring-color: color-mix(in oklch, var(--background) 50%, var(--ring) 50%);
+}
+
+.dark [data-slot="input"][aria-invalid="true"],
+.dark [data-slot="textarea"][aria-invalid="true"],
+.dark [data-slot="select-trigger"][aria-invalid="true"],
+.dark [data-slot="button"][data-variant="destructive"]:focus-visible,
+.dark [data-slot="badge"][data-variant="destructive"]:focus-visible {
+  --tw-ring-color: color-mix(in oklch, var(--background) 60%, var(--destructive) 40%);
 }
 
 /* ============================================================
@@ -179,8 +219,9 @@ body[data-app-bg="active"] [data-slot="card"] {
   background-color: color-mix(in oklch, var(--card) 78%, transparent);
   backdrop-filter: blur(8px) saturate(140%);
   -webkit-backdrop-filter: blur(8px) saturate(140%);
-  clip-path: inset(0 round 1rem);
-  -webkit-clip-path: inset(0 round 1rem);
+  /* 与 Card 组件的 rounded-2xl 保持一致，避免裁剪半径小于圆角半径时切断描边 */
+  clip-path: inset(0 round var(--radius-2xl));
+  -webkit-clip-path: inset(0 round var(--radius-2xl));
 }
 body[data-app-bg="active"] aside[data-app-sidebar] {
   background-color: color-mix(in oklch, var(--sidebar) 75%, transparent);
@@ -190,8 +231,8 @@ body[data-app-bg="active"] aside[data-app-sidebar] {
 body[data-app-bg="active"] [data-settings-content] + * [data-slot="card"] {
   backdrop-filter: blur(8px) saturate(140%);
   -webkit-backdrop-filter: blur(8px) saturate(140%);
-  clip-path: inset(0 round 1rem);
-  -webkit-clip-path: inset(0 round 1rem);
+  clip-path: inset(0 round var(--radius-2xl));
+  -webkit-clip-path: inset(0 round var(--radius-2xl));
 }
 
 @layer base {

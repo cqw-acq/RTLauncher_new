@@ -8,12 +8,14 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { VersionList } from "@/components/download/version-list";
 import { VersionDetail } from "@/components/download/version-detail";
+import { FavoriteModList } from "@/components/download/favorite-mod-list";
 import {
   VersionFilterBar,
 } from "@/components/download/version-filter-bar";
 import { useMinecraftVersions } from "@/hooks/use-minecraft-versions";
 import { slideInFromRight, slideInFromLeft, fadeIn } from "@/lib/motion";
 import { useDownloadManager } from "@/components/download/download-provider";
+import { useI18n, type TranslationKey } from "@/components/i18n/use-i18n";
 import { invoke } from "@tauri-apps/api/core";
 import { useRouter } from "next/navigation";
 import type { MinecraftVersion, MinecraftVersionType } from "@/types";
@@ -21,13 +23,13 @@ import type { MinecraftVersion, MinecraftVersionType } from "@/types";
 // -------- English search --------
 type EnglishCategory = "mod" | "modpack" | "resourcepack" | "shaders" | "datapack" | "worlds";
 
-const ENGLISH_CATEGORIES: { id: EnglishCategory; label: string; short: string; icon: typeof Box }[] = [
-  { id: "mod", label: "Mods", short: "Mods", icon: Box },
-  { id: "modpack", label: "Modpacks", short: "Modpacks", icon: Boxes },
-  { id: "resourcepack", label: "Resource Packs", short: "Resource Packs", icon: Palette },
-  { id: "shaders", label: "Shader Packs", short: "Shaders", icon: Sparkles },
-  { id: "datapack", label: "Data Packs", short: "Data Packs", icon: Database },
-  { id: "worlds", label: "Worlds", short: "Worlds", icon: Map },
+const ENGLISH_CATEGORIES: { id: EnglishCategory; labelKey: TranslationKey; icon: typeof Box }[] = [
+  { id: "mod", labelKey: "download.category.mods", icon: Box },
+  { id: "modpack", labelKey: "download.category.modpacks", icon: Boxes },
+  { id: "resourcepack", labelKey: "download.category.resourcePacks", icon: Palette },
+  { id: "shaders", labelKey: "download.category.shaders", icon: Sparkles },
+  { id: "datapack", labelKey: "download.category.dataPacks", icon: Database },
+  { id: "worlds", labelKey: "download.category.worlds", icon: Map },
 ];
 
 interface SearchResultItem {
@@ -53,7 +55,7 @@ function formatNumber(n?: number): string {
   return String(n);
 }
 
-function formatDate(iso?: string): string {
+function formatDate(iso: string | undefined, t: (key: TranslationKey, values?: Record<string, string | number>) => string): string {
   if (!iso) return "";
   try {
     const d = new Date(iso);
@@ -61,11 +63,11 @@ function formatDate(iso?: string): string {
     const now = Date.now();
     const diffMs = now - d.getTime();
     const day = 24 * 60 * 60 * 1000;
-    if (diffMs < day) return "Today";
-    if (diffMs < 7 * day) return Math.round(diffMs / day) + " days ago";
-    if (diffMs < 30 * day) return Math.round(diffMs / (7 * day)) + " weeks ago";
-    if (diffMs < 365 * day) return Math.round(diffMs / (30 * day)) + " months ago";
-    return Math.round(diffMs / (365 * day)) + " years ago";
+    if (diffMs < day) return t("download.today");
+    if (diffMs < 7 * day) return t("download.daysAgo", { count: Math.round(diffMs / day) });
+    if (diffMs < 30 * day) return t("download.weeksAgo", { count: Math.round(diffMs / (7 * day)) });
+    if (diffMs < 365 * day) return t("download.monthsAgo", { count: Math.round(diffMs / (30 * day)) });
+    return t("download.yearsAgo", { count: Math.round(diffMs / (365 * day)) });
   } catch {
     return "";
   }
@@ -122,13 +124,14 @@ function compareMinecraftVersionsDescending(a: MinecraftVersion, b: MinecraftVer
  */
 export default function DownloadPage() {
   const router = useRouter();
+  const { t } = useI18n();
   const { versions, loading, error, refetch } = useMinecraftVersions();
   const [versionFilter, setVersionFilter] = useState<MinecraftVersionType>("release");
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedVersion, setSelectedVersion] =
     useState<MinecraftVersion | null>(null);
 
-  const [tab, setTab] = useState<"minecraft" | "java" | "chinese" | "english">("minecraft");
+  const [tab, setTab] = useState<"minecraft" | "java" | "chinese" | "english" | "favorites">("minecraft");
 
   // Java 下载状态
   const [javaVersions, setJavaVersions] = useState<{ name: string; version: string }[]>([]);
@@ -157,6 +160,10 @@ export default function DownloadPage() {
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
+    if (params.get("tab") === "favorites") {
+      setTab("favorites");
+      return;
+    }
     if (params.get("tab") !== "english") return;
 
     const category = params.get("category");
@@ -193,19 +200,19 @@ export default function DownloadPage() {
     try {
       // 1) Empty content check
       if (query.length === 0) {
-        setChineseSearchError("Please enter search keywords");
+        setChineseSearchError(t("download.pleaseEnterKeywords"));
         return;
       }
 
       // 2) Punctuation/numbers only check
       if (isOnlyPunctuationOrEmpty(query)) {
-        setChineseSearchError("Please enter meaningful Chinese keywords");
+        setChineseSearchError(t("download.pleaseEnterChineseKeywords"));
         return;
       }
 
       // 3) Non-Chinese check — must contain at least one Chinese character
       if (!hasChinese(query)) {
-        setChineseSearchError("Please use Chinese keywords for search");
+        setChineseSearchError(t("download.pleaseUseChineseKeywords"));
         return;
       }
 
@@ -215,11 +222,11 @@ export default function DownloadPage() {
       setChineseSearchResults(parsed);
 
       if (parsed.length === 0) {
-        setChineseSearchError(`No mods found related to "${query}"`);
+        setChineseSearchError(t("download.noModsForQuery", { query }));
       }
     } catch (err) {
       console.error("Chinese search failed:", err);
-      setChineseSearchError(`Search failed: ${String(err)}`);
+      setChineseSearchError(t("download.searchFailed", { error: String(err) }));
     } finally {
       setChineseSearchLoading(false);
     }
@@ -234,7 +241,7 @@ export default function DownloadPage() {
   const handleEnglishSearch = useCallback(async () => {
     const query = englishQuery.trim();
     if (!query) {
-      setEnglishError("Please enter search keywords");
+      setEnglishError(t("download.pleaseEnterKeywords"));
       return;
     }
     setEnglishLoading(true);
@@ -403,15 +410,16 @@ export default function DownloadPage() {
       });
 
       if (mergedResults.length === 0) {
-        setEnglishError(`No results found for "${query}" in ${ENGLISH_CATEGORIES.find((c) => c.id === englishCategory)?.label ?? englishCategory}`);
+        const categoryLabel = ENGLISH_CATEGORIES.find((c) => c.id === englishCategory)?.labelKey;
+        setEnglishError(t("download.noResultsForQueryInCategory", { query, category: categoryLabel ? t(categoryLabel) : englishCategory }));
       }
     } catch (err) {
       console.error("English search failed:", err);
-      setEnglishError(`Search failed: ${String(err)}`);
+      setEnglishError(t("download.searchFailed", { error: String(err) }));
     } finally {
       setEnglishLoading(false);
     }
-  }, [englishQuery, englishCategory]);
+  }, [englishQuery, englishCategory, t]);
 
   // When switching to english tab or changing category, re-run search if there is an active query
   useEffect(() => {
@@ -435,7 +443,7 @@ export default function DownloadPage() {
       const result = await invoke<{ name: string; version: string }[]>("get_java_versions");
       setJavaVersions(result);
     } catch (err) {
-      setJavaMessage({ type: "error", text: `Failed to get Java versions: ${err}` });
+      setJavaMessage({ type: "error", text: t("download.failedToGetJavaVersions", { error: String(err) }) });
     } finally {
       setJavaVersionsLoading(false);
     }
@@ -450,7 +458,7 @@ export default function DownloadPage() {
 
   const handleJavaDownload = async (runtimeName: string) => {
     if (!javaBasePath) {
-      setJavaMessage({ type: "error", text: "Download path not ready, please try again later" });
+      setJavaMessage({ type: "error", text: t("download.downloadPathNotReady") });
       return;
     }
     setJavaMessage(null);
@@ -466,7 +474,7 @@ export default function DownloadPage() {
         await invoke("validate_java_path", { javaPath: result.java_path });
       } catch { /* ignore */ }
     } catch (err) {
-      setJavaMessage({ type: "error", text: `Download failed: ${err}` });
+      setJavaMessage({ type: "error", text: t("download.downloadFailed", { error: String(err) }) });
     }
   };
 
@@ -535,9 +543,9 @@ export default function DownloadPage() {
                 <Download className="size-5 text-primary" />
               </div>
               <div>
-                <h1 className="text-lg font-semibold leading-none">Download Center</h1>
+                <h1 className="text-lg font-semibold leading-none">{t("download.title")}</h1>
                 <p className="mt-1 text-xs text-muted-foreground">
-                  Download Minecraft versions and Java
+                  {t("download.subtitle")}
                 </p>
               </div>
             </div>
@@ -568,15 +576,23 @@ export default function DownloadPage() {
                 }`}
                 onClick={() => setTab("chinese")}
               >
-                mcmod上搜索
+                {t("download.tabChineseSearch")}
               </button>
               <button
                 className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
                   tab === "english" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
                 }`}
-                onClick={() => setTab("english")}
+onClick={() => setTab("english")}
               >
-                全部平台搜索
+                {t("download.tabAllPlatforms")}
+              </button>
+              <button
+                className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
+                  tab === "favorites" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
+                }`}
+onClick={() => setTab("favorites")}
+              >
+                {t("download.tabFavorites")}
               </button>
             </div>
 
@@ -602,7 +618,7 @@ export default function DownloadPage() {
                     exit="exit"
                   >
                     <Loader2 className="size-8 animate-spin" />
-                    <p className="text-sm">Loading version list...</p>
+                    <p className="text-sm">{t("download.loadingVersionList")}</p>
                   </motion.div>
                 ) : error ? (
                   <motion.div
@@ -614,11 +630,11 @@ export default function DownloadPage() {
                     exit="exit"
                   >
                     <AlertCircle className="size-8 text-destructive" />
-                    <p className="text-sm">Failed to get version list</p>
+                    <p className="text-sm">{t("download.failedToGetVersionList")}</p>
                     <p className="text-xs">{error}</p>
                     <Button variant="outline" size="sm" onClick={refetch} className="mt-2 gap-2">
                       <RefreshCw className="size-3.5" />
-                      Retry
+                      {t("download.retry")}
                     </Button>
                   </motion.div>
                 ) : (
@@ -650,7 +666,7 @@ export default function DownloadPage() {
                       onClick={() => setJavaVersionFilter("all")}
                       className="text-xs"
                     >
-                      All
+                      {t("download.all")}
                     </Button>
                     <Button
                       variant={javaVersionFilter === "jre" ? "default" : "ghost"}
@@ -672,7 +688,7 @@ export default function DownloadPage() {
                   <div className="relative w-64">
                     <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
                     <Input
-                      placeholder="Search Java versions..."
+                      placeholder={t("download.searchJavaPlaceholder")}
                       value={javaSearchQuery}
                       onChange={(e) => setJavaSearchQuery(e.target.value)}
                       className="pl-9 h-8 text-sm"
@@ -692,7 +708,7 @@ export default function DownloadPage() {
                     exit="exit"
                   >
                     <Loader2 className="size-8 animate-spin" />
-                    <p className="text-sm">Loading version list...</p>
+                    <p className="text-sm">{t("download.loadingVersionList")}</p>
                   </motion.div>
                 ) : javaMessage && javaMessage.type === "error" ? (
                   <motion.div
@@ -704,11 +720,11 @@ export default function DownloadPage() {
                     exit="exit"
                   >
                     <AlertCircle className="size-8 text-destructive" />
-                    <p className="text-sm">Failed to get version list</p>
+                    <p className="text-sm">{t("download.failedToGetVersionList")}</p>
                     <p className="text-xs">{javaMessage.text}</p>
                     <Button variant="outline" size="sm" onClick={loadJavaVersions} className="mt-2 gap-2">
                       <RefreshCw className="size-3.5" />
-                      Retry
+                      {t("download.retry")}
                     </Button>
                   </motion.div>
                 ) : filteredJavaVersions.length === 0 ? (
@@ -721,7 +737,7 @@ export default function DownloadPage() {
                     exit="exit"
                   >
                     <Coffee className="size-10 opacity-40" />
-                    <p className="text-sm">No matching Java versions found</p>
+                    <p className="text-sm">{t("download.noMatchingJavaVersions")}</p>
                   </motion.div>
                 ) : (
                   <motion.div
@@ -786,7 +802,7 @@ export default function DownloadPage() {
                   <div className="relative flex-1">
                     <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
                     <Input
-                      placeholder="Enter Chinese keywords to search mods..."
+                      placeholder={t("download.searchModPlaceholder")}
                       value={chineseSearchQuery}
                       onChange={(e) => {
                         setChineseSearchQuery(e.target.value);
@@ -803,7 +819,7 @@ export default function DownloadPage() {
                     onClick={handleChineseSearch}
                     disabled={chineseSearchLoading || !chineseSearchQuery.trim()}
                   >
-                    {chineseSearchLoading ? <Loader2 className="size-4 animate-spin" /> : "Search"}
+                    {chineseSearchLoading ? <Loader2 className="size-4 animate-spin" /> : t("download.search")}
                   </Button>
                 </div>
                 {/* Error message */}
@@ -816,7 +832,7 @@ export default function DownloadPage() {
                 {/* Hint */}
                 {!chineseSearchError && !chineseSearchLoading && !chineseSearchResults && (
                   <p className="mt-2 text-xs text-muted-foreground">
-                    💡 Enter Chinese keywords (e.g., "工业", "林业", "存储") to search in local offline database
+                    {t("download.chineseSearchHint")}
                   </p>
                 )}
               </div>
@@ -832,7 +848,7 @@ export default function DownloadPage() {
                     exit="exit"
                   >
                     <Loader2 className="size-8 animate-spin" />
-                    <p className="text-sm">Searching...</p>
+                    <p className="text-sm">{t("download.searching")}</p>
                   </motion.div>
                 ) : chineseSearchResults && chineseSearchResults.length > 0 ? (
                   <motion.div
@@ -872,7 +888,7 @@ export default function DownloadPage() {
                                   className="text-xs text-muted-foreground hover:text-foreground inline-flex items-center gap-1 px-2 py-1 rounded border border-border hover:border-primary/50 transition-colors"
                                 >
                                   <ExternalLink className="size-3" />
-                                  MCMod
+                                  {t("download.mcmod")}
                                 </a>
                               )}
                               <ArrowRight className="size-4 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
@@ -883,7 +899,7 @@ export default function DownloadPage() {
                     </div>
                     {/* Result count hint */}
                     <div className="px-4 py-2 text-xs text-muted-foreground border-t border-border bg-muted/30">
-                      Total {chineseSearchResults.length} results
+                      {t("download.totalResults", { count: chineseSearchResults.length })}
                     </div>
                   </motion.div>
                 ) : (
@@ -897,7 +913,7 @@ export default function DownloadPage() {
                   >
                     <Search className="size-10 opacity-40" />
                     <p className="text-sm">
-                      {chineseSearchResults ? "No matching mods found" : "Enter keywords to start searching"}
+                      {chineseSearchResults ? t("download.noMatchingMods") : t("download.enterKeywordsToStart")}
                     </p>
                   </motion.div>
                 )}
@@ -912,7 +928,7 @@ export default function DownloadPage() {
                   <div className="relative flex-1">
                     <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
                     <Input
-                      placeholder="Search mods, modpacks, resource packs, shaders..."
+                      placeholder={t("download.searchAllPlaceholder")}
                       value={englishQuery}
                       onChange={(e) => {
                         setEnglishQuery(e.target.value);
@@ -929,7 +945,7 @@ export default function DownloadPage() {
                     className="h-9"
                   >
                     {englishLoading ? <Loader2 className="size-4 animate-spin" /> : <Search className="size-4" />}
-                    <span className="ml-1">Search</span>
+                    <span className="ml-1">{t("download.search")}</span>
                   </Button>
                 </div>
                 {/* Six category selection buttons */}
@@ -948,7 +964,7 @@ export default function DownloadPage() {
                         }`}
                       >
                         <Icon className="size-3.5" />
-                        <span>{cat.short}</span>
+                        <span>{t(cat.labelKey)}</span>
                       </button>
                     );
                   })}
@@ -961,18 +977,18 @@ export default function DownloadPage() {
                 )}
                 {!englishError && !englishLoading && !englishResults && (
                   <p className="text-xs text-muted-foreground">
-                    Search both Modrinth and CurseForge, click results to view versions and download.
+                    {t("download.englishSearchHint")}
                   </p>
                 )}
                 {englishSourceInfo && (
                   <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
                     <span className={`inline-flex items-center gap-1 ${englishSourceInfo.modrinth.ok ? "" : "text-destructive"}`}>
                       <span className="size-1.5 rounded-full bg-emerald-500" />
-                      Modrinth {englishSourceInfo.modrinth.ok ? `(${englishSourceInfo.modrinth.count})` : "(unreachable)"}
+                      Modrinth {englishSourceInfo.modrinth.ok ? `(${englishSourceInfo.modrinth.count})` : t("download.unreachable")}
                     </span>
                     <span className={`inline-flex items-center gap-1 ${englishSourceInfo.curseforge.ok ? "" : "text-destructive"}`}>
                       <span className="size-1.5 rounded-full bg-orange-500" />
-                      CurseForge {englishSourceInfo.curseforge.ok ? `(${englishSourceInfo.curseforge.count})` : "(unreachable)"}
+                      CurseForge {englishSourceInfo.curseforge.ok ? `(${englishSourceInfo.curseforge.count})` : t("download.unreachable")}
                     </span>
                   </div>
                 )}
@@ -989,7 +1005,7 @@ export default function DownloadPage() {
                     exit="exit"
                   >
                     <Loader2 className="size-8 animate-spin" />
-                    <p className="text-sm">Searching Modrinth and CurseForge…</p>
+                    <p className="text-sm">{t("download.searchingBoth")}</p>
                   </motion.div>
                 ) : englishResults && englishResults.length > 0 ? (
                   <motion.div
@@ -1067,14 +1083,14 @@ export default function DownloadPage() {
                               <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground pt-0.5">
                                 {result.author && (
                                   <span className="inline-flex items-center gap-1">
-                                    <span className="text-foreground/70">Author</span>
+                                    <span className="text-foreground/70">{t("download.author")}</span>
                                     <span className="text-foreground">{result.author}</span>
                                   </span>
                                 )}
                                 {result.downloads !== undefined && (
-                                  <span>· {formatNumber(result.downloads)} downloads</span>
+                                  <span>· {t("download.downloadsCount", { count: formatNumber(result.downloads) })}</span>
                                 )}
-                                {result.updated && <span>· Updated {formatDate(result.updated)}</span>}
+                                {result.updated && <span>· {t("download.updated", { date: formatDate(result.updated, t) })}</span>}
                                 {result.mcVersions && result.mcVersions.length > 0 && (
                                   <span className="inline-flex items-center gap-1">
                                     · MC {result.mcVersions.slice(0, 3).join(", ")}
@@ -1104,7 +1120,7 @@ export default function DownloadPage() {
                                   className="text-[10px] text-muted-foreground hover:text-foreground inline-flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity"
                                 >
                                   <ExternalLink className="size-3" />
-                                  Open Source
+                                  {t("download.openSource")}
                                 </a>
                               )}
                             </div>
@@ -1113,7 +1129,7 @@ export default function DownloadPage() {
                       })}
                     </div>
                     <div className="px-4 py-2 text-xs text-muted-foreground border-t border-border bg-muted/30">
-                      {englishResults.length} results
+                      {t("download.totalResults", { count: englishResults.length })}
                     </div>
                   </motion.div>
                 ) : englishResults ? (
@@ -1126,7 +1142,7 @@ export default function DownloadPage() {
                     exit="exit"
                   >
                     <Coffee className="size-10 opacity-40" />
-                    <p className="text-sm">No matching projects found</p>
+                    <p className="text-sm">{t("download.noMatchingProjects")}</p>
                   </motion.div>
                 ) : (
                   <motion.div
@@ -1138,11 +1154,13 @@ export default function DownloadPage() {
                     exit="exit"
                   >
                     <Search className="size-10 opacity-40" />
-                    <p className="text-sm">Enter keywords to start searching</p>
+                    <p className="text-sm">{t("download.enterKeywordsToStart")}</p>
                   </motion.div>
                 )}
               </AnimatePresence>
             </div>}
+
+            {tab === "favorites" && <FavoriteModList />}
           </div>
         </motion.div>
       )}

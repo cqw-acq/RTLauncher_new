@@ -124,9 +124,8 @@ jobs:
         if: matrix.platform == 'ubuntu-22.04' && matrix.name == 'linux-portable'
         run: |
           tar -czf RTLauncher-portable.tar.gz \
-            src-tauri/target/release/rtlauncher \
-            src-tauri/install-deps.sh \
-            src-tauri/PORTABLE_README.md
+            -C "$GITHUB_WORKSPACE/src-tauri/target/release" rtlauncher \
+            -C "$GITHUB_WORKSPACE/src-tauri" install-deps.sh PORTABLE_README.md
 
       - name: upload artifacts (Ubuntu portable)
         if: matrix.platform == 'ubuntu-22.04' && matrix.name == 'linux-portable'
