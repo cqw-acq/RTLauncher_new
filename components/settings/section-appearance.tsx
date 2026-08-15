@@ -20,6 +20,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { ImagePlus, RotateCcw, Sparkles, Type, X, Layout } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/components/i18n/use-i18n";
+import { ThemeSwitcher } from "@/components/settings/theme-switcher";
 
 // ============================================================
 // 主题模式（浅色 / 深色 / 跟随系统）
@@ -366,6 +367,10 @@ export function AppearanceSection() {
       </CardHeader>
 
       <CardContent className="space-y-4">
+        <ThemeSwitcher />
+
+        <div className="h-px bg-border" />
+
         <ThemeModeRow
           value={appearance.themeMode}
           onChange={handleThemeModeChange}

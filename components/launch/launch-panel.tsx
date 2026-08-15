@@ -26,6 +26,8 @@ import { useState, useEffect } from "react";
 import type { LauncherPathsConfig } from "@/types";
 import { useI18n } from "@/components/i18n/use-i18n";
 import { LoaderIcon, inferLoaderKind } from "@/components/launch/loader-icon";
+import { ThemeSlot } from "@/components/themes/theme-slot";
+import { useThemeRuntime } from "@/components/themes/theme-runtime-provider";
 
 interface MemoryOptimizationReport {
   available_before_mb: number;
@@ -42,6 +44,7 @@ interface MemoryOptimizationReport {
  * 显示启动按钮和当前状态概览
  */
 export function LaunchPanel() {
+  const { slots, snapshot, reportThemeError } = useThemeRuntime();
   const { t } = useI18n();
   const { config, status, errorMessage, launchGame, cancelLaunch } = useLaunchContext();
   const { selectedProfile } = useAccountContext();
@@ -162,29 +165,36 @@ export function LaunchPanel() {
         <LaunchProgressStages />
 
         {/* 启动按钮 */}
-        <Button
-          size="lg"
-          className="w-full gap-2 text-sm font-semibold"
-          onClick={isLaunching || isRunning ? () => cancelLaunch() : () => launchGame()}
-          disabled={!canLaunch && !isLaunching && !isRunning}
+        <ThemeSlot
+          registry={slots}
+          owner={snapshot.activeOwner}
+          slotId="launch.primary-action"
+          onError={reportThemeError}
         >
-          {isLaunching ? (
-            <>
-              <Loader2 className="size-4 animate-spin" />
-              {status === "preparing" ? t("launch.panel.stopPreparing") : "Launching"}
-            </>
-          ) : isRunning ? (
-            <>
-              <Square className="size-4" />
-              {t("launch.stopGame")}
-            </>
-          ) : (
-            <>
-              <Play className="size-4" />
-              {t("launch.launchGame")}
-            </>
-          )}
-        </Button>
+          <Button
+            size="lg"
+            className="w-full gap-2 text-sm font-semibold"
+            onClick={isLaunching || isRunning ? () => cancelLaunch() : () => launchGame()}
+            disabled={!canLaunch && !isLaunching && !isRunning}
+          >
+            {isLaunching ? (
+              <>
+                <Loader2 className="size-4 animate-spin" />
+                {status === "preparing" ? t("launch.panel.stopPreparing") : "Launching"}
+              </>
+            ) : isRunning ? (
+              <>
+                <Square className="size-4" />
+                {t("launch.stopGame")}
+              </>
+            ) : (
+              <>
+                <Play className="size-4" />
+                {t("launch.launchGame")}
+              </>
+            )}
+          </Button>
+        </ThemeSlot>
 
         {/* 内存清理按钮 */}
         <Button

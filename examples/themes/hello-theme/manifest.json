@@ -1,0 +1,38 @@
+{
+  "schemaVersion": "1.0",
+  "id": "com.rtlauncher.example.hello",
+  "name": "Hello Theme",
+  "version": "1.0.0",
+  "description": "A minimal RTLauncher frontend Theme example.",
+  "author": {
+    "name": "RTLauncher"
+  },
+  "license": "GPL-3.0",
+  "engines": {
+    "rtlauncher": ">=1.0.0 <2.0.0",
+    "themeApi": "^1.0.0",
+    "themeUi": "^1.0.0"
+  },
+  "entry": {
+    "script": "src/theme.tsx",
+    "style": "src/theme.css"
+  },
+  "supports": {
+    "colorSchemes": ["light", "dark"],
+    "locales": ["zh-CN", "en-US"],
+    "userOverrides": ["accentColor"]
+  },
+  "contributes": {
+    "slots": [
+      {
+        "id": "hello.page-action",
+        "target": "page.header.actions",
+        "mode": "after",
+        "order": 100
+      }
+    ]
+  },
+  "disclosures": [
+    "This example renders one button and emits one Theme event."
+  ]
+}

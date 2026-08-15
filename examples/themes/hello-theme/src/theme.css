@@ -1,0 +1,4 @@
+.hello-theme-action {
+  border-color: color-mix(in oklch, var(--primary) 65%, transparent);
+  box-shadow: 0 0 1.5rem color-mix(in oklch, var(--primary) 20%, transparent);
+}

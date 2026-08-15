@@ -9,6 +9,7 @@ mod downloader;
 mod handler;
 mod http_client;
 mod mutiplayer;
+mod themes;
 mod updater;
 mod version_management;
 use auth::littleskinLoader::{useMethod, use_method_with_credentials};
@@ -97,6 +98,11 @@ use version_management::{
 };
 
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
+use themes::commands::{
+    theme_install_archive, theme_is_trusted, theme_list, theme_mark_healthy, theme_read_binary,
+    theme_read_text, theme_register_dev_directory, theme_remove, theme_set_active,
+    theme_set_trusted,
+};
 
 #[cfg(target_os = "macos")]
 use objc2::msg_send;
@@ -261,11 +267,24 @@ pub fn run() {
             cancel_update,
             can_check_update,
             get_target_version,
+            theme_list,
+            theme_install_archive,
+            theme_register_dev_directory,
+            theme_remove,
+            theme_read_text,
+            theme_read_binary,
+            theme_set_active,
+            theme_mark_healthy,
+            theme_is_trusted,
+            theme_set_trusted,
         ])
         .manage(create_updater_state())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
+            themes::commands::report_theme_store_initialization(
+                themes::commands::initialize_theme_store(app.handle()),
+            );
             #[cfg(not(target_os = "macos"))]
             app.handle().plugin(tauri_plugin_single_instance::init(
                 |app: &tauri::AppHandle, _args, _cwd| {
