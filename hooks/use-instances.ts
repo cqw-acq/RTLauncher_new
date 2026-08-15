@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen, UnlistenFn } from "@tauri-apps/api/event";
 import type { InstanceData } from "@/types";
 
 interface UseInstancesReturn {
@@ -85,6 +86,40 @@ export function useInstances(instancesPath?: string): UseInstancesReturn {
       requestIdRef.current += 1;
     };
   }, [fetch]);
+
+  // 当安装/下载完成（例如 Forge / NeoForge）时，自动触发一次刷新。
+  useEffect(() => {
+    if (!instancesPath) return;
+    const handlers: Promise<UnlistenFn>[] = [];
+
+    const tryListen = (eventName: string) =>
+      listen<{ task_id: number; success: boolean }>(eventName, (e) => {
+        const payload = e.payload as { task_id: number; success: boolean } | undefined;
+        if (payload && payload.success) {
+          void fetch();
+        }
+      });
+
+    handlers.push(tryListen("forge-download-finished"));
+    handlers.push(tryListen("neoforge-download-finished"));
+
+    let unlistens: UnlistenFn[] = [];
+    Promise.all(handlers)
+      .then((fns) => {
+        unlistens = fns;
+      })
+      .catch(() => {
+        /* ignore */
+      });
+
+    return () => {
+      for (const u of unlistens) {
+        try {
+          u();
+        } catch (_) {}
+      }
+    };
+  }, [instancesPath, fetch]);
 
   return {
     instances,
