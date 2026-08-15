@@ -39,7 +39,45 @@ interface NavItem {
 let activeNavigation: {
   transition?: ViewTransition
   controller: AbortController
+  previousPointerEvents: string
+  previousTransition: string
+  previousOpacity: string
 } | null = null
+
+const SETTLE_MS = 400
+const STABILITY_MS = 150
+const TIMEOUT_MS = 3000
+// 内容持续变动超过该时长且达到该次数时视为"流动内容"（如日志实时刷新），
+// 不再要求静止，避免导航长时间停在旧页面。
+const FLOWING_AFTER_MS = 1000
+const FLOWING_MUTATIONS = 4
+
+function abortActiveNavigation() {
+  const nav = activeNavigation
+  if (!nav) return
+  nav.controller.abort()
+  nav.transition?.skipTransition()
+  const main = document.querySelector<HTMLElement>("main")
+  if (main?.isConnected) {
+    main.style.pointerEvents = nav.previousPointerEvents
+    main.style.transition = nav.previousTransition
+    main.style.opacity = nav.previousOpacity
+  }
+  activeNavigation = null
+}
+
+// 快照前把主内容区里所有可滚动容器瞬间滚回顶部。
+// 否则旧页面快照停留在原滚动位置，而新页面从顶部开始，
+// 交叉淡入时两页内容错位重叠，产生明显的抖动/叠影。
+function scrollContentToTop(main: HTMLElement) {
+  main
+    .querySelectorAll<HTMLElement>(
+      "[class*='overflow-y-auto'], [class*='overflow-y-scroll'], [class*='overflow-auto']"
+    )
+    .forEach((el) => {
+      if (el.scrollTop > 0) el.scrollTo({ top: 0 })
+    })
+}
 
 function waitForPageContent(
   main: HTMLElement,
@@ -49,6 +87,8 @@ function waitForPageContent(
   return new Promise<void>((resolve) => {
     let settled = false
     let contentChanged = false
+    let contentChangedAt = 0
+    let changeCount = 0
     let settleTimer: number | undefined
 
     const finish = () => {
@@ -62,33 +102,55 @@ function waitForPageContent(
     }
 
     // 新页面往往先渲染出加载中指示器(spinner)再显示真实内容；
-    // 只有等指示器消失后才算内容就绪，否则淡入的是空白/加载圈，观感像"先清空再加载"。
-    const trySettle = () => {
+    // 内容尚未变化前保持等待，避免淡入的是空白/加载圈。
+    // 内容一旦变化就按"保持稳定"收尾，忽略残留的小型 spinner
+    // （如按钮内的加载图标），否则会被它们无限期阻塞。
+    const trySettle = (now: number) => {
       if (!contentChanged) return
-      if (main.querySelector(".animate-spin")) {
-        // 出现新的加载指示器时取消已安排的收尾，继续等待。
-        window.clearTimeout(settleTimer)
-        settleTimer = undefined
+      if (!contentChangedAt) contentChangedAt = now
+      // 内容持续流动（日志实时刷新等）超过阈值时不再等待静止。
+      if (
+        now - contentChangedAt > FLOWING_AFTER_MS &&
+        changeCount >= FLOWING_MUTATIONS
+      ) {
+        finish()
         return
       }
-      if (settleTimer !== undefined) return
-      // 内容更新且无加载指示器后，稍等让入场动画稳定几帧再交叉淡入。
-      settleTimer = window.setTimeout(finish, 100)
+      // 收尾时刻 = 首次内容变化的固定窗口(覆盖新页面入场动画，避免快照截在
+      // 动画中途导致淡入结束时内容跳动) 与 最近一次变动后的短暂静止窗口
+      // (吸收异步数据波) 的较晚者。入场动画期间的高频样式变动不会无限叠加等待。
+      const deadline = Math.max(
+        contentChangedAt + SETTLE_MS,
+        now + STABILITY_MS
+      )
+      window.clearTimeout(settleTimer)
+      settleTimer = window.setTimeout(finish, Math.max(0, deadline - performance.now()))
     }
 
+    // 用 rAF 批量合并同一帧内的多次 DOM 变动，
+    // 避免实时日志等高频更新场景下逐条重算 innerText 卡顿主线程。
+    let pending = false
     const observer = new MutationObserver(() => {
-      if (main.innerText === previousText) return
-      contentChanged = true
-      trySettle()
+      if (pending) return
+      pending = true
+      requestAnimationFrame(() => {
+        pending = false
+        if (settled) return
+        if (main.innerText === previousText) return
+        changeCount += 1
+        contentChanged = true
+        trySettle(performance.now())
+      })
     })
 
     observer.observe(main, {
       childList: true,
       subtree: true,
       characterData: true,
+      attributes: true,
     })
 
-    const timeoutTimer = window.setTimeout(finish, 1200)
+    const timeoutTimer = window.setTimeout(finish, TIMEOUT_MS)
 
     if (signal.aborted) {
       finish()
@@ -145,13 +207,25 @@ function NavButton({ item, isActive, isExactActive }: { item: NavItem; isActive:
 
     const previousText = main.innerText
 
-    activeNavigation?.controller.abort()
-    activeNavigation?.transition?.skipTransition()
+    abortActiveNavigation()
 
     const controller = new AbortController()
 
+    // 尊重系统减弱动效设置：直接切换，不做任何过渡动画。
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      router.push(item.href)
+      return
+    }
+
     const startViewTransition = document.startViewTransition?.bind(document)
     if (startViewTransition) {
+      // 快照前把内容瞬间滚回顶部，保证新旧两页从同一滚动位置开始交叉淡入，
+      // 否则旧快照停留在滚动处、新页面从顶部开始，错位叠影会表现为界面抽搐。
+      scrollContentToTop(main)
+
+      const previousPointerEvents = main.style.pointerEvents
+      main.style.pointerEvents = "none"
+
       const transition = startViewTransition(async () => {
         const contentReady = waitForPageContent(
           main,
@@ -162,23 +236,40 @@ function NavButton({ item, isActive, isExactActive }: { item: NavItem; isActive:
         await contentReady
       })
 
-      const navigation = { transition, controller }
+      const navigation = {
+        transition,
+        controller,
+        previousPointerEvents,
+        previousTransition: "",
+        previousOpacity: "",
+      }
       activeNavigation = navigation
 
       void transition.finished
         .catch(() => undefined)
         .finally(() => {
-          if (activeNavigation === navigation) activeNavigation = null
+          if (activeNavigation !== navigation) return
+          activeNavigation = null
+          if (main.isConnected) {
+            main.style.pointerEvents = previousPointerEvents
+          }
         })
       return
     }
 
     // 无 View Transitions 支持（旧版 WebKitGTK）：
     // 退化为 CSS 过渡做等价的淡出 → 等待内容就绪 → 淡入。
-    const navigation = { controller }
-    activeNavigation = navigation
     const previousTransition = main.style.transition
     const previousPointerEvents = main.style.pointerEvents
+    const previousOpacity = main.style.opacity
+
+    const navigation = {
+      controller,
+      previousPointerEvents,
+      previousTransition,
+      previousOpacity,
+    }
+    activeNavigation = navigation
 
     main.style.pointerEvents = "none"
     main.style.transition = "opacity 0.14s ease-out"
