@@ -73,6 +73,11 @@ function Probe() {
       <output data-testid="active">{theme.snapshot.activeThemeId}</output>
       <output data-testid="ready">{String(theme.ready)}</output>
       <button onClick={() => void theme.activateTheme("com.example.nebula")}>switch</button>
+      <button onClick={() => {
+        theme.reportThemeError(new Error("one"));
+        theme.reportThemeError(new Error("two"));
+        theme.reportThemeError(new Error("three"));
+      }}>fail</button>
     </>
   );
 }
@@ -100,6 +105,17 @@ describe("ThemeRuntimeProvider", () => {
     await waitFor(() => {
       expect(screen.getByTestId("active").textContent).toBe("com.example.nebula");
     });
+  });
+
+  it("monitors a healthy active Theme without confirming it again", async () => {
+    const host = dependencies("com.example.nebula");
+    render(<ThemeRuntimeProvider dependencies={host}><Probe /></ThemeRuntimeProvider>);
+    await waitFor(() => expect(screen.getByTestId("ready").textContent).toBe("true"));
+
+    await act(async () => screen.getByRole("button", { name: "fail" }).click());
+
+    await waitFor(() => expect(host.setActive).toHaveBeenCalledWith("builtin.default"));
+    expect(host.markHealthy).not.toHaveBeenCalledWith("com.example.nebula");
   });
 
   it("switches immediately and records a healthy activation", async () => {

@@ -1,5 +1,5 @@
 import type { ComponentType } from "react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type {
   JsonValue,
@@ -15,6 +15,8 @@ import { ThemeRuntime, ThemeRuntimeError } from "./runtime";
 import { ThemeSlotRegistry } from "./slot-registry";
 
 const EmptyPage: ComponentType<ThemeRouteComponentProps> = () => null;
+
+afterEach(() => vi.useRealTimers());
 
 function manifest(id: string, version = "1.0.0"): ThemeManifest {
   return {
@@ -189,7 +191,46 @@ describe("ThemeRuntime", () => {
     await rejection;
     expect(signal?.aborted).toBe(true);
     expect(runtime.getSnapshot().activeThemeId).toBe(BUILTIN_THEME_ID);
-    vi.useRealTimers();
+  });
+
+  it("serializes concurrent lifecycle operations in call order", async () => {
+    const { runtime } = createRuntime();
+    const events: string[] = [];
+    let releaseFirst!: () => void;
+    const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve; });
+    await runtime.prepareTheme(manifest("com.example.first"), {
+      id: "com.example.first",
+      version: "1.0.0",
+      apiVersion: "1.0.0",
+      setup() {
+        return {
+          async activate() {
+            events.push("first.start");
+            await firstGate;
+            events.push("first.end");
+          },
+        };
+      },
+    });
+    await runtime.prepareTheme(manifest("com.example.second"), {
+      id: "com.example.second",
+      version: "1.0.0",
+      apiVersion: "1.0.0",
+      setup() {
+        return { activate() { events.push("second.start"); } };
+      },
+    });
+
+    const first = runtime.activateTheme("com.example.first");
+    await Promise.resolve();
+    const second = runtime.activateTheme("com.example.second");
+    await Promise.resolve();
+
+    expect(events).toEqual(["first.start"]);
+    releaseFirst();
+    await Promise.all([first, second]);
+    expect(events).toEqual(["first.start", "first.end", "second.start"]);
+    expect(runtime.getSnapshot().activeThemeId).toBe("com.example.second");
   });
 
   it("publishes the new theme before it deactivates the old theme", async () => {

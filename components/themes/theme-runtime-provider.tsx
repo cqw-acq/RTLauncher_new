@@ -45,6 +45,7 @@ import {
 } from "@/lib/themes/runtime";
 import { createThemeSDK } from "@/lib/themes/sdk";
 import { ThemeSlotRegistry } from "@/lib/themes/slot-registry";
+import { ThemeSettingsSubscriptions } from "@/lib/themes/settings-subscriptions";
 
 export interface ThemeInstalledPackage {
   manifest: ThemeManifest;
@@ -282,9 +283,10 @@ function ThemeRuntimeProviderCore({
           await prepareTheme(store.activeThemeId);
           if (!cancelled) {
             await runtime.activateTheme(store.activeThemeId);
-            if (store.pendingThemeId === store.activeThemeId) {
-              healthMonitor.start(store.activeThemeId);
-            }
+            healthMonitor.start(
+              store.activeThemeId,
+              store.pendingThemeId === store.activeThemeId,
+            );
           }
         } catch (cause) {
           if (!cancelled) {
@@ -383,11 +385,16 @@ function ConnectedThemeRuntimeProvider({ children }: { children: ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
   const eventBus = useMemo(() => new ThemeEventBus(), []);
+  const [settingsSubscriptions] = useState(() => new ThemeSettingsSubscriptions());
   const current = useRef({ accounts, downloads, launch, settings, t, language, router, pathname });
 
   useEffect(() => {
     current.current = { accounts, downloads, launch, settings, t, language, router, pathname };
   }, [accounts, downloads, language, launch, pathname, router, settings, t]);
+
+  useEffect(() => {
+    settingsSubscriptions.notify();
+  }, [settings.settings, settingsSubscriptions]);
 
   const dependencies = useMemo<ThemeHostDependencies>(() => ({
     loadStore: () => invoke<ThemeStoreView>("theme_list"),
@@ -445,7 +452,7 @@ function ConnectedThemeRuntimeProvider({ children }: { children: ReactNode }) {
               current.current.settings.update("appearance", patch.appearance as never);
             }
           },
-          subscribe: () => () => undefined,
+          subscribe: (listener) => settingsSubscriptions.subscribe(listener),
         },
         i18n: {
           t: (key) => current.current.t(key as TranslationKey),
@@ -475,7 +482,7 @@ function ConnectedThemeRuntimeProvider({ children }: { children: ReactNode }) {
         logger: createThemeLogger(themeManifest.id),
       };
     },
-  }), [eventBus]);
+  }), [eventBus, settingsSubscriptions]);
 
   return (
     <ThemeRuntimeProviderCore dependencies={dependencies}>

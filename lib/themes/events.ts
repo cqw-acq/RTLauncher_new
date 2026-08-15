@@ -33,11 +33,10 @@ export class ThemeEventBus {
 
   clearOwner(owner: string): void {
     this.listeners.forEach((listeners, name) => {
-      const remaining = new Set(
-        [...listeners].filter((entry) => entry.owner !== owner),
-      );
-      if (remaining.size > 0) this.listeners.set(name, remaining);
-      else this.listeners.delete(name);
+      [...listeners]
+        .filter((entry) => entry.owner === owner)
+        .forEach((entry) => listeners.delete(entry));
+      if (listeners.size === 0) this.listeners.delete(name);
     });
   }
 
@@ -56,11 +55,21 @@ export class ThemeEventBus {
       if (!active) return;
       active = false;
       listeners.delete(entry);
-      if (listeners.size === 0) this.listeners.delete(name);
+      if (listeners.size === 0 && this.listeners.get(name) === listeners) {
+        this.listeners.delete(name);
+      }
     };
   }
 
   private dispatch(name: string, payload: JsonValue): void {
-    this.listeners.get(name)?.forEach(({ listener }) => listener(payload));
+    const listeners = this.listeners.get(name);
+    if (!listeners) return;
+    [...listeners].forEach(({ owner, listener }) => {
+      try {
+        listener(payload);
+      } catch (error) {
+        console.error(`[Theme ${owner}] Event listener for ${name} failed.`, error);
+      }
+    });
   }
 }

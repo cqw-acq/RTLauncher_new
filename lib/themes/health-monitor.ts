@@ -21,10 +21,11 @@ export class ThemeHealthMonitor {
     this.healthyDelayMs = options.healthyDelayMs ?? 5_000;
   }
 
-  start(themeId: string): void {
+  start(themeId: string, confirmHealthy = true): void {
     this.stop();
     this.activeThemeId = themeId;
     this.errors = [];
+    if (!confirmHealthy) return;
     this.healthyTimer = setTimeout(() => {
       this.healthyTimer = undefined;
       if (this.activeThemeId === themeId) void this.options.onHealthy?.(themeId);

@@ -71,6 +71,7 @@ export class ThemeRuntime {
   private readonly activateTimeoutMs: number;
   private readonly deactivateTimeoutMs: number;
   private ownerSequence = 0;
+  private lifecycleQueue: Promise<void> = Promise.resolve();
 
   constructor(private readonly options: ThemeRuntimeOptions) {
     this.setupTimeoutMs = options.setupTimeoutMs ?? DEFAULT_SETUP_TIMEOUT_MS;
@@ -78,7 +79,14 @@ export class ThemeRuntime {
     this.deactivateTimeoutMs = options.deactivateTimeoutMs ?? DEFAULT_DEACTIVATE_TIMEOUT_MS;
   }
 
-  async prepareTheme(manifest: ThemeManifest, definition: ThemeDefinition): Promise<void> {
+  prepareTheme(manifest: ThemeManifest, definition: ThemeDefinition): Promise<void> {
+    return this.serialize(() => this.prepareThemeLocked(manifest, definition));
+  }
+
+  private async prepareThemeLocked(
+    manifest: ThemeManifest,
+    definition: ThemeDefinition,
+  ): Promise<void> {
     const candidate = await this.prepareCandidate(manifest, definition);
     const previous = this.prepared.get(manifest.id);
     if (previous?.owner === this.snapshot.activeOwner) {
@@ -94,7 +102,11 @@ export class ThemeRuntime {
     if (previous) await this.disposePrepared(previous);
   }
 
-  async activateTheme(themeId: string): Promise<void> {
+  activateTheme(themeId: string): Promise<void> {
+    return this.serialize(() => this.activateThemeLocked(themeId));
+  }
+
+  private async activateThemeLocked(themeId: string): Promise<void> {
     if (themeId === BUILTIN_THEME_ID) {
       await this.activateBuiltInTheme();
       return;
@@ -120,7 +132,14 @@ export class ThemeRuntime {
     await this.runDeactivation(previous, themeId);
   }
 
-  async reloadTheme(manifest: ThemeManifest, definition: ThemeDefinition): Promise<void> {
+  reloadTheme(manifest: ThemeManifest, definition: ThemeDefinition): Promise<void> {
+    return this.serialize(() => this.reloadThemeLocked(manifest, definition));
+  }
+
+  private async reloadThemeLocked(
+    manifest: ThemeManifest,
+    definition: ThemeDefinition,
+  ): Promise<void> {
     const candidate = await this.prepareCandidate(manifest, definition);
     const previous = this.prepared.get(manifest.id);
     const isActive = previous?.owner === this.snapshot.activeOwner;
@@ -148,7 +167,11 @@ export class ThemeRuntime {
     if (previous) await this.disposePrepared(previous);
   }
 
-  async disposeTheme(themeId: string): Promise<void> {
+  disposeTheme(themeId: string): Promise<void> {
+    return this.serialize(() => this.disposeThemeLocked(themeId));
+  }
+
+  private async disposeThemeLocked(themeId: string): Promise<void> {
     if (themeId === BUILTIN_THEME_ID) {
       throw new ThemeRuntimeError(
         "THEME_BUILTIN_PROTECTED",
@@ -172,6 +195,15 @@ export class ThemeRuntime {
 
   getSnapshot(): ThemeRuntimeSnapshot {
     return this.snapshot;
+  }
+
+  private serialize<T>(action: () => Promise<T>): Promise<T> {
+    const result = this.lifecycleQueue.then(action, action);
+    this.lifecycleQueue = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
   }
 
   private async prepareCandidate(
