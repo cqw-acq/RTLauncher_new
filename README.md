@@ -69,7 +69,7 @@ RTLauncher/
 │   │   │   ├── system.rs       # 系统操作
 │   │   │   └── ...             # 其他 handler
 │   │   ├── downloader/         # 下载与安装
-│   │   ├── mutiplayer/         # OpenP2P 联机
+│   │   ├── multiplayer/        # OpenP2P 联机
 │   │   └── version_management/  # 版本资源管理
 │   └── Cargo.toml
 ├── components/i18n/locales/    # i18n 翻译文件
