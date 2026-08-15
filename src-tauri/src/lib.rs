@@ -91,7 +91,7 @@ use multiplayer::{
 use multiplayer::quick_kill_openp2p;
 use updater::handler::{
     cancel_update, can_check_update, check_for_updates, create_updater_state, download_update,
-    get_target_version, get_update_status, install_update,
+    get_update_status, install_update,
 };
 use version_management::{
     vm_delete_cached_file, vm_delete_file, vm_ensure_instance_dirs, vm_find_resource_packs,
@@ -268,7 +268,6 @@ pub fn run() {
             install_update,
             cancel_update,
             can_check_update,
-            get_target_version,
             theme_list,
             theme_install_archive,
             theme_register_dev_directory,

@@ -12,6 +12,7 @@ import { DeferredGlobalFeatures } from "@/components/global/deferred-global-feat
 import { UIConfigProvider } from "@/components/ui-config/ui-config-provider";
 import { ThemeRuntimeProvider } from "@/components/themes/theme-runtime-provider";
 import { ThemeShell } from "@/components/themes/theme-shell";
+import { StartupUpdateNotifier } from "@/components/settings/startup-update-notifier";
 
 export const metadata: Metadata = {
   title: "RTLauncher",
@@ -43,6 +44,7 @@ export default function RootLayout({
                         <ThemeRuntimeProvider>
                           {/* 非关键全局能力在首屏可交互后再加载 */}
                           <DeferredGlobalFeatures />
+                          <StartupUpdateNotifier />
                           <ThemeShell>{children}</ThemeShell>
                           <DownloadTaskList />
                         </ThemeRuntimeProvider>

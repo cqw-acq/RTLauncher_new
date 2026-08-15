@@ -1,9 +1,9 @@
 use std::sync::Arc;
 use std::sync::Mutex;
 
-use tauri::State;
+use tauri::{AppHandle, State};
 
-use super::config::{get_target_release_name, get_update_config, should_check_update, UpdateConfig};
+use super::config::{get_update_config, should_check_update, UpdateConfig};
 use super::fetcher::{UpdateCheckResult, UpdateFetcher};
 
 pub struct UpdaterState {
@@ -17,6 +17,7 @@ pub fn get_update_status() -> UpdateConfig {
 
 #[tauri::command]
 pub async fn check_for_updates(
+    app: AppHandle,
     state: State<'_, UpdaterState>,
     force: Option<bool>,
 ) -> Result<UpdateCheckResult, String> {
@@ -24,7 +25,10 @@ pub async fn check_for_updates(
         let fetcher = state.fetcher.lock().map_err(|e| e.to_string())?;
         fetcher.clone()
     };
-    fetcher.check_for_update(force.unwrap_or(false)).await
+    let current_version = app.package_info().version.to_string();
+    fetcher
+        .check_for_update(force.unwrap_or(false), &current_version)
+        .await
 }
 
 #[tauri::command]
@@ -59,11 +63,6 @@ pub fn cancel_update(state: State<'_, UpdaterState>) -> Result<(), String> {
 #[tauri::command]
 pub fn can_check_update() -> bool {
     should_check_update()
-}
-
-#[tauri::command]
-pub fn get_target_version() -> String {
-    get_target_release_name()
 }
 
 pub fn create_updater_state() -> UpdaterState {
