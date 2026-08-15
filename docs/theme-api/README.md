@@ -1,5 +1,7 @@
 # RTLauncher Theme API 1.0
 
+[简体中文](./README.zh-CN.md) | English
+
 The Theme API lets a user replace selected React routes and UI slots. A Theme can also add a local route. RTLauncher keeps the built-in UI for each route or slot that the Theme does not replace.
 
 ## Security model
