@@ -40,6 +40,12 @@ pub fn initialize_theme_store(app: &AppHandle) -> Result<(), ThemeStoreError> {
     Ok(())
 }
 
+pub fn report_theme_store_initialization(result: Result<(), ThemeStoreError>) {
+    if let Err(error) = result {
+        log::error!("Theme store initialization failed: {error}");
+    }
+}
+
 fn with_store<T>(
     manager: &ThemeStoreManager,
     operation: impl FnOnce(&mut ThemeStore) -> Result<T, ThemeStoreError>,
@@ -194,5 +200,13 @@ mod tests {
             .expect("run store task");
 
         assert_ne!(task_thread, caller_thread);
+    }
+
+    #[test]
+    fn store_initialization_error_does_not_abort_startup() {
+        report_theme_store_initialization(Err(ThemeStoreError::new(
+            "THEME_STORE_INVALID",
+            "test failure",
+        )));
     }
 }

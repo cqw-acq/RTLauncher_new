@@ -282,7 +282,9 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
-            themes::commands::initialize_theme_store(app.handle())?;
+            themes::commands::report_theme_store_initialization(
+                themes::commands::initialize_theme_store(app.handle()),
+            );
             #[cfg(not(target_os = "macos"))]
             app.handle().plugin(tauri_plugin_single_instance::init(
                 |app: &tauri::AppHandle, _args, _cwd| {
