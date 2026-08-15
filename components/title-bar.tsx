@@ -6,6 +6,8 @@ import { Copy, Maximize2, Minus, X } from 'lucide-react'
 import { ModeToggle } from '@/components/mode-toggle'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
+import { ThemeSlot } from '@/components/themes/theme-slot'
+import { useThemeRuntime } from '@/components/themes/theme-runtime-provider'
 
 interface WindowApi {
   minimize: () => Promise<void>
@@ -72,6 +74,8 @@ function WindowButton({ onClick, title, children, className }: WindowButtonProps
 }
 
 export function TitleBar({ className }: TitleBarProps) {
+  const { slots, snapshot } = useThemeRuntime()
+  const themeSlot = { registry: slots, owner: snapshot.activeOwner }
   const [isMacOS, setIsMacOS] = useState(false)
   const [isMaximized, setIsMaximized] = useState(false)
   const [windowApi, setWindowApi] = useState<WindowApi | null>(null)
@@ -169,47 +173,61 @@ export function TitleBar({ className }: TitleBarProps) {
         <>
           <div className='absolute inset-0' data-tauri-drag-region />
 
+          <div className='no-drag absolute inset-y-0 left-0 flex items-center pl-3'>
+            <ThemeSlot {...themeSlot} slotId='app.titlebar.leading' />
+          </div>
+
           <div className='pointer-events-none absolute inset-y-0 left-0 right-0 flex items-center justify-center'>
-            <div className='flex items-center gap-2' data-tauri-drag-region>
-              <AppLogo className='h-5 w-5 text-foreground' />
-              <span className='text-sm font-medium text-foreground/80'>RTLauncher</span>
-            </div>
+            <ThemeSlot {...themeSlot} slotId='app.titlebar.center'>
+              <div className='flex items-center gap-2' data-tauri-drag-region>
+                <AppLogo className='h-5 w-5 text-foreground' />
+                <span className='text-sm font-medium text-foreground/80'>RTLauncher</span>
+              </div>
+            </ThemeSlot>
           </div>
 
           <div className='no-drag absolute inset-y-0 right-0 flex items-center pr-3'>
-            <ModeToggle />
+            <ThemeSlot {...themeSlot} slotId='app.titlebar.actions'>
+              <ModeToggle />
+            </ThemeSlot>
           </div>
         </>
       ) : (
         <div className='flex h-full items-center' data-tauri-drag-region>
-          <div className='flex h-full items-center gap-2 px-3' data-tauri-drag-region>
-            <AppLogo className='h-5 w-5 text-foreground' />
-            <span className='text-sm font-medium text-foreground/80'>RTLauncher</span>
-          </div>
-
-          <div className='h-full flex-1' data-tauri-drag-region />
-
-          <div className='no-drag flex h-full items-center gap-1 pr-3'>
-            <ModeToggle />
-
-            <div className='flex items-center gap-1'>
-              <WindowButton onClick={handleMinimize} title='最小化'>
-                <Minus className='size-4' />
-              </WindowButton>
-
-              <WindowButton onClick={handleMaximizeRestore} title={isMaximized ? '还原' : '最大化'}>
-                {isMaximized ? <Copy className='size-3.5 rotate-90' /> : <Maximize2 className='size-3.5' />}
-              </WindowButton>
-
-              <WindowButton
-                onClick={handleClose}
-                title='关闭'
-                className='hover:bg-destructive hover:text-white active:bg-destructive/90 dark:hover:bg-red-600 dark:active:bg-red-700'
-              >
-                <X className='size-4' />
-              </WindowButton>
+          <ThemeSlot {...themeSlot} slotId='app.titlebar.leading'>
+            <div className='flex h-full items-center gap-2 px-3' data-tauri-drag-region>
+              <AppLogo className='h-5 w-5 text-foreground' />
+              <span className='text-sm font-medium text-foreground/80'>RTLauncher</span>
             </div>
+          </ThemeSlot>
+
+          <div className='flex h-full flex-1 items-center justify-center' data-tauri-drag-region>
+            <ThemeSlot {...themeSlot} slotId='app.titlebar.center' />
           </div>
+
+          <ThemeSlot {...themeSlot} slotId='app.titlebar.actions'>
+            <div className='no-drag flex h-full items-center gap-1 pr-3'>
+              <ModeToggle />
+
+              <div className='flex items-center gap-1'>
+                <WindowButton onClick={handleMinimize} title='最小化'>
+                  <Minus className='size-4' />
+                </WindowButton>
+
+                <WindowButton onClick={handleMaximizeRestore} title={isMaximized ? '还原' : '最大化'}>
+                  {isMaximized ? <Copy className='size-3.5 rotate-90' /> : <Maximize2 className='size-3.5' />}
+                </WindowButton>
+
+                <WindowButton
+                  onClick={handleClose}
+                  title='关闭'
+                  className='hover:bg-destructive hover:text-white active:bg-destructive/90 dark:hover:bg-red-600 dark:active:bg-red-700'
+                >
+                  <X className='size-4' />
+                </WindowButton>
+              </div>
+            </div>
+          </ThemeSlot>
         </div>
       )}
     </div>
