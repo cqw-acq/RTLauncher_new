@@ -325,46 +325,7 @@ input[type="range"]:disabled {
 }
 
 /* ============================================================
-   侧栏路由切换：等主内容真实更新后再做一次交叉淡入淡出
+   侧栏路由切换：由 sidebar.tsx 用手动 opacity 过渡控制
+   （旧页淡出 → 路由切换 → 新页首次 mutation 后淡入）
    ============================================================ */
-:root {
-  view-transition-name: none;
-}
 
-::view-transition,
-::view-transition-group(page-content),
-::view-transition-image-pair(page-content),
-::view-transition-old(page-content),
-::view-transition-new(page-content) {
-  pointer-events: none;
-}
-
-::view-transition-group(page-content) {
-  animation-duration: 0.24s;
-}
-
-::view-transition-old(page-content) {
-  animation: page-content-fade-out 0.24s ease-out both;
-}
-
-::view-transition-new(page-content) {
-  animation: page-content-fade-in 0.24s ease-out both;
-}
-
-@keyframes page-content-fade-out {
-  from { opacity: 1; }
-  to { opacity: 0; }
-}
-
-@keyframes page-content-fade-in {
-  from { opacity: 0; }
-  to { opacity: 1; }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  ::view-transition-group(page-content),
-  ::view-transition-old(page-content),
-  ::view-transition-new(page-content) {
-    animation-duration: 0.01ms;
-  }
-}
