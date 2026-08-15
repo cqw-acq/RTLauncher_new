@@ -1,0 +1,212 @@
+use super::store::{ThemePackage, ThemeStore, ThemeStoreState};
+use super::ThemeStoreError;
+use base64::engine::general_purpose::STANDARD;
+use base64::Engine;
+use serde::Serialize;
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
+use tauri::{AppHandle, Manager, State};
+
+#[derive(Clone)]
+pub struct ThemeStoreManager(Arc<Mutex<ThemeStore>>);
+
+impl ThemeStoreManager {
+    fn new(store: ThemeStore) -> Self {
+        Self(Arc::new(Mutex::new(store)))
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThemeStoreView {
+    pub active_theme_id: String,
+    pub last_healthy_theme_id: String,
+    pub pending_theme_id: Option<String>,
+    pub packages: Vec<ThemePackage>,
+}
+
+pub fn initialize_theme_store(app: &AppHandle) -> Result<(), ThemeStoreError> {
+    let root = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| {
+            ThemeStoreError::new(
+                "THEME_STORE_IO",
+                format!("Cannot resolve the application data directory: {error}"),
+            )
+        })?
+        .join("themes");
+    app.manage(ThemeStoreManager::new(ThemeStore::open(root)?));
+    Ok(())
+}
+
+pub fn report_theme_store_initialization(result: Result<(), ThemeStoreError>) {
+    if let Err(error) = result {
+        log::error!("Theme store initialization failed: {error}");
+    }
+}
+
+fn with_store<T>(
+    manager: &ThemeStoreManager,
+    operation: impl FnOnce(&mut ThemeStore) -> Result<T, ThemeStoreError>,
+) -> Result<T, ThemeStoreError> {
+    let mut store = manager.0.lock().map_err(|_| {
+        ThemeStoreError::new("THEME_STORE_LOCKED", "Theme store lock is not available.")
+    })?;
+    operation(&mut store)
+}
+
+async fn run_store_task<T>(
+    manager: ThemeStoreManager,
+    operation: impl FnOnce(&mut ThemeStore) -> Result<T, ThemeStoreError> + Send + 'static,
+) -> Result<T, ThemeStoreError>
+where
+    T: Send + 'static,
+{
+    tauri::async_runtime::spawn_blocking(move || with_store(&manager, operation))
+        .await
+        .map_err(|error| {
+            ThemeStoreError::new(
+                "THEME_STORE_TASK_FAILED",
+                format!("Theme store task failed: {error}"),
+            )
+        })?
+}
+
+#[tauri::command]
+pub fn theme_list(
+    manager: State<'_, ThemeStoreManager>,
+) -> Result<ThemeStoreView, ThemeStoreError> {
+    with_store(manager.inner(), |store| {
+        let state: &ThemeStoreState = store.state();
+        Ok(ThemeStoreView {
+            active_theme_id: state.active_theme_id.clone(),
+            last_healthy_theme_id: state.last_healthy_theme_id.clone(),
+            pending_theme_id: state.pending_theme_id.clone(),
+            packages: store.list()?,
+        })
+    })
+}
+
+#[tauri::command]
+pub async fn theme_install_archive(
+    manager: State<'_, ThemeStoreManager>,
+    archive_path: String,
+) -> Result<ThemePackage, ThemeStoreError> {
+    run_store_task(manager.inner().clone(), move |store| {
+        store.install_archive(&PathBuf::from(archive_path))
+    })
+    .await
+}
+
+#[tauri::command]
+pub fn theme_register_dev_directory(
+    manager: State<'_, ThemeStoreManager>,
+    directory: String,
+) -> Result<ThemePackage, ThemeStoreError> {
+    with_store(manager.inner(), |store| {
+        store.register_dev_directory(&PathBuf::from(directory))
+    })
+}
+
+#[tauri::command]
+pub fn theme_remove(
+    manager: State<'_, ThemeStoreManager>,
+    theme_id: String,
+    version: Option<String>,
+) -> Result<(), ThemeStoreError> {
+    with_store(manager.inner(), |store| {
+        store.remove(&theme_id, version.as_deref())
+    })
+}
+
+#[tauri::command]
+pub fn theme_read_text(
+    manager: State<'_, ThemeStoreManager>,
+    theme_id: String,
+    path: String,
+) -> Result<String, ThemeStoreError> {
+    with_store(manager.inner(), |store| store.read_text(&theme_id, &path))
+}
+
+#[tauri::command]
+pub async fn theme_read_binary(
+    manager: State<'_, ThemeStoreManager>,
+    theme_id: String,
+    path: String,
+) -> Result<String, ThemeStoreError> {
+    run_store_task(manager.inner().clone(), move |store| {
+        store
+            .read_binary(&theme_id, &path)
+            .map(|content| STANDARD.encode(content))
+    })
+    .await
+}
+
+#[tauri::command]
+pub fn theme_set_active(
+    manager: State<'_, ThemeStoreManager>,
+    theme_id: String,
+) -> Result<(), ThemeStoreError> {
+    with_store(manager.inner(), |store| store.set_active(&theme_id))
+}
+
+#[tauri::command]
+pub fn theme_mark_healthy(
+    manager: State<'_, ThemeStoreManager>,
+    theme_id: String,
+) -> Result<(), ThemeStoreError> {
+    with_store(manager.inner(), |store| store.mark_healthy(&theme_id))
+}
+
+#[tauri::command]
+pub fn theme_is_trusted(
+    manager: State<'_, ThemeStoreManager>,
+    theme_id: String,
+    version: String,
+) -> Result<bool, ThemeStoreError> {
+    with_store(manager.inner(), |store| {
+        Ok(store.is_trusted(&theme_id, &version))
+    })
+}
+
+#[tauri::command]
+pub fn theme_set_trusted(
+    manager: State<'_, ThemeStoreManager>,
+    theme_id: String,
+    version: String,
+    trusted: bool,
+) -> Result<(), ThemeStoreError> {
+    with_store(manager.inner(), |store| {
+        store.set_trusted(&theme_id, &version, trusted)
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn store_task_runs_on_the_blocking_pool() {
+        let directory = TempDir::new().expect("create temporary directory");
+        let manager = ThemeStoreManager::new(
+            ThemeStore::open(directory.path()).expect("open Theme store"),
+        );
+        let caller_thread = std::thread::current().id();
+
+        let task_thread = run_store_task(manager, |_store| Ok(std::thread::current().id()))
+            .await
+            .expect("run store task");
+
+        assert_ne!(task_thread, caller_thread);
+    }
+
+    #[test]
+    fn store_initialization_error_does_not_abort_startup() {
+        report_theme_store_initialization(Err(ThemeStoreError::new(
+            "THEME_STORE_INVALID",
+            "test failure",
+        )));
+    }
+}

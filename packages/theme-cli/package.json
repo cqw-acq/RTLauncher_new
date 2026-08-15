@@ -1,0 +1,16 @@
+{
+  "name": "@rtlauncher/theme-cli",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "rtl-theme": "./dist/cli.js"
+  },
+  "scripts": {
+    "build": "esbuild src/cli.ts --bundle --packages=external --platform=node --format=esm --outfile=dist/cli.js --banner:js=\"#!/usr/bin/env node\""
+  },
+  "dependencies": {
+    "esbuild": "^0.25.0",
+    "fflate": "^0.8.2"
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "name": "@rtlauncher/example-hello-theme",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "rtl-theme build .",
+    "pack": "rtl-theme pack . hello-theme.rtltheme",
+    "validate": "rtl-theme validate ."
+  },
+  "dependencies": {
+    "@rtlauncher/theme-sdk": "workspace:*",
+    "@rtlauncher/theme-ui": "workspace:*",
+    "react": "^19.2.3"
+  },
+  "devDependencies": {
+    "@rtlauncher/theme-cli": "workspace:*"
+  }
+}

@@ -21,6 +21,8 @@ import {
 } from "@/components/ui/tooltip"
 import { useUIConfigContext } from "@/components/ui-config/ui-config-provider"
 import { useI18n, type TranslationKey } from "@/components/i18n/use-i18n"
+import { ThemeSlot } from "@/components/themes/theme-slot"
+import { useThemeRuntime } from "@/components/themes/theme-runtime-provider"
 
 interface SidebarProps {
   className?: string
@@ -216,6 +218,7 @@ export function Sidebar({ className }: SidebarProps) {
   const pathname = usePathname()
   const { config, configLoaded } = useUIConfigContext()
   const { t } = useI18n()
+  const { slots, snapshot, reportThemeError } = useThemeRuntime()
   const allNavItems = NAV_ITEM_BASE.map((item) => ({
     ...item,
     label: NAV_LABELS[item.id] ? t(NAV_LABELS[item.id]) : item.id,
@@ -236,7 +239,7 @@ export function Sidebar({ className }: SidebarProps) {
   const topNavItems = visibleNavItems.filter(item => item.id !== "settings");
   const bottomNavItems = visibleNavItems.filter(item => item.id === "settings");
 
-  return (
+  const builtInSidebar = (
     <aside
       data-app-sidebar
       className={cn(
@@ -244,17 +247,28 @@ export function Sidebar({ className }: SidebarProps) {
         className
       )}
     >
-      <nav className="flex flex-1 flex-col items-center gap-2 p-2">
-        {topNavItems.map((item) => (
-          <NavButton key={item.href} item={item} isActive={isActive(item.href)} isExactActive={isExactActive(item.href)} />
-        ))}
-      </nav>
+      <ThemeSlot registry={slots} owner={snapshot.activeOwner} slotId="app.sidebar.header" onError={reportThemeError} />
+      <ThemeSlot registry={slots} owner={snapshot.activeOwner} slotId="app.sidebar.navigation" onError={reportThemeError}>
+        <nav className="flex flex-1 flex-col items-center gap-2 p-2">
+          {topNavItems.map((item) => (
+            <NavButton key={item.href} item={item} isActive={isActive(item.href)} isExactActive={isExactActive(item.href)} />
+          ))}
+        </nav>
+      </ThemeSlot>
 
-      <div className="flex flex-col items-center gap-2 border-t border-border p-2">
-        {bottomNavItems.map((item) => (
-          <NavButton key={item.href} item={item} isActive={isActive(item.href)} isExactActive={isExactActive(item.href)} />
-        ))}
-      </div>
+      <ThemeSlot registry={slots} owner={snapshot.activeOwner} slotId="app.sidebar.footer" onError={reportThemeError}>
+        <div className="flex flex-col items-center gap-2 border-t border-border p-2">
+          {bottomNavItems.map((item) => (
+            <NavButton key={item.href} item={item} isActive={isActive(item.href)} isExactActive={isExactActive(item.href)} />
+          ))}
+        </div>
+      </ThemeSlot>
     </aside>
+  )
+
+  return (
+    <ThemeSlot registry={slots} owner={snapshot.activeOwner} slotId="app.sidebar" onError={reportThemeError}>
+      {builtInSidebar}
+    </ThemeSlot>
   )
 }

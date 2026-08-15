@@ -22,6 +22,7 @@ export interface BackgroundConfig {
 export type ThemeColor = "default" | string;
 
 export interface AppearanceSettings {
+  themeId: string;
   themeMode: ThemeMode;
   themeColor: ThemeColor; // "default" 或 oklch 字符串
   fontSize: number; // 12 ~ 18（整数 px，仅影响文字）
@@ -69,6 +70,7 @@ export const DEFAULT_SETTINGS: LauncherSettings = {
     autoDownloadModDependencies: true,
   },
   appearance: {
+    themeId: "builtin.default",
     themeMode: "system",
     themeColor: "default",
     fontSize: 14,
@@ -92,7 +94,28 @@ export const BG_BLUR_MAX = 20;
 export const BG_OPACITY_MIN = 0;
 export const BG_OPACITY_MAX = 100;
 
-const STORAGE_KEY = "rtlauncher:settings:v3";
+const STORAGE_KEY = "rtlauncher:settings:v4";
+const LEGACY_STORAGE_KEY = "rtlauncher:settings:v3";
+
+type LegacySettings = {
+  general?: Partial<GeneralSettings>;
+  appearance?: Partial<Omit<AppearanceSettings, "themeId">>;
+};
+
+export function migrateSettingsV3(settings: LegacySettings): Partial<LauncherSettings> {
+  return {
+    ...settings,
+    appearance: {
+      ...DEFAULT_SETTINGS.appearance,
+      ...(settings.appearance ?? {}),
+      background: {
+        ...DEFAULT_SETTINGS.appearance.background,
+        ...(settings.appearance?.background ?? {}),
+      },
+      themeId: "builtin.default",
+    },
+  } as Partial<LauncherSettings>;
+}
 
 function isAppLanguage(value: unknown): value is AppLanguage {
   return value === "zh-CN" || value === "en-US";
@@ -360,9 +383,14 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
     };
 
     try {
-      const raw = localStorage.getItem(STORAGE_KEY);
+      const current = localStorage.getItem(STORAGE_KEY);
+      const legacy = current ? null : localStorage.getItem(LEGACY_STORAGE_KEY);
+      const raw = current ?? legacy;
       if (raw) {
-        const parsed = JSON.parse(raw) as Partial<LauncherSettings>;
+        const stored = JSON.parse(raw) as Partial<LauncherSettings>;
+        const parsed = legacy
+          ? migrateSettingsV3(stored as LegacySettings)
+          : stored;
         merged = {
           general: {
             ...DEFAULT_SETTINGS.general,
