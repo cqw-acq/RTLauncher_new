@@ -106,10 +106,15 @@ fn detect_loader_from_main_class(main_class: &str) -> &'static str {
 ///
 /// NeoForge 与 Forge 的 mainClass 同为 `cpw.mods.bootstraplauncher.BootstrapLauncher`，
 /// 无法区分；而库坐标是各自独占的：
-/// - NeoForge: `net.neoforged:fancymodloader:*` / `net.neoforged:neoforge:*` / `net.neoforged:fmlloader:*`
+/// - NeoForge: `net.neoforged:fancymodloader:*` / `net.neoforged:neoforge:*` /
+///             `net.neoforged:fmlloader:*` / `net.neoforged:forge:*`（早期版本）
 /// - Forge: `net.minecraftforge:forge:*` / `net.minecraftforge:fmlloader:*`
 ///
-/// 注意 `net.minecraftforge:srgutils` 是两者共用库，不能作为 Forge 的判据。
+/// 注意：
+/// - `net.minecraftforge:srgutils`、`cpw.mods:modlauncher`、
+///   `cpw.mods:bootstraplauncher` 是两者共用库，不能作为 Forge 判据。
+/// - 只要出现任何 net.neoforged:* loader 坐标就直接返回 NeoForge，
+///   比 Forge 的 net.minecraftforge:forge/fmlloader 判据优先级更高。
 fn detect_loader_from_libraries(json: &serde_json::Value) -> Option<&'static str> {
     let libraries = json.get("libraries")?.as_array()?;
     let mut has_forge_fml = false;
@@ -118,6 +123,8 @@ fn detect_loader_from_libraries(json: &serde_json::Value) -> Option<&'static str
         if name.starts_with("net.neoforged:fancymodloader:")
             || name.starts_with("net.neoforged:neoforge:")
             || name.starts_with("net.neoforged:fmlloader:")
+            || name.starts_with("net.neoforged:forge:")
+            || name.starts_with("net.neoforged:fml:")
         {
             return Some("NeoForge");
         }
@@ -143,6 +150,30 @@ fn detect_loader_from_libraries(json: &serde_json::Value) -> Option<&'static str
     } else {
         None
     }
+}
+
+/// 从 version.json 的 arguments.game 参数中推断加载器类型。
+///
+/// NeoForge 会在 game 参数里携带 Forge 没有的专属键：
+/// - `--fml.neoForgeVersion`
+/// - `--fml.neoFormVersion`
+/// - `--fml.neoForge`（NeoForge 1.20.2+）
+///
+/// 这对合并型整合包尤其重要：有些启动器生成的 version.json 里
+/// loader 库可能被改写或移除，但 arguments 通常保留原样。
+fn detect_loader_from_arguments(json: &serde_json::Value) -> Option<&'static str> {
+    let game_args = json
+        .get("arguments")
+        .and_then(|v| v.get("game"))
+        .and_then(|v| v.as_array())?;
+
+    for arg in game_args {
+        let s = arg.as_str()?.to_lowercase();
+        if s == "--fml.neoforgeversion" || s == "--fml.neoformversion" || s == "--fml.neoforge" {
+            return Some("NeoForge");
+        }
+    }
+    None
 }
 
 /// 从版本文件夹名中快速推断加载器（备用方案）
@@ -394,9 +425,8 @@ fn build_instance_data(instance_dir: &Path, minecraft_path: &Path) -> Option<Ins
                                 mc_ver = alt;
                             }
                         }
-                        // 从 mainClass 推断加载器，但用库坐标与文件夹名交叉验证
-                        // （NeoForge 与 Forge 的 mainClass 相同，PCL 等第三方启动器安装的
-                        // NeoForge 实例文件夹名也不含 neoforge，必须靠库坐标区分）
+                        // 从 mainClass 推断加载器，但用库坐标 / arguments / 文件夹名交叉验证
+                        // （NeoForge 与 Forge 的 mainClass 同为 BootstrapLauncher，无法直接区分）
                         let from_main = json
                             .get("mainClass")
                             .and_then(|v| v.as_str())
@@ -404,16 +434,23 @@ fn build_instance_data(instance_dir: &Path, minecraft_path: &Path) -> Option<Ins
                             .unwrap_or("Vanilla");
                         let from_name = detect_loader_from_name(&name);
                         let from_libs = detect_loader_from_libraries(&json);
+                        let from_args = detect_loader_from_arguments(&json);
                         let loader = if from_name == "OptiFine"
-                            && (from_main == "Forge" || from_libs == Some("Forge"))
+                            && (from_main == "Forge"
+                                || from_libs == Some("Forge")
+                                || from_args == Some("Forge"))
                         {
                             // OptiFine 继承 Forge 的 mainClass 和库，但文件夹名明确是 OptiFine
                             "OptiFine"
                         } else if let Some(l) = from_libs {
-                            // 库坐标是最可靠的判据（NeoForge 1.20.2+ 独占 net.neoforged 坐标）
+                            // 1. 库坐标是最可靠的判据
+                            l
+                        } else if let Some(l) = from_args {
+                            // 2. arguments.game 里的 NeoForge 专属参数是第二可靠的判据
+                            //    （合并型整合包可能丢失 loader 库坐标，但 arguments 通常保留）
                             l
                         } else if from_main == "Forge" && from_name == "NeoForge" {
-                            // 合并型整合包无 net.neoforged 库坐标时，用文件夹名兜底区分
+                            // 3. 无任何 loader 专属信号时，用文件夹名兜底区分
                             "NeoForge"
                         } else if from_main == "Vanilla" {
                             // mainClass 无法判断 → 用文件夹名
@@ -751,7 +788,8 @@ pub async fn vm_delete_cached_file(
 #[cfg(test)]
 mod tests {
     use super::{
-        detect_loader_from_libraries, detect_loader_from_main_class, detect_loader_from_name,
+        detect_loader_from_arguments, detect_loader_from_libraries,
+        detect_loader_from_main_class, detect_loader_from_name,
         detect_minecraft_version_from_libraries, detect_minecraft_version_from_patches,
         extract_minecraft_version, version_from_instance_name,
     };
@@ -1015,5 +1053,114 @@ mod tests {
             detect_loader_from_name("1.21.1-fabric-0.15.11"),
             "Fabric"
         );
+    }
+
+    // ==== 以下是本次修复新增的 NeoForge 识别测试 ====
+
+    #[test]
+    fn detects_neoforge_from_net_neoforged_forge_coordinate() {
+        // NeoForge 1.20.1 及早期版本 groupId 是 net.neoforged 但 artifactId 仍叫 forge
+        let version = json!({
+            "libraries": [
+                { "name": "net.neoforged:forge:1.20.1-47.3.0" }
+            ]
+        });
+        assert_eq!(
+            detect_loader_from_libraries(&version),
+            Some("NeoForge")
+        );
+    }
+
+    #[test]
+    fn detects_neoforge_from_net_neoforged_fml_coordinate() {
+        let version = json!({
+            "libraries": [
+                { "name": "net.neoforged:fml:1.20.1-47.3.0" }
+            ]
+        });
+        assert_eq!(
+            detect_loader_from_libraries(&version),
+            Some("NeoForge")
+        );
+    }
+
+    #[test]
+    fn neoforged_wins_over_forge_when_both_present() {
+        // 合并型整合包可能同时残留 net.minecraftforge:fmlloader（共用库）
+        // 和 net.neoforged:fancymodloader，应优先返回 NeoForge
+        let version = json!({
+            "libraries": [
+                { "name": "net.minecraftforge:fmlloader:1.20.1-47.4.9" },
+                { "name": "net.neoforged:fancymodloader:loader:4.0.43" }
+            ]
+        });
+        assert_eq!(
+            detect_loader_from_libraries(&version),
+            Some("NeoForge")
+        );
+    }
+
+    #[test]
+    fn detects_neoforge_from_arguments_neo_forge_version() {
+        // 合并型整合包 version.json 没有 loader 库坐标，
+        // 但 arguments.game 保留了 NeoForge 专属参数
+        let version = json!({
+            "mainClass": "cpw.mods.bootstraplauncher.BootstrapLauncher",
+            "arguments": {
+                "game": [
+                    "--fml.forgeVersion", "21.1.238",
+                    "--fml.fmlVersion", "4.0.43",
+                    "--fml.mcVersion", "1.21.1",
+                    "--fml.neoFormVersion", "20240808.144430"
+                ]
+            },
+            "libraries": [
+                { "name": "cpw.mods:modlauncher:11.0.5" },
+                { "name": "cpw.mods:bootstraplauncher:2.1.4" },
+                { "name": "net.minecraftforge:srgutils:0.4.15" }
+            ]
+        });
+        assert_eq!(
+            detect_loader_from_arguments(&version),
+            Some("NeoForge")
+        );
+    }
+
+    #[test]
+    fn arguments_detects_neoforge_from_neo_forge_flag() {
+        let version = json!({
+            "arguments": {
+                "game": [
+                    "--fml.neoForge", "1.20.2"
+                ]
+            }
+        });
+        assert_eq!(
+            detect_loader_from_arguments(&version),
+            Some("NeoForge")
+        );
+    }
+
+    #[test]
+    fn forge_arguments_does_not_trigger_neoforge() {
+        let version = json!({
+            "arguments": {
+                "game": [
+                    "--fml.forgeVersion", "47.4.9",
+                    "--fml.mcVersion", "1.20.1"
+                ]
+            }
+        });
+        assert_eq!(detect_loader_from_arguments(&version), None);
+    }
+
+    #[test]
+    fn no_arguments_returns_none() {
+        let version = json!({
+            "libraries": [
+                { "name": "com.mojang:minecraft:1.21.1" }
+            ]
+        });
+        assert_eq!(detect_loader_from_arguments(&version), None);
     }
 }
