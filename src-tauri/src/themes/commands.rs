@@ -4,10 +4,17 @@ use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use serde::Serialize;
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Manager, State};
 
-pub struct ThemeStoreManager(Mutex<ThemeStore>);
+#[derive(Clone)]
+pub struct ThemeStoreManager(Arc<Mutex<ThemeStore>>);
+
+impl ThemeStoreManager {
+    fn new(store: ThemeStore) -> Self {
+        Self(Arc::new(Mutex::new(store)))
+    }
+}
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -29,12 +36,12 @@ pub fn initialize_theme_store(app: &AppHandle) -> Result<(), ThemeStoreError> {
             )
         })?
         .join("themes");
-    app.manage(ThemeStoreManager(Mutex::new(ThemeStore::open(root)?)));
+    app.manage(ThemeStoreManager::new(ThemeStore::open(root)?));
     Ok(())
 }
 
 fn with_store<T>(
-    manager: State<'_, ThemeStoreManager>,
+    manager: &ThemeStoreManager,
     operation: impl FnOnce(&mut ThemeStore) -> Result<T, ThemeStoreError>,
 ) -> Result<T, ThemeStoreError> {
     let mut store = manager.0.lock().map_err(|_| {
@@ -43,11 +50,28 @@ fn with_store<T>(
     operation(&mut store)
 }
 
+async fn run_store_task<T>(
+    manager: ThemeStoreManager,
+    operation: impl FnOnce(&mut ThemeStore) -> Result<T, ThemeStoreError> + Send + 'static,
+) -> Result<T, ThemeStoreError>
+where
+    T: Send + 'static,
+{
+    tauri::async_runtime::spawn_blocking(move || with_store(&manager, operation))
+        .await
+        .map_err(|error| {
+            ThemeStoreError::new(
+                "THEME_STORE_TASK_FAILED",
+                format!("Theme store task failed: {error}"),
+            )
+        })?
+}
+
 #[tauri::command]
 pub fn theme_list(
     manager: State<'_, ThemeStoreManager>,
 ) -> Result<ThemeStoreView, ThemeStoreError> {
-    with_store(manager, |store| {
+    with_store(manager.inner(), |store| {
         let state: &ThemeStoreState = store.state();
         Ok(ThemeStoreView {
             active_theme_id: state.active_theme_id.clone(),
@@ -59,13 +83,14 @@ pub fn theme_list(
 }
 
 #[tauri::command]
-pub fn theme_install_archive(
+pub async fn theme_install_archive(
     manager: State<'_, ThemeStoreManager>,
     archive_path: String,
 ) -> Result<ThemePackage, ThemeStoreError> {
-    with_store(manager, |store| {
+    run_store_task(manager.inner().clone(), move |store| {
         store.install_archive(&PathBuf::from(archive_path))
     })
+    .await
 }
 
 #[tauri::command]
@@ -73,7 +98,7 @@ pub fn theme_register_dev_directory(
     manager: State<'_, ThemeStoreManager>,
     directory: String,
 ) -> Result<ThemePackage, ThemeStoreError> {
-    with_store(manager, |store| {
+    with_store(manager.inner(), |store| {
         store.register_dev_directory(&PathBuf::from(directory))
     })
 }
@@ -84,7 +109,9 @@ pub fn theme_remove(
     theme_id: String,
     version: Option<String>,
 ) -> Result<(), ThemeStoreError> {
-    with_store(manager, |store| store.remove(&theme_id, version.as_deref()))
+    with_store(manager.inner(), |store| {
+        store.remove(&theme_id, version.as_deref())
+    })
 }
 
 #[tauri::command]
@@ -93,20 +120,21 @@ pub fn theme_read_text(
     theme_id: String,
     path: String,
 ) -> Result<String, ThemeStoreError> {
-    with_store(manager, |store| store.read_text(&theme_id, &path))
+    with_store(manager.inner(), |store| store.read_text(&theme_id, &path))
 }
 
 #[tauri::command]
-pub fn theme_read_binary(
+pub async fn theme_read_binary(
     manager: State<'_, ThemeStoreManager>,
     theme_id: String,
     path: String,
 ) -> Result<String, ThemeStoreError> {
-    with_store(manager, |store| {
+    run_store_task(manager.inner().clone(), move |store| {
         store
             .read_binary(&theme_id, &path)
             .map(|content| STANDARD.encode(content))
     })
+    .await
 }
 
 #[tauri::command]
@@ -114,7 +142,7 @@ pub fn theme_set_active(
     manager: State<'_, ThemeStoreManager>,
     theme_id: String,
 ) -> Result<(), ThemeStoreError> {
-    with_store(manager, |store| store.set_active(&theme_id))
+    with_store(manager.inner(), |store| store.set_active(&theme_id))
 }
 
 #[tauri::command]
@@ -122,7 +150,7 @@ pub fn theme_mark_healthy(
     manager: State<'_, ThemeStoreManager>,
     theme_id: String,
 ) -> Result<(), ThemeStoreError> {
-    with_store(manager, |store| store.mark_healthy(&theme_id))
+    with_store(manager.inner(), |store| store.mark_healthy(&theme_id))
 }
 
 #[tauri::command]
@@ -131,7 +159,9 @@ pub fn theme_is_trusted(
     theme_id: String,
     version: String,
 ) -> Result<bool, ThemeStoreError> {
-    with_store(manager, |store| Ok(store.is_trusted(&theme_id, &version)))
+    with_store(manager.inner(), |store| {
+        Ok(store.is_trusted(&theme_id, &version))
+    })
 }
 
 #[tauri::command]
@@ -141,7 +171,28 @@ pub fn theme_set_trusted(
     version: String,
     trusted: bool,
 ) -> Result<(), ThemeStoreError> {
-    with_store(manager, |store| {
+    with_store(manager.inner(), |store| {
         store.set_trusted(&theme_id, &version, trusted)
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn store_task_runs_on_the_blocking_pool() {
+        let directory = TempDir::new().expect("create temporary directory");
+        let manager = ThemeStoreManager::new(
+            ThemeStore::open(directory.path()).expect("open Theme store"),
+        );
+        let caller_thread = std::thread::current().id();
+
+        let task_thread = run_store_task(manager, |_store| Ok(std::thread::current().id()))
+            .await
+            .expect("run store task");
+
+        assert_ne!(task_thread, caller_thread);
+    }
 }
