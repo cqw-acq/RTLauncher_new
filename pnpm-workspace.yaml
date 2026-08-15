@@ -4,13 +4,7 @@ packages:
   - "examples/themes/*"
 
 allowBuilds:
-  msw: false
+  esbuild: true
+  msw: true
   sharp: false
   unrs-resolver: false
-
-ignoredBuiltDependencies:
-  - sharp
-  - unrs-resolver
-
-onlyBuiltDependencies:
-  - msw
