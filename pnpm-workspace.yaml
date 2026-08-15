@@ -1,5 +1,7 @@
 packages:
   - "."
+  - "packages/*"
+  - "examples/themes/*"
 
 allowBuilds:
   msw: false

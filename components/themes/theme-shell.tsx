@@ -38,6 +38,8 @@ export function ThemeShell({ children }: { children: ReactNode }) {
       <div className="flex flex-1 overflow-hidden">
         <Sidebar />
         <main className="flex-1 overflow-hidden [view-transition-name:page-content]">
+          <ThemeSlot registry={slots} owner={owner} slotId="page.header" onError={reportThemeError} />
+          <ThemeSlot registry={slots} owner={owner} slotId="page.header.actions" onError={reportThemeError} />
           <ThemeSlot registry={slots} owner={owner} slotId="app.content.before" onError={reportThemeError} />
           <ThemeRoute
             registry={routes}
@@ -49,6 +51,7 @@ export function ThemeShell({ children }: { children: ReactNode }) {
             <PageTransition>{children}</PageTransition>
           </ThemeRoute>
           <ThemeSlot registry={slots} owner={owner} slotId="app.content.after" onError={reportThemeError} />
+          <ThemeSlot registry={slots} owner={owner} slotId="page.footer" onError={reportThemeError} />
         </main>
       </div>
     </>
