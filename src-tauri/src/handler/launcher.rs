@@ -198,7 +198,10 @@ pub fn launch_game(
 #[cfg(test)]
 mod tests {
     use super::{
-        arguments::{append_loader_jvm_args, dedup_path_list, launcher_rules_allow},
+        arguments::{
+            append_loader_jvm_args, dedup_path_list, launcher_rules_allow, merge_loader_game_args,
+            merge_version_jvm_args,
+        },
         identity::launch_auth_identity,
         java_runtime::is_plausible_minecraft_version,
         memory::{safe_max_memory_mb, SafeMemoryLimit},
@@ -281,6 +284,174 @@ mod tests {
         );
 
         assert_eq!(args, vec!["-p", "effective-module-path"]);
+    }
+
+    #[test]
+    fn skips_loader_args_whose_key_is_already_effective() {
+        // 与 keeps_an_existing_effective_module_path 不同，这里连 -Xss1M、
+        // -Djava.library.path 这类普通键也要去重，否则同一参数被拼接多次
+        // （固定参数、version json jvm 参数、loader 参数三处都会出现）。
+        let mut args = vec![
+            "-Xss1M".to_string(),
+            "-Djava.library.path=/minecraft/natives".to_string(),
+            "-p".to_string(),
+            "effective-module-path".to_string(),
+        ];
+        let loader_args = vec![
+            "-Xss1M".to_string(),
+            "-Djava.library.path=/other/natives".to_string(),
+            "-Dminecraft.launcher.brand=RTLauncher".to_string(),
+            "-p".to_string(),
+            "loader-module-path".to_string(),
+        ];
+
+        append_loader_jvm_args(&mut args, &loader_args);
+
+        // -Xss1M 与 -Djava.library.path（-D 前缀键去重）都被跳过，
+        // 保留已生效的值；只有新键 -Dminecraft.launcher.brand 被补入。
+        assert_eq!(
+            args,
+            vec![
+                "-Xss1M",
+                "-Djava.library.path=/minecraft/natives",
+                "-p",
+                "effective-module-path",
+                "-Dminecraft.launcher.brand=RTLauncher",
+            ]
+        );
+    }
+
+    #[test]
+    fn merge_version_jvm_args_skips_placeholder_garbage_by_key() {
+        // version json 的 jvm 参数里 -Djava.library.path 的占位符替换结果
+        // 是 -Djava.library.path={}（垃圾值），而 loader 参数里是完整路径。
+        // 必须按键（= 之前的部分）去重，把垃圾值跳过去；
+        // 即使 loader 里没有同名键（如 -Djna.tmpdir），垃圾值也直接丢弃。
+        let mut args = Vec::new();
+        let jvm_args_from_version = vec![
+            "-Djava.library.path={}".to_string(),
+            "-Djna.tmpdir={}".to_string(),
+            "-Dminecraft.launcher.brand=RTLauncher".to_string(),
+            "-cp".to_string(),
+            "version-classpath".to_string(),
+        ];
+        let extra_before_cp = vec![
+            "-Djava.library.path=C:/minecraft/versions/inst/inst-natives".to_string(),
+        ];
+
+        merge_version_jvm_args(&mut args, &jvm_args_from_version, &extra_before_cp);
+
+        // -Djava.library.path={} 因键已存在被跳过，-Djna.tmpdir={} 因垃圾值被
+        // 丢弃；loader 没有的合法键 -Dminecraft.launcher.brand 被加入；
+        // -cp 作为关键参数始终补入
+        assert_eq!(
+            args,
+            vec![
+                "-Dminecraft.launcher.brand=RTLauncher".to_string(),
+                "-cp".to_string(),
+                "version-classpath".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn merge_version_jvm_args_keeps_absent_keys() {
+        // loader 里没有的键（如 -Xmn768m）仍然会被加入
+        let mut args = Vec::new();
+        let jvm_args_from_version = vec!["-Xmn768m".to_string()];
+        let extra_before_cp = vec!["-Dminecraft.launcher.brand=RTLauncher".to_string()];
+
+        merge_version_jvm_args(&mut args, &jvm_args_from_version, &extra_before_cp);
+
+        assert_eq!(args, vec!["-Xmn768m".to_string()]);
+    }
+
+    #[test]
+    fn merge_loader_game_args_does_not_append_values_of_existing_keys() {
+        // PCL CE 生成的 NeoForge 实例 json 的 game 参数携带
+        // --fml.neoForgeVersion 21.1.238 等字面量；这些 --key 已存在于
+        // 原版/实例 json 参数中，此时只能整对跳过，否则 21.1.238 等裸值
+        // 会被重复拼到命令尾部（报告中命令末尾出现的大量重复拼接）。
+        let mut game_args = vec![
+            "--launchTarget".to_string(),
+            "forgeclient".to_string(),
+            "--width".to_string(),
+            "873".to_string(),
+            "--height".to_string(),
+            "486".to_string(),
+            "--fml.forgeVersion".to_string(),
+            "21.1.238".to_string(),
+            "--fml.fmlVersion".to_string(),
+            "4.0.43".to_string(),
+            "--fml.mcVersion".to_string(),
+            "1.21.1".to_string(),
+            "--fml.neoFormVersion".to_string(),
+            "20240808.144430".to_string(),
+        ];
+        let extra_after_cp = vec![
+            "--fml.forgeVersion".to_string(),
+            "21.1.238".to_string(),
+            "--fml.fmlVersion".to_string(),
+            "4.0.43".to_string(),
+            "--fml.mcVersion".to_string(),
+            "1.21.1".to_string(),
+            "--fml.neoFormVersion".to_string(),
+            "20240808.144430".to_string(),
+            "--launchTarget".to_string(),
+            "forgeclient".to_string(),
+            "--fml.legacyCPVersion".to_string(),
+            "21.1.238".to_string(),
+        ];
+
+        merge_loader_game_args(&mut game_args, &extra_after_cp);
+
+        // 已有键整对跳过（不再产生 21.1.238 4.0.43 ... forgeclient 尾部垃圾）；
+        // 只有全新的 --fml.legacyCPVersion 连值一起补入
+        assert_eq!(
+            game_args,
+            vec![
+                "--launchTarget",
+                "forgeclient",
+                "--width",
+                "873",
+                "--height",
+                "486",
+                "--fml.forgeVersion",
+                "21.1.238",
+                "--fml.fmlVersion",
+                "4.0.43",
+                "--fml.mcVersion",
+                "1.21.1",
+                "--fml.neoFormVersion",
+                "20240808.144430",
+                "--fml.legacyCPVersion",
+                "21.1.238",
+            ]
+        );
+    }
+
+    #[test]
+    fn merge_loader_game_args_keeps_new_key_and_bare_value() {
+        // 全新的 --key 及其值、以及不属于任何已存在 --key 的裸值仍被保留
+        let mut game_args = vec!["--width".to_string(), "873".to_string()];
+        let extra_after_cp = vec![
+            "--new-key".to_string(),
+            "new-value".to_string(),
+            "bare-value".to_string(),
+        ];
+
+        merge_loader_game_args(&mut game_args, &extra_after_cp);
+
+        assert_eq!(
+            game_args,
+            vec![
+                "--width",
+                "873",
+                "--new-key",
+                "new-value",
+                "bare-value",
+            ]
+        );
     }
 
     #[test]
