@@ -1,6 +1,6 @@
 # Theme 开发者快速上手
 
-本指南说明如何在 RTLauncher 仓库中创建、调试和打包一个前端 Theme。完整协议请参阅 [Theme API 1.0](./README.zh-CN.md)，清单字段定义请参阅 [manifest.schema.json](./manifest.schema.json)。
+本指南说明如何在 RTLauncher 仓库中创建、调试和打包一个前端 Theme。完整协议请参阅 [Theme API 1.0](./README.zh-CN.md)，SDK 方法请参阅 [Theme SDK 1.0 参考](./SDK-REFERENCE.zh-CN.md)，清单字段定义请参阅 [manifest.schema.json](./manifest.schema.json)。
 
 > 当前 Theme SDK、UI 组件和 CLI 是仓库内工作区包。请先在 RTLauncher 仓库中开发 Theme。
 
