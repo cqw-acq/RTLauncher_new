@@ -287,6 +287,45 @@ mod tests {
     }
 
     #[test]
+    fn keeps_loader_add_opens_for_named_modules() {
+        // --add-opens/--add-exports 可多次出现且目标模块不同，即使固定参数
+        // 已带 --add-opens（ALL-UNNAMED 或 securejarhandler），loader 的
+        // 具名模块开放也必须保留，否则 securejarhandler 类初始化崩溃。
+        let mut args = vec![
+            "--add-opens".to_string(),
+            "java.base/java.lang.invoke=cpw.mods.securejarhandler".to_string(),
+            "-p".to_string(),
+            "module-path".to_string(),
+        ];
+        let loader_args = vec![
+            "--add-modules".to_string(),
+            "ALL-MODULE-PATH".to_string(),
+            "--add-opens".to_string(),
+            "java.base/java.util.jar=cpw.mods.securejarhandler".to_string(),
+            "--add-exports".to_string(),
+            "java.base/sun.security.util=cpw.mods.securejarhandler".to_string(),
+        ];
+
+        append_loader_jvm_args(&mut args, &loader_args);
+
+        assert_eq!(
+            args,
+            vec![
+                "--add-opens",
+                "java.base/java.lang.invoke=cpw.mods.securejarhandler",
+                "-p",
+                "module-path",
+                "--add-modules",
+                "ALL-MODULE-PATH",
+                "--add-opens",
+                "java.base/java.util.jar=cpw.mods.securejarhandler",
+                "--add-exports",
+                "java.base/sun.security.util=cpw.mods.securejarhandler",
+            ]
+        );
+    }
+
+    #[test]
     fn skips_loader_args_whose_key_is_already_effective() {
         // 与 keeps_an_existing_effective_module_path 不同，这里连 -Xss1M、
         // -Djava.library.path 这类普通键也要去重，否则同一参数被拼接多次

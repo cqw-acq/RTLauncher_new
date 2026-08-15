@@ -118,13 +118,21 @@ pub(super) fn append_loader_jvm_args(args: &mut Vec<String>, loader_args: &[Stri
             key.as_str(),
             "-p" | "--module-path" | "-cp" | "--class-path"
         );
+        // --add-opens/--add-exports/--add-reads 可多次出现且每次开放的目标
+        // 模块不同（ALL-UNNAMED vs 具名模块），不能按键去重，否则 loader
+        // 的具名模块参数会被固定参数吞掉（如 java.base/java.lang.invoke 开放
+        // 给 cpw.mods.securejarhandler 就依赖这条不被吞掉）
+        let is_multi_flag = matches!(
+            key.as_str(),
+            "--add-opens" | "--add-exports" | "--add-reads"
+        );
         // 已存在的参数键直接跳过，避免同一参数被拼接多次
         // （如 -Xss1M、-XX:HeapDumpPath、-Djava.library.path 在固定参数、
         // version json jvm 参数、loader 参数三处都可能出现）。
         // -D 风格参数按 `-Dxxx` 前缀比较：两处占位符替换结果可能不同
         // （version json 处理时被替换成 -Dxxx={}，loader 里是真实值），
         // 完整字符串比较会漏掉重复，导致垃圾值混入启动参数。
-        let already_present = args.iter().any(|arg| {
+        let already_present = !is_multi_flag && args.iter().any(|arg| {
             arg == key
                 || (arg.starts_with("-D")
                     && key.starts_with("-D")
@@ -2047,6 +2055,27 @@ pub(super) fn build_jvm_arguments_inner(
             // 不添加针对具名模块的 --add-opens 和 --add-reads
             // 因为这些模块在 Java 启动时还不存在，Forge 会自己创建 ModuleLayer
         ]);
+
+        if uses_module_system {
+            // securejarhandler（Forge/NeoForge 1.17+ 的 jar 处理模块）在类初始化
+            // 时会对 MethodHandles.Lookup.IMPL_LOOKUP 调用 setAccessible，
+            // java.base 必须把 java.lang.invoke 开放给 cpw.mods.securejarhandler
+            // 这个具名模块，否则 UnionFileSystem 类初始化直接崩溃
+            // （ExceptionInInitializerError: Unable to make field ... IMPL_LOOKUP
+            // accessible）。
+            // NeoForge 21.1.x 的 json 只自带 java.util.jar 与 sun.security.util
+            // 两条开放；java.lang.invoke 这条 PCL 等启动器由自身固定参数补齐，
+            // 实例 json 里没有，这里统一兜底（本地自装实例能启动是因为安装器
+            // 把三条都写进了 json，PCL 安装的实例只带两条）。
+            args.extend(vec![
+                "--add-opens".to_string(),
+                "java.base/java.lang.invoke=cpw.mods.securejarhandler".to_string(),
+                "--add-opens".to_string(),
+                "java.base/java.util.jar=cpw.mods.securejarhandler".to_string(),
+                "--add-exports".to_string(),
+                "java.base/sun.security.util=cpw.mods.securejarhandler".to_string(),
+            ]);
+        }
     }
 
     if let Some(logging) = &version_json.logging {
