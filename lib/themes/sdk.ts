@@ -19,6 +19,7 @@ export interface ThemeSDKAccountSource {
 
 export interface ThemeSDKDependencies {
   invoke<T>(command: string, args?: Readonly<Record<string, unknown>>): Promise<T>;
+  allowedUnsafeCommands?: readonly string[];
   accounts: {
     list(): readonly ThemeSDKAccountSource[];
     getActive(): ThemeSDKAccountSource | null;
@@ -59,6 +60,11 @@ interface NativeInstanceSummary {
 }
 
 const STORAGE_KEY_PATTERN = /^[a-zA-Z0-9._-]+$/;
+const HOST_APPROVED_UNSAFE_COMMANDS = new Set([
+  "get_launcher_paths_config",
+  "get_system_info",
+  "get_system_memory",
+]);
 
 function toAccountSummary(account: ThemeSDKAccountSource) {
   return {
@@ -84,6 +90,11 @@ export function createThemeSDK(
   themeId: string,
   dependencies: ThemeSDKDependencies,
 ): RTLauncherThemeSDK {
+  const allowedUnsafeCommands = new Set(
+    (dependencies.allowedUnsafeCommands ?? []).filter((command) =>
+      HOST_APPROVED_UNSAFE_COMMANDS.has(command)
+    ),
+  );
   return {
     accounts: {
       async list() {
@@ -172,6 +183,12 @@ export function createThemeSDK(
     platform: Object.freeze({ ...dependencies.platform }),
     unsafe: {
       async invoke<T>(command: string, args?: Readonly<Record<string, unknown>>) {
+        if (!allowedUnsafeCommands.has(command)) {
+          throw new ThemeSDKError(
+            "THEME_UNSAFE_COMMAND_DENIED",
+            `Tauri command ${command} is not approved for this Theme.`,
+          );
+        }
         try {
           return await dependencies.invoke<T>(command, args);
         } catch (error) {

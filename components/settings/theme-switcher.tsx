@@ -18,6 +18,8 @@ export interface ThemeSwitcherOperations {
   installArchive(path: string): Promise<void>;
   registerDevelopmentDirectory(path: string): Promise<void>;
   removeTheme(themeId: string): Promise<void>;
+  isTrusted(themeId: string, version: string): Promise<boolean>;
+  setTrusted(themeId: string, version: string, trusted: boolean): Promise<void>;
   confirm(message: string): Promise<boolean>;
 }
 
@@ -40,6 +42,11 @@ const DEFAULT_OPERATIONS: ThemeSwitcherOperations = {
     { directory },
   ),
   removeTheme: (themeId) => invoke("theme_remove", { themeId }),
+  isTrusted: (themeId, version) => invoke("theme_is_trusted", { themeId, version }),
+  setTrusted: (themeId, version, trusted) => invoke(
+    "theme_set_trusted",
+    { themeId, version, trusted },
+  ),
   async confirm(message) { return window.confirm(message); },
 };
 
@@ -80,11 +87,13 @@ export function ThemeSwitcher({
 
   const selectTheme = async (themeId: string) => run(async () => {
     if (themeId !== BUILTIN_THEME_ID) {
-      const trustKey = `rtlauncher:theme-trust:${themeId}`;
-      if (localStorage.getItem(trustKey) !== "accepted") {
+      const targetPackage = packages.find((item) => item.manifest.id === themeId);
+      if (!targetPackage) throw new Error(`Theme is not installed: ${themeId}`);
+      const version = targetPackage.manifest.version;
+      if (!await operations.isTrusted(themeId, version)) {
         const accepted = await operations.confirm(t("settings.themeManager.trustWarning"));
         if (!accepted) return;
-        localStorage.setItem(trustKey, "accepted");
+        await operations.setTrusted(themeId, version, true);
       }
     }
     const switched = await theme.activateTheme(themeId);
@@ -118,8 +127,10 @@ export function ThemeSwitcher({
       return;
     }
     update("appearance", { themeId: BUILTIN_THEME_ID });
+    if (activePackage) {
+      await operations.setTrusted(themeId, activePackage.manifest.version, false);
+    }
     await operations.removeTheme(themeId);
-    localStorage.removeItem(`rtlauncher:theme-trust:${themeId}`);
     await theme.refreshThemes();
   });
 

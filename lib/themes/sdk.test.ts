@@ -204,11 +204,12 @@ describe("createThemeSDK", () => {
   it("wraps unsafe invoke failures in a structured error", async () => {
     const cause = new Error("native failure");
     const { deps } = dependencies({
+      allowedUnsafeCommands: ["get_system_info"],
       invoke: async () => { throw cause; },
     });
     const sdk = createThemeSDK("com.example.nebula", deps);
 
-    await expect(sdk.unsafe.invoke("custom_command")).rejects.toEqual(
+    await expect(sdk.unsafe.invoke("get_system_info")).rejects.toEqual(
       expect.objectContaining({
         name: "ThemeSDKError",
         code: "THEME_UNSAFE_INVOKE_FAILED",
@@ -216,5 +217,18 @@ describe("createThemeSDK", () => {
         cause,
       } satisfies Partial<ThemeSDKError>),
     );
+  });
+
+  it("rejects unsafe commands that the host did not approve", async () => {
+    const { deps, invokes } = dependencies();
+    const sdk = createThemeSDK("com.example.nebula", deps);
+
+    await expect(sdk.unsafe.invoke("theme_set_active", {
+      themeId: "com.example.nebula",
+    })).rejects.toMatchObject({
+      name: "ThemeSDKError",
+      code: "THEME_UNSAFE_COMMAND_DENIED",
+    });
+    expect(invokes).toEqual([]);
   });
 });

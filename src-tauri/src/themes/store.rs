@@ -5,6 +5,7 @@ use super::manifest::{
 use super::ThemeStoreError;
 use semver::Version;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::{Read, Seek};
 use std::path::{Path, PathBuf};
@@ -30,6 +31,8 @@ pub struct ThemeStoreState {
     pub pending_theme_id: Option<String>,
     #[serde(default)]
     packages: Vec<ThemePackage>,
+    #[serde(default)]
+    trusted_packages: BTreeMap<String, String>,
 }
 
 impl Default for ThemeStoreState {
@@ -39,6 +42,7 @@ impl Default for ThemeStoreState {
             last_healthy_theme_id: BUILTIN_THEME_ID.into(),
             pending_theme_id: None,
             packages: Vec::new(),
+            trusted_packages: BTreeMap::new(),
         }
     }
 }
@@ -252,6 +256,18 @@ impl ThemeStore {
             self.state.last_healthy_theme_id = BUILTIN_THEME_ID.into();
             self.state.pending_theme_id = None;
         }
+        if self
+            .state
+            .trusted_packages
+            .get(theme_id)
+            .is_some_and(|trusted_version| {
+                removed
+                    .iter()
+                    .any(|package| package.manifest.version == *trusted_version)
+            })
+        {
+            self.state.trusted_packages.remove(theme_id);
+        }
         self.save()
     }
 
@@ -275,6 +291,44 @@ impl ThemeStore {
         }
         self.state.last_healthy_theme_id = theme_id.into();
         self.state.pending_theme_id = None;
+        self.save()
+    }
+
+    pub fn is_trusted(&self, theme_id: &str, version: &str) -> bool {
+        self.state
+            .trusted_packages
+            .get(theme_id)
+            .is_some_and(|trusted_version| trusted_version == version)
+    }
+
+    pub fn set_trusted(
+        &mut self,
+        theme_id: &str,
+        version: &str,
+        trusted: bool,
+    ) -> Result<(), ThemeStoreError> {
+        if trusted
+            && !self.state.packages.iter().any(|package| {
+                package.manifest.id == theme_id && package.manifest.version == version
+            })
+        {
+            return Err(ThemeStoreError::new(
+                "THEME_NOT_FOUND",
+                format!("Theme is not installed: {theme_id} {version}"),
+            ));
+        }
+        if trusted {
+            self.state
+                .trusted_packages
+                .insert(theme_id.into(), version.into());
+        } else if self
+            .state
+            .trusted_packages
+            .get(theme_id)
+            .is_some_and(|trusted_version| trusted_version == version)
+        {
+            self.state.trusted_packages.remove(theme_id);
+        }
         self.save()
     }
 
@@ -595,5 +649,45 @@ mod tests {
         let reopened = ThemeStore::open(&store_path).unwrap();
         assert_eq!(reopened.state().active_theme_id, "com.example.nebula");
         assert_eq!(reopened.state().last_healthy_theme_id, "com.example.nebula");
+    }
+
+    #[test]
+    fn trust_is_stored_for_one_installed_theme_version() {
+        let directory = TempDir::new().expect("create temporary directory");
+        let archive = write_archive(directory.path(), "1.0.0", b"safe");
+        let store_path = directory.path().join("store");
+        {
+            let mut store = ThemeStore::open(&store_path).unwrap();
+            store.install_archive(&archive).unwrap();
+            assert!(!store.is_trusted("com.example.nebula", "1.0.0"));
+            store
+                .set_trusted("com.example.nebula", "1.0.0", true)
+                .unwrap();
+            assert!(store.is_trusted("com.example.nebula", "1.0.0"));
+            assert!(!store.is_trusted("com.example.nebula", "1.1.0"));
+        }
+
+        let mut reopened = ThemeStore::open(&store_path).unwrap();
+        assert!(reopened.is_trusted("com.example.nebula", "1.0.0"));
+        reopened
+            .set_trusted("com.example.nebula", "1.0.0", false)
+            .unwrap();
+        assert!(!reopened.is_trusted("com.example.nebula", "1.0.0"));
+    }
+
+    #[test]
+    fn removing_a_theme_removes_its_trust_record() {
+        let directory = TempDir::new().expect("create temporary directory");
+        let archive = write_archive(directory.path(), "1.0.0", b"safe");
+        let mut store = ThemeStore::open(directory.path().join("store")).unwrap();
+        store.install_archive(&archive).unwrap();
+        store
+            .set_trusted("com.example.nebula", "1.0.0", true)
+            .unwrap();
+
+        store.remove("com.example.nebula", None).unwrap();
+        store.install_archive(&archive).unwrap();
+
+        assert!(!store.is_trusted("com.example.nebula", "1.0.0"));
     }
 }

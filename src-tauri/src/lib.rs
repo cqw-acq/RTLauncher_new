@@ -99,8 +99,9 @@ use version_management::{
 
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 use themes::commands::{
-    theme_install_archive, theme_list, theme_mark_healthy, theme_read_binary, theme_read_text,
-    theme_register_dev_directory, theme_remove, theme_set_active,
+    theme_install_archive, theme_is_trusted, theme_list, theme_mark_healthy, theme_read_binary,
+    theme_read_text, theme_register_dev_directory, theme_remove, theme_set_active,
+    theme_set_trusted,
 };
 
 #[cfg(target_os = "macos")]
@@ -274,6 +275,8 @@ pub fn run() {
             theme_read_binary,
             theme_set_active,
             theme_mark_healthy,
+            theme_is_trusted,
+            theme_set_trusted,
         ])
         .manage(create_updater_state())
         .plugin(tauri_plugin_dialog::init())

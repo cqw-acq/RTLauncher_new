@@ -401,6 +401,7 @@ function ConnectedThemeRuntimeProvider({ children }: { children: ReactNode }) {
       const themeSettings = createThemeSettingsService(themeManifest.id);
       const sdk = createThemeSDK(themeManifest.id, {
         invoke,
+        allowedUnsafeCommands: themeManifest.permissions?.unsafeCommands,
         accounts: {
           list: () => current.current.accounts.profiles,
           getActive: () => current.current.accounts.selectedProfile,

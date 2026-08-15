@@ -37,6 +37,15 @@ describe("Theme manifest JSON Schema", () => {
     }), JSON.stringify(validate.errors)).toBe(true);
   });
 
+  it("accepts an explicit unsafe command request", async () => {
+    const validate = await validator();
+
+    expect(validate({
+      ...validManifest,
+      permissions: { unsafeCommands: ["get_system_info"] },
+    }), JSON.stringify(validate.errors)).toBe(true);
+  });
+
   it.each([
     ["invalid ID", { ...validManifest, id: "Nebula" }],
     ["unsafe entry", { ...validManifest, entry: { script: "../theme.js" } }],

@@ -6,7 +6,7 @@ Theme API 允许用户替换指定的 React 路由和界面插槽。Theme 也可
 
 ## 安全模型
 
-Theme 是受信任的本地代码，不在沙箱中运行。Theme 可以使用稳定 SDK，也可以通过 `sdk.unsafe.invoke` 调用已注册的 Tauri 命令。只安装你信任其作者和来源的 Theme。
+Theme 是受信任的本地代码，不在沙箱中运行。Theme 可以使用稳定 SDK，也可以通过 `sdk.unsafe.invoke` 请求主程序允许的 Tauri 命令。只安装你信任其作者和来源的 Theme。
 
 RTLauncher 对 Theme 包执行以下检查：
 
@@ -167,7 +167,7 @@ Theme 可以替换或包装核心路由，也可以添加本地路由。
 
 其他上下文服务包括 `routes`、`slots`、`assets`、Theme 设置、事件和带有 Theme 前缀的日志记录器。
 
-`sdk.unsafe.invoke(command, args)` 是明确的底层调用入口。此入口没有稳定兼容性保证。Theme 必须在 `disclosures` 中说明它调用的命令和影响。
+`sdk.unsafe.invoke(command, args)` 是明确的底层调用入口。此入口没有稳定兼容性保证。Theme 必须在 `permissions.unsafeCommands` 中请求每个命令，并在 `disclosures` 中说明用途和影响。即使清单请求了某个命令，如果该命令不在主程序允许列表中，RTLauncher 也会拒绝调用。
 
 ## 原生主程序命令
 
@@ -182,6 +182,8 @@ theme_read_text
 theme_read_binary
 theme_set_active
 theme_mark_healthy
+theme_is_trusted
+theme_set_trusted
 ```
 
 普通 Theme 不应直接调用这些命令。除非稳定 SDK 没有所需功能，否则请使用稳定 SDK。

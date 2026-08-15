@@ -6,7 +6,7 @@ The Theme API lets a user replace selected React routes and UI slots. A Theme ca
 
 ## Security model
 
-A Theme is trusted local code. It is not a sandbox. It can use the stable SDK and it can call any registered Tauri command through `sdk.unsafe.invoke`. Install a Theme only when you trust its author and source.
+A Theme is trusted local code. It is not a sandbox. It can use the stable SDK and it can request host-approved Tauri commands through `sdk.unsafe.invoke`. Install a Theme only when you trust its author and source.
 
 RTLauncher applies these package controls:
 
@@ -167,7 +167,7 @@ Slot modes are `replace`, `before`, `after`, and `wrap`. `order` controls two co
 
 Other context services are `routes`, `slots`, `assets`, Theme settings, events, and a Theme-prefixed logger.
 
-`sdk.unsafe.invoke(command, args)` is an explicit escape hatch. It has no stable compatibility guarantee. A Theme must list its use and effect in `disclosures`.
+`sdk.unsafe.invoke(command, args)` is an explicit escape hatch. It has no stable compatibility guarantee. A Theme must request each command in `permissions.unsafeCommands` and list its use and effect in `disclosures`. RTLauncher rejects commands that are not in the host allowlist, even when the manifest requests them.
 
 ## Native host commands
 
@@ -182,6 +182,8 @@ theme_read_text
 theme_read_binary
 theme_set_active
 theme_mark_healthy
+theme_is_trusted
+theme_set_trusted
 ```
 
 Do not call these commands directly from a normal Theme. Use the stable SDK unless a required operation has no stable service.

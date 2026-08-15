@@ -135,6 +135,9 @@ export interface ThemeManifest {
   supports: ThemeSupportDeclaration;
   contributes?: ThemeContributions;
   disclosures?: readonly string[];
+  permissions?: {
+    unsafeCommands?: readonly string[];
+  };
   integrity?: ThemeIntegrity;
   extensions?: Readonly<Record<string, JsonValue>>;
 }

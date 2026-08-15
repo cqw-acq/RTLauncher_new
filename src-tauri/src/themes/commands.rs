@@ -124,3 +124,24 @@ pub fn theme_mark_healthy(
 ) -> Result<(), ThemeStoreError> {
     with_store(manager, |store| store.mark_healthy(&theme_id))
 }
+
+#[tauri::command]
+pub fn theme_is_trusted(
+    manager: State<'_, ThemeStoreManager>,
+    theme_id: String,
+    version: String,
+) -> Result<bool, ThemeStoreError> {
+    with_store(manager, |store| Ok(store.is_trusted(&theme_id, &version)))
+}
+
+#[tauri::command]
+pub fn theme_set_trusted(
+    manager: State<'_, ThemeStoreManager>,
+    theme_id: String,
+    version: String,
+    trusted: bool,
+) -> Result<(), ThemeStoreError> {
+    with_store(manager, |store| {
+        store.set_trusted(&theme_id, &version, trusted)
+    })
+}

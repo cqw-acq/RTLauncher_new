@@ -31,6 +31,7 @@ pub struct ThemeManifest {
     pub contributes: Option<serde_json::Value>,
     #[serde(default)]
     pub disclosures: Vec<String>,
+    pub permissions: Option<ThemePermissions>,
     pub integrity: Option<ThemeIntegrity>,
     pub extensions: Option<serde_json::Value>,
 }
@@ -39,6 +40,13 @@ pub struct ThemeManifest {
 pub struct ThemeAuthor {
     pub name: String,
     pub url: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThemePermissions {
+    #[serde(default)]
+    pub unsafe_commands: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -470,6 +478,26 @@ mod tests {
         assert_eq!(inspected.manifest.version, "1.2.0");
         assert_eq!(inspected.file_count, 3);
         assert!(inspected.total_uncompressed_size > 20);
+    }
+
+    #[test]
+    fn manifest_preserves_requested_unsafe_commands() {
+        let mut value = valid_manifest(b"theme");
+        value["permissions"] = json!({
+            "unsafeCommands": ["get_system_info"]
+        });
+
+        let manifest = parse_theme_manifest(
+            &serde_json::to_vec(&value).expect("serialize manifest"),
+            true,
+        )
+        .expect("parse manifest");
+        let serialized = serde_json::to_value(manifest).expect("serialize parsed manifest");
+
+        assert_eq!(
+            serialized["permissions"]["unsafeCommands"],
+            json!(["get_system_info"])
+        );
     }
 
     #[test]

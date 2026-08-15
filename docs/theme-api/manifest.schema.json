@@ -44,6 +44,7 @@
       "items": { "type": "string", "minLength": 1 },
       "uniqueItems": true
     },
+    "permissions": { "$ref": "#/$defs/permissions" },
     "integrity": { "$ref": "#/$defs/integrity" },
     "extensions": {
       "type": "object",
@@ -63,6 +64,17 @@
       "properties": {
         "name": { "type": "string", "minLength": 1 },
         "url": { "type": "string" }
+      }
+    },
+    "permissions": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "unsafeCommands": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        }
       }
     },
     "engines": {

@@ -53,13 +53,17 @@ function createRuntime(activeThemeId = "builtin.default"): ThemeRuntimeContextVa
   };
 }
 
-function operations(overrides: Partial<ThemeSwitcherOperations> = {}): ThemeSwitcherOperations {
+function operations(
+  overrides: Partial<ThemeSwitcherOperations> = {},
+): ThemeSwitcherOperations {
   return {
     pickArchive: vi.fn(async () => null),
     pickDevelopmentDirectory: vi.fn(async () => null),
     installArchive: vi.fn(async () => undefined),
     registerDevelopmentDirectory: vi.fn(async () => undefined),
     removeTheme: vi.fn(async () => undefined),
+    isTrusted: vi.fn(async () => false),
+    setTrusted: vi.fn(async () => undefined),
     confirm: vi.fn(async () => true),
     ...overrides,
   };
@@ -98,9 +102,17 @@ describe("ThemeSwitcher", () => {
       target: { value: "com.example.nebula" },
     });
 
-    await waitFor(() => expect(actions.confirm).toHaveBeenCalledOnce());
-    expect(runtime.activateTheme).toHaveBeenCalledWith("com.example.nebula");
-    expect(update).toHaveBeenCalledWith("appearance", { themeId: "com.example.nebula" });
+    await waitFor(() => {
+      expect(actions.confirm).toHaveBeenCalledOnce();
+      expect(actions.isTrusted).toHaveBeenCalledWith("com.example.nebula", "1.0.0");
+      expect(actions.setTrusted).toHaveBeenCalledWith(
+        "com.example.nebula",
+        "1.0.0",
+        true,
+      );
+      expect(runtime.activateTheme).toHaveBeenCalledWith("com.example.nebula");
+      expect(update).toHaveBeenCalledWith("appearance", { themeId: "com.example.nebula" });
+    });
   });
 
   it("shows switch failure feedback and keeps the saved Theme", async () => {
