@@ -2,6 +2,8 @@
 
 简体中文 | [English](./README.md)
 
+第一次编写 Theme？请先阅读 [Theme 开发者快速上手](./DEVELOPER-GUIDE.zh-CN.md)。
+
 Theme API 允许用户替换指定的 React 路由和界面插槽。Theme 也可以添加本地路由。对于 Theme 未替换的路由或插槽，RTLauncher 继续使用内置界面。
 
 ## 安全模型
