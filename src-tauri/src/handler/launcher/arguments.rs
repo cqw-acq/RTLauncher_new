@@ -78,6 +78,29 @@ fn shell_split(input: &str) -> Vec<String> {
     tokens
 }
 
+/// 对 -cp / -p 等路径列表参数做去重（保留原有顺序）。
+///
+/// 部分启动器（如 PCL CE）生成的 version.json 会把父版本库与加载器库
+/// 简单拼接而不去重，导致同一个 jar 在 classpath 中出现多次。重复的
+/// 路径会让 NeoForge/Forge 的 UnionFileSystem 在启动阶段直接抛出
+/// "Duplicate key ... (attempted merging values ...)" 并以退出码 1 退出。
+pub(super) fn dedup_path_list(value: &str) -> String {
+    let sep = if value.contains(';') { ';' } else { ':' };
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut parts: Vec<&str> = Vec::new();
+    for piece in value.split(sep) {
+        let piece = piece.trim();
+        if piece.is_empty() {
+            continue;
+        }
+        // Windows 文件系统不区分大小写，统一转小写后去重
+        if seen.insert(piece.to_lowercase()) {
+            parts.push(piece);
+        }
+    }
+    parts.join(&sep.to_string())
+}
+
 /// Add JVM arguments read from a separate loader JSON.
 ///
 /// A selected instance may use the vanilla JSON as `version_name` and a Forge
@@ -100,7 +123,13 @@ pub(super) fn append_loader_jvm_args(args: &mut Vec<String>, loader_args: &[Stri
         if !already_present {
             args.push(key.clone());
             if has_value {
-                args.push(loader_args[index + 1].clone());
+                let value = &loader_args[index + 1];
+                if is_path_key {
+                    // PCL 等启动器写入的 classpath 可能包含重复 jar，去重后再转发
+                    args.push(dedup_path_list(value));
+                } else {
+                    args.push(value.clone());
+                }
             }
         }
 
@@ -1528,6 +1557,13 @@ pub(super) fn build_jvm_arguments_inner(
         println!("使用模块系统，跳过添加游戏JAR到classpath");
     }
 
+    // ===== 关键修复：classpath 去重 =====
+    // 部分启动器生成的 version.json 的 libraries 列表本身含重复项（例如
+    // PCL 的 NeoForge 实例把原版库与加载器库重复拼接），重复 jar 会令
+    // NeoForge 的 UnionFileSystem 抛出 "Duplicate key" 而启动失败，这里统一去重。
+    let mut seen_classpath: HashSet<String> = HashSet::new();
+    class_path_entries.retain(|p| seen_classpath.insert(p.to_lowercase()));
+
     // ===== 预构建 class_path（用于 ${classpath} 占位符替换）=====
     // 必须在 jvm_args_from_version 之前构建，因为 jvm_args_from_version 的 replace_placeholders
     // 会使用这个变量。
@@ -2061,28 +2097,32 @@ pub(super) fn build_jvm_arguments_inner(
                 continue;
             }
 
-            args.push(p.clone());
-            if has_value {
-                // 对于 -p/--module-path，额外检查其中引用的 JAR 是否存在
-                let value = &jvm_args_from_version[i + 1];
-                if is_module_or_class_path_key {
-                    debug!("[HMCL 模式] 使用 Forge 参数: {} 值长度: {}", p, value.len());
-                    // 对于 -p，打印其中的每个路径用于调试
-                    if p == "-p" || p == "--module-path" {
-                        for piece in value.split(|c| c == ';' || c == ':') {
-                            if !piece.trim().is_empty() {
-                                let path_buf = PathBuf::from(piece.trim());
-                                let exists = path_buf.exists();
-                                debug!("  module-path 项: {} (存在: {})", piece.trim(), exists);
+                args.push(p.clone());
+                if has_value {
+                    // 对于 -p/--module-path，额外检查其中引用的 JAR 是否存在
+                    let value = &jvm_args_from_version[i + 1];
+                    if is_module_or_class_path_key {
+                        debug!("[HMCL 模式] 使用 Forge 参数: {} 值长度: {}", p, value.len());
+                        // 对 -cp/-p 的值做去重，避免 PCL 等生成的 json 里重复的
+                        // jar 路径导致 UnionFileSystem "Duplicate key" 崩溃
+                        args.push(dedup_path_list(value));
+                        // 对于 -p，打印其中的每个路径用于调试
+                        if p == "-p" || p == "--module-path" {
+                            for piece in value.split(|c| c == ';' || c == ':') {
+                                if !piece.trim().is_empty() {
+                                    let path_buf = PathBuf::from(piece.trim());
+                                    let exists = path_buf.exists();
+                                    debug!("  module-path 项: {} (存在: {})", piece.trim(), exists);
+                                }
                             }
                         }
+                    } else {
+                        args.push(value.clone());
                     }
+                    i += 2;
+                } else {
+                    i += 1;
                 }
-                args.push(value.clone());
-                i += 2;
-            } else {
-                i += 1;
-            }
         }
     }
 

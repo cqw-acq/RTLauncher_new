@@ -198,13 +198,47 @@ pub fn launch_game(
 #[cfg(test)]
 mod tests {
     use super::{
-        arguments::{append_loader_jvm_args, launcher_rules_allow},
+        arguments::{append_loader_jvm_args, dedup_path_list, launcher_rules_allow},
         identity::launch_auth_identity,
         java_runtime::is_plausible_minecraft_version,
         memory::{safe_max_memory_mb, SafeMemoryLimit},
         process::display_exit_code,
     };
     use serde_json::json;
+
+    #[test]
+    fn removes_duplicate_jars_from_a_loader_classpath() {
+        // PCL CE 生成的 NeoForge 实例 json 会携带字面量 -cp，其中同一
+        // jar 可能因原版库与加载器库重复拼接而出现两次。
+        let mut args = Vec::new();
+        let classpath = format!(
+            "{p}{p}{p2}{p3}",
+            p = "C:/Users/Hill233/AppData/Roaming/.minecraft/libraries/com/google/code/gson/gson/2.10.1/gson-2.10.1.jar;",
+            p2 = "C:/Users/Hill233/AppData/Roaming/.minecraft/libraries/com/mojang/logging/1.2.7/logging-1.2.7.jar;",
+            p3 = "C:/Users/Hill233/AppData/Roaming/.minecraft/libraries/com/google/code/gson/gson/2.10.1/gson-2.10.1.jar"
+        );
+
+        append_loader_jvm_args(&mut args, &["-cp".to_string(), classpath.clone()]);
+
+        let idx = args.iter().position(|a| a == "-cp").unwrap();
+        let value = &args[idx + 1];
+        assert_eq!(value.matches("gson-2.10.1.jar").count(), 1);
+        assert_eq!(value.matches("logging-1.2.7.jar").count(), 1);
+    }
+
+    #[test]
+    fn dedup_path_list_keeps_order_and_case_insensitive_duplicates() {
+        let deduped = dedup_path_list(
+            "C:/a.jar;C:/b.jar;c:/A.JAR;C:/c.jar;C:/b.jar",
+        );
+        assert_eq!(deduped, "C:/a.jar;C:/b.jar;C:/c.jar");
+    }
+
+    #[test]
+    fn dedup_path_list_handles_unix_style_separator() {
+        let deduped = dedup_path_list("/l/a.jar:/l/b.jar:/l/a.jar");
+        assert_eq!(deduped, "/l/a.jar:/l/b.jar");
+    }
 
     #[test]
     fn keeps_loader_module_path_when_vanilla_supplies_classpath() {
