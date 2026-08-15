@@ -31,7 +31,7 @@ pub struct ThemeManifest {
     pub contributes: Option<serde_json::Value>,
     #[serde(default)]
     pub disclosures: Vec<String>,
-    pub integrity: ThemeIntegrity,
+    pub integrity: Option<ThemeIntegrity>,
     pub extensions: Option<serde_json::Value>,
 }
 
@@ -207,13 +207,7 @@ pub fn inspect_theme_archive<R: Read + Seek>(
             "Theme archive does not contain manifest.json.",
         )
     })?;
-    let manifest: ThemeManifest = serde_json::from_slice(manifest_bytes).map_err(|error| {
-        archive_error(
-            "THEME_MANIFEST_INVALID",
-            format!("Cannot parse manifest.json: {error}"),
-        )
-    })?;
-    validate_manifest(&manifest)?;
+    let manifest = parse_theme_manifest(manifest_bytes, true)?;
     verify_integrity(&manifest, &files)?;
 
     Ok(InspectedThemeArchive {
@@ -223,7 +217,24 @@ pub fn inspect_theme_archive<R: Read + Seek>(
     })
 }
 
-fn validate_manifest(manifest: &ThemeManifest) -> Result<(), ThemeStoreError> {
+pub fn parse_theme_manifest(
+    content: &[u8],
+    require_integrity: bool,
+) -> Result<ThemeManifest, ThemeStoreError> {
+    let manifest: ThemeManifest = serde_json::from_slice(content).map_err(|error| {
+        archive_error(
+            "THEME_MANIFEST_INVALID",
+            format!("Cannot parse manifest.json: {error}"),
+        )
+    })?;
+    validate_manifest(&manifest, require_integrity)?;
+    Ok(manifest)
+}
+
+fn validate_manifest(
+    manifest: &ThemeManifest,
+    require_integrity: bool,
+) -> Result<(), ThemeStoreError> {
     let schema_major = manifest
         .schema_version
         .split('.')
@@ -289,11 +300,15 @@ fn validate_manifest(manifest: &ThemeManifest) -> Result<(), ThemeStoreError> {
             "Theme color schemes must contain light or dark.",
         ));
     }
-    if manifest.integrity.algorithm != "sha256" || manifest.integrity.files.is_empty() {
-        return Err(archive_error(
-            "THEME_MANIFEST_INVALID",
-            "Theme integrity must contain SHA-256 hashes.",
-        ));
+    match &manifest.integrity {
+        Some(integrity) if integrity.algorithm == "sha256" && !integrity.files.is_empty() => {}
+        None if !require_integrity => {}
+        _ => {
+            return Err(archive_error(
+                "THEME_MANIFEST_INVALID",
+                "Theme integrity must contain SHA-256 hashes.",
+            ));
+        }
     }
     Ok(())
 }
@@ -319,7 +334,13 @@ fn verify_integrity(
     manifest: &ThemeManifest,
     files: &HashMap<String, Vec<u8>>,
 ) -> Result<(), ThemeStoreError> {
-    for (path, expected) in &manifest.integrity.files {
+    let integrity = manifest.integrity.as_ref().ok_or_else(|| {
+        archive_error(
+            "THEME_MANIFEST_INVALID",
+            "Theme archive does not contain integrity hashes.",
+        )
+    })?;
+    for (path, expected) in &integrity.files {
         validate_package_path(path, "integrity.files")?;
         let content = files.get(path).ok_or_else(|| {
             archive_error(
@@ -345,13 +366,13 @@ fn verify_integrity(
 
     if !manifest
         .integrity
-        .files
-        .contains_key(&manifest.entry.script)
+        .as_ref()
+        .is_some_and(|integrity| integrity.files.contains_key(&manifest.entry.script))
         || manifest
             .entry
             .style
             .as_ref()
-            .is_some_and(|style| !manifest.integrity.files.contains_key(style))
+            .is_some_and(|style| !integrity.files.contains_key(style))
     {
         return Err(archive_error(
             "THEME_INTEGRITY_FAILED",

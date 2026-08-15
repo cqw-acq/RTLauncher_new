@@ -1,4 +1,6 @@
+pub mod commands;
 pub mod manifest;
+pub mod store;
 
 use serde::Serialize;
 use std::fmt::{Display, Formatter};
