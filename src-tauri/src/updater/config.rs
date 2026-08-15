@@ -5,30 +5,25 @@ use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const CONFIG_FILE_NAME: &str = "launcher.json";
-const MIN_CHECK_INTERVAL_SECONDS: i64 = 24 * 3600;
+const MIN_CHECK_INTERVAL_SECONDS: i64 = 60;
 
-const UPDATE_ENDPOINT: &str = "https://api.gitcode.com/api/v5/repos/bubulaladdi/RTLauncher/releases";
+const LIGHTING_TEAM_UPDATE_ENDPOINT: &str =
+    "http://update-service.lighting-team.com/api/v1/versions";
+const GITHUB_UPDATE_ENDPOINT: &str = "https://api.github.com/repos/cqw-acq/RTLauncher_new/releases";
+const LIGHTING_TEAM_ASSET_HOST: &str =
+    "7463-tcb-charcaius-d0gpaxdu6e2408df8-1306022435.tcb.qcloud.la";
 
 /// 允许的更新下载域名白名单。release URL 或重定向目标必须落在这些域名上。
 pub const TRUSTED_DOWNLOAD_HOSTS: &[&str] = &[
-    "gitcode.com",
-    "assets.gitcode.com",
-    "cdn.gitcode.com",
-    "api.gitcode.com",
-    "release.gitcode.com",
-    "files.gitcode.com",
+    "github.com",
+    "githubusercontent.com",
+    LIGHTING_TEAM_ASSET_HOST,
 ];
 
 /// 发布 Release 时，可选地在 Release body 里放一个 SHA-256 清单，匹配格式：
 ///   `SHA256 (filename) = hexhash`  或  `hexhash  filename`  或  `hexhash *filename`
 /// 如果找到与下载附件同名的条目，就必须在安装前通过 SHA-256 校验（fail closed）。
 pub const HASH_TAG: &str = "SHA256SUMS";
-
-pub fn get_target_release_name() -> String {
-    option_env!("UPDATE_TARGET_RELEASE_NAME")
-        .unwrap_or("")
-        .to_string()
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UpdateConfig {
@@ -106,12 +101,35 @@ pub fn is_trusted_download_url(url: &str) -> bool {
         Ok(u) => u,
         Err(_) => return false,
     };
+    if parsed.scheme() != "https" {
+        return false;
+    }
     let Some(host) = parsed.host_str() else {
         return false;
     };
-    TRUSTED_DOWNLOAD_HOSTS.iter().any(|allowed| {
-        host == *allowed || host.ends_with(&format!(".{}", allowed))
-    })
+    TRUSTED_DOWNLOAD_HOSTS
+        .iter()
+        .any(|allowed| host == *allowed || host.ends_with(&format!(".{}", allowed)))
+}
+
+/// 校验 Release 元数据给出的初始附件 URL。初始 URL 必须来自指定仓库或指定存储桶；
+/// 下载过程中的 GitHub CDN 重定向由 `is_trusted_download_url` 单独校验。
+pub fn is_trusted_release_asset_url(url: &str) -> bool {
+    let parsed = match url::Url::parse(url) {
+        Ok(url) if url.scheme() == "https" => url,
+        _ => return false,
+    };
+    let Some(host) = parsed.host_str() else {
+        return false;
+    };
+
+    match host {
+        "github.com" => parsed
+            .path()
+            .starts_with("/cqw-acq/RTLauncher_new/releases/download/"),
+        LIGHTING_TEAM_ASSET_HOST => parsed.path().starts_with("/RTL/releases/"),
+        _ => false,
+    }
 }
 
 pub fn config_dir() -> String {
@@ -144,8 +162,8 @@ fn get_current_timestamp() -> i64 {
         .as_secs() as i64
 }
 
-pub fn get_update_endpoint() -> String {
-    UPDATE_ENDPOINT.to_string()
+pub fn get_update_endpoints() -> [&'static str; 2] {
+    [LIGHTING_TEAM_UPDATE_ENDPOINT, GITHUB_UPDATE_ENDPOINT]
 }
 
 pub fn get_update_config() -> UpdateConfig {
@@ -173,7 +191,8 @@ pub fn save_update_config(update_cfg: UpdateConfig) -> Result<(), String> {
     let path = launcher_config_path();
     let mut value: Value = if path.exists() {
         match fs::read_to_string(&path) {
-            Ok(text) => serde_json::from_str::<Value>(&text).unwrap_or_else(|_| Value::Object(serde_json::Map::new())),
+            Ok(text) => serde_json::from_str::<Value>(&text)
+                .unwrap_or_else(|_| Value::Object(serde_json::Map::new())),
             Err(_) => Value::Object(serde_json::Map::new()),
         }
     } else {
@@ -191,11 +210,14 @@ pub fn should_check_update() -> bool {
     match cfg.last_check_time {
         Some(last_time) => {
             let now = get_current_timestamp();
-            let diff = now - last_time;
-            diff >= MIN_CHECK_INTERVAL_SECONDS
+            has_check_interval_elapsed(last_time, now)
         }
         None => true,
     }
+}
+
+fn has_check_interval_elapsed(last_check: i64, now: i64) -> bool {
+    now.saturating_sub(last_check) >= MIN_CHECK_INTERVAL_SECONDS
 }
 
 pub fn update_last_check_time() -> Result<(), String> {
@@ -239,15 +261,14 @@ pub fn get_current_os() -> String {
     }
 }
 
-pub fn matches_asset_name(asset_name: &str) -> bool {
-    let os = get_current_os();
+pub fn matches_asset_name_for(asset_name: &str, os: &str) -> bool {
     let name_lower = asset_name.to_lowercase();
 
     if name_lower.contains(&os.replace('-', "_")) || name_lower.contains(&os) {
         return true;
     }
 
-    let (os_family, arch) = match os.as_str() {
+    let (os_family, arch) = match os {
         "windows-x86_64" => ("windows", "x86_64"),
         "windows-aarch64" => ("windows", "aarch64"),
         "macos-x86_64" => ("macos", "x86_64"),
@@ -262,6 +283,18 @@ pub fn matches_asset_name(asset_name: &str) -> bool {
         "aarch64" => vec!["aarch64", "arm64", "arm_64"],
         _ => vec![arch],
     };
+
+    let other_arch_keywords: &[&str] = match arch {
+        "x86_64" => &["aarch64", "arm64", "arm_64"],
+        "aarch64" => &["x86_64", "x64", "amd64"],
+        _ => &[],
+    };
+    if other_arch_keywords
+        .iter()
+        .any(|keyword| name_lower.contains(keyword))
+    {
+        return false;
+    }
 
     let family_alt = match os_family {
         "macos" => vec!["macos", "darwin", "mac"],
@@ -341,5 +374,57 @@ pub fn get_current_os_keywords() -> Vec<&'static str> {
     #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
     {
         vec![]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn manual_check_cooldown_opens_at_sixty_seconds() {
+        assert!(!has_check_interval_elapsed(1_000, 1_059));
+        assert!(has_check_interval_elapsed(1_000, 1_060));
+    }
+
+    #[test]
+    fn updater_accepts_only_configured_release_hosts() {
+        assert!(is_trusted_download_url(
+            "https://github.com/cqw-acq/RTLauncher_new/releases/download/1.2.0/app.exe"
+        ));
+        assert!(is_trusted_download_url(
+            "https://release-assets.githubusercontent.com/github-production-release-asset/app.exe"
+        ));
+        assert!(is_trusted_download_url(
+            "https://7463-tcb-charcaius-d0gpaxdu6e2408df8-1306022435.tcb.qcloud.la/RTL/releases/1.2.0/app.exe"
+        ));
+        assert!(!is_trusted_download_url(
+            "http://7463-tcb-charcaius-d0gpaxdu6e2408df8-1306022435.tcb.qcloud.la/RTL/releases/1.2.0/app.exe"
+        ));
+        assert!(!is_trusted_download_url(
+            "https://gitcode.com/bubulaladdi/RTLauncher/releases/download/1.2.0/app.exe"
+        ));
+        assert!(!is_trusted_download_url(
+            "https://example.com/RTLauncher/app.exe"
+        ));
+    }
+
+    #[test]
+    fn initial_asset_url_is_limited_to_the_configured_repository_or_bucket() {
+        assert!(is_trusted_release_asset_url(
+            "https://github.com/cqw-acq/RTLauncher_new/releases/download/1.2.0/app.exe"
+        ));
+        assert!(is_trusted_release_asset_url(
+            "https://7463-tcb-charcaius-d0gpaxdu6e2408df8-1306022435.tcb.qcloud.la/RTL/releases/1.2.0/app.exe"
+        ));
+        assert!(!is_trusted_release_asset_url(
+            "https://github.com/another-owner/another-repo/releases/download/1.2.0/app.exe"
+        ));
+        assert!(!is_trusted_release_asset_url(
+            "https://another-bucket.tcb.qcloud.la/RTL/releases/1.2.0/app.exe"
+        ));
+        assert!(!is_trusted_release_asset_url(
+            "https://release-assets.githubusercontent.com/github-production-release-asset/app.exe"
+        ));
     }
 }
