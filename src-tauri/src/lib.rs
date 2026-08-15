@@ -8,10 +8,11 @@ mod auth;
 mod downloader;
 mod handler;
 mod http_client;
-mod multiplayer;
+mod mutiplayer;
 mod themes;
 mod updater;
 mod version_management;
+use handler::announcements::{sync_announcements, get_announcements};
 use auth::littleskinLoader::{useMethod, use_method_with_credentials};
 use auth::official::{
     delete_cached_skin, get_skin_base64, ms_activate_skin, ms_cancel_login, ms_delete_skin,
@@ -82,13 +83,11 @@ use handler::diagnostics::{
     export_launch_report, check_mod_installed,
 };
 use handler::mod_links::{get_modrinth_required_dependencies, get_curseforge_required_dependencies};
-use multiplayer::{
+use mutiplayer::{
     ensure_openp2p_stopped, mp_check_openp2p, mp_encode_room_info, mp_get_openp2p_dir,
     mp_get_openp2p_path, mp_install_openp2p, mp_is_openp2p_running, mp_poll_log,
-    mp_start_openp2p_host, mp_start_openp2p_join, mp_stop_openp2p,
+    mp_start_openp2p_host, mp_start_openp2p_join, mp_stop_openp2p, quick_kill_openp2p,
 };
-#[cfg(target_os = "windows")]
-use multiplayer::quick_kill_openp2p;
 use updater::handler::{
     cancel_update, can_check_update, check_for_updates, create_updater_state, download_update,
     get_target_version, get_update_status, install_update,
@@ -167,6 +166,8 @@ pub fn run() {
             mp_get_openp2p_dir,
             mp_get_openp2p_path,
             vm_scan_instances,
+            sync_announcements,
+            get_announcements,
             vm_find_resource_packs,
             vm_parse_level_dat,
             vm_modify_game_rule,
@@ -325,6 +326,23 @@ pub fn run() {
 
                 win_builder.build()?
             };
+
+            // 在后台异步同步公告到本地（非阻塞启动）。使用默认仓库与路径，可按需改为可配置项。
+            {
+                let app_handle = app.handle();
+                std::thread::spawn(move || {
+                    match handler::announcements::sync_announcements(
+                        "cqw-acq".to_string(),
+                        "RTLauncher_new".to_string(),
+                        "contents".to_string(),
+                        Some("main".to_string()),
+                    ) {
+                        Ok(count) => log::info!("synced {} announcements on startup", count),
+                        Err(e) => log::warn!("sync_announcements failed on startup: {}", e),
+                    }
+                    let _ = app_handle; // keep handle capture for future use
+                });
+            }
 
             // 注册窗口关闭事件：关闭窗口时立即停止 openp2p 进程
             // 注意：这里只做一次快速的 killall（避免阻塞窗口关闭流程）

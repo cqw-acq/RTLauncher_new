@@ -19,6 +19,7 @@ pub mod mod_links;
 pub mod mod_parser;
 #[allow(dead_code)]
 pub mod modpack_builder;
+pub mod announcements;
 #[allow(non_snake_case)]
 pub mod modpack_installer_handler;
 #[allow(dead_code, non_snake_case)]
