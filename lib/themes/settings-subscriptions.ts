@@ -7,6 +7,12 @@ export class ThemeSettingsSubscriptions {
   }
 
   notify(): void {
-    [...this.listeners].forEach((listener) => listener());
+    [...this.listeners].forEach((listener) => {
+      try {
+        listener();
+      } catch (error) {
+        console.error("Theme settings listener failed.", error);
+      }
+    });
   }
 }
