@@ -10,7 +10,9 @@ import {
   useRef,
   useState,
   useSyncExternalStore,
+  type Dispatch,
   type ReactNode,
+  type SetStateAction,
 } from "react";
 import { usePathname, useRouter } from "next/navigation";
 
@@ -98,31 +100,74 @@ const EMPTY_ASSETS: ThemeAssetService = {
   release() {},
 };
 
-function ThemeRuntimeProviderCore({
-  children,
-  dependencies,
-}: Required<ThemeRuntimeProviderProps>) {
-  const dependenciesRef = useRef(dependencies);
-  dependenciesRef.current = dependencies;
-  const routes = useMemo(() => new ThemeRouteRegistry(), []);
-  const slots = useMemo(() => new ThemeSlotRegistry(), []);
-  const bundles = useRef(new Map<string, LoadedThemeBundle>());
-  const packagesRef = useRef<ThemeInstalledPackage[]>([]);
-  const runtime = useMemo(() => new ThemeRuntime({
+class ThemeRuntimeMutableState {
+  packages: ThemeInstalledPackage[] = [];
+  readonly bundles = new Map<string, LoadedThemeBundle>();
+  activateTheme: (themeId: string) => Promise<boolean> = async () => false;
+
+  constructor(public dependencies: ThemeHostDependencies) {}
+
+  updateDependencies(dependencies: ThemeHostDependencies) {
+    this.dependencies = dependencies;
+  }
+
+  updatePackages(packages: ThemeInstalledPackage[]) {
+    this.packages = packages;
+  }
+
+  updateActivateTheme(activateTheme: (themeId: string) => Promise<boolean>) {
+    this.activateTheme = activateTheme;
+  }
+}
+
+function createRuntime(
+  routes: ThemeRouteRegistry,
+  slots: ThemeSlotRegistry,
+  mutableState: ThemeRuntimeMutableState,
+) {
+  return new ThemeRuntime({
     appVersion: "1.0.0",
     platform: detectPlatform(),
     routes,
     slots,
     isDevelopmentTheme(manifest) {
-      return packagesRef.current.some(
+      return mutableState.packages.some(
         (item) => item.development && item.manifest.id === manifest.id,
       );
     },
     createContextServices(manifest) {
-      const assets = bundles.current.get(manifest.id)?.assets ?? EMPTY_ASSETS;
-      return dependenciesRef.current.createContextServices(manifest, assets);
+      const assets = mutableState.bundles.get(manifest.id)?.assets ?? EMPTY_ASSETS;
+      return mutableState.dependencies.createContextServices(manifest, assets);
     },
-  }), [routes, slots]);
+  });
+}
+
+function createHealthMonitor(
+  healthyDelayMs: number | undefined,
+  mutableState: ThemeRuntimeMutableState,
+  setError: Dispatch<SetStateAction<Error | null>>,
+) {
+  return new ThemeHealthMonitor({
+    healthyDelayMs,
+    onHealthy(themeId) {
+      return mutableState.dependencies.markHealthy(themeId).catch((cause) => {
+        setError(cause instanceof Error ? cause : new Error(String(cause)));
+      });
+    },
+    async onRollback() {
+      await mutableState.activateTheme(BUILTIN_THEME_ID);
+    },
+  });
+}
+
+function ThemeRuntimeProviderCore({
+  children,
+  dependencies,
+}: Required<ThemeRuntimeProviderProps>) {
+  const [mutableState] = useState(() => new ThemeRuntimeMutableState(dependencies));
+  const [routes] = useState(() => new ThemeRouteRegistry());
+  const [slots] = useState(() => new ThemeSlotRegistry());
+  const [runtime] = useState(() => createRuntime(routes, slots, mutableState));
   const snapshot = useSyncExternalStore(
     (listener) => runtime.subscribe(listener),
     () => runtime.getSnapshot(),
@@ -131,43 +176,38 @@ function ThemeRuntimeProviderCore({
   const [packages, setPackages] = useState<ThemeInstalledPackage[]>([]);
   const [ready, setReady] = useState(false);
   const [error, setError] = useState<Error | null>(null);
-  const activateThemeRef = useRef<(themeId: string) => Promise<boolean>>(async () => false);
-  const healthMonitor = useMemo(() => new ThemeHealthMonitor({
-    healthyDelayMs: dependencies.healthDelayMs,
-    onHealthy(themeId) {
-      return dependenciesRef.current.markHealthy(themeId).catch((cause) => {
-        setError(cause instanceof Error ? cause : new Error(String(cause)));
-      });
-    },
-    async onRollback() {
-      await activateThemeRef.current(BUILTIN_THEME_ID);
-    },
-  }), [dependencies.healthDelayMs]);
+  const [healthMonitor] = useState(
+    () => createHealthMonitor(dependencies.healthDelayMs, mutableState, setError),
+  );
+
+  useEffect(() => {
+    mutableState.updateDependencies(dependencies);
+  }, [dependencies, mutableState]);
 
   const refreshThemes = useCallback(async () => {
-    const store = await dependenciesRef.current.loadStore();
-    packagesRef.current = store.packages;
+    const store = await mutableState.dependencies.loadStore();
+    mutableState.updatePackages(store.packages);
     setPackages(store.packages);
-  }, []);
+  }, [mutableState]);
 
   const findPackage = useCallback((themeId: string) => {
-    return packagesRef.current.find((item) => item.manifest.id === themeId);
-  }, []);
+    return mutableState.packages.find((item) => item.manifest.id === themeId);
+  }, [mutableState]);
 
   const prepareTheme = useCallback(async (themeId: string) => {
     if (runtime.getSnapshot().preparedThemeIds.includes(themeId)) return;
     const themePackage = findPackage(themeId);
     if (!themePackage) throw new Error(`Theme is not installed: ${themeId}`);
-    const loaded = await dependenciesRef.current.loadBundle(themePackage.manifest);
-    bundles.current.set(themeId, loaded);
+    const loaded = await mutableState.dependencies.loadBundle(themePackage.manifest);
+    mutableState.bundles.set(themeId, loaded);
     try {
       await runtime.prepareTheme(themePackage.manifest, loaded.definition);
     } catch (cause) {
-      bundles.current.delete(themeId);
+      mutableState.bundles.delete(themeId);
       loaded.unload();
       throw cause;
     }
-  }, [findPackage, runtime]);
+  }, [findPackage, mutableState, runtime]);
 
   const activateTheme = useCallback(async (themeId: string): Promise<boolean> => {
     const previousThemeId = runtime.getSnapshot().activeThemeId;
@@ -175,7 +215,7 @@ function ThemeRuntimeProviderCore({
     setError(null);
     try {
       if (themeId !== BUILTIN_THEME_ID) await prepareTheme(themeId);
-      await dependenciesRef.current.setActive(themeId);
+      await mutableState.dependencies.setActive(themeId);
       await runtime.activateTheme(themeId);
       healthMonitor.start(themeId);
       return true;
@@ -186,13 +226,16 @@ function ThemeRuntimeProviderCore({
         if (runtime.getSnapshot().activeThemeId !== previousThemeId) {
           await runtime.activateTheme(previousThemeId);
         }
-        await dependenciesRef.current.setActive(previousThemeId);
+        await mutableState.dependencies.setActive(previousThemeId);
         healthMonitor.start(previousThemeId);
       } catch {}
       return false;
     }
-  }, [healthMonitor, prepareTheme, runtime]);
-  activateThemeRef.current = activateTheme;
+  }, [healthMonitor, mutableState, prepareTheme, runtime]);
+
+  useEffect(() => {
+    mutableState.updateActivateTheme(activateTheme);
+  }, [activateTheme, mutableState]);
 
   const reportThemeError = useCallback((themeError: Error) => {
     const activeThemeId = runtime.getSnapshot().activeThemeId;
@@ -207,15 +250,15 @@ function ThemeRuntimeProviderCore({
       setError(new Error(`Theme is not installed: ${themeId}`));
       return false;
     }
-    const previous = bundles.current.get(themeId);
+    const previous = mutableState.bundles.get(themeId);
     try {
-      const loaded = await dependenciesRef.current.loadBundle(themePackage.manifest);
-      bundles.current.set(themeId, loaded);
+      const loaded = await mutableState.dependencies.loadBundle(themePackage.manifest);
+      mutableState.bundles.set(themeId, loaded);
       try {
         await runtime.reloadTheme(themePackage.manifest, loaded.definition);
       } catch (cause) {
-        if (previous) bundles.current.set(themeId, previous);
-        else bundles.current.delete(themeId);
+        if (previous) mutableState.bundles.set(themeId, previous);
+        else mutableState.bundles.delete(themeId);
         loaded.unload();
         throw cause;
       }
@@ -226,13 +269,13 @@ function ThemeRuntimeProviderCore({
       setError(cause instanceof Error ? cause : new Error(String(cause)));
       return false;
     }
-  }, [findPackage, runtime]);
+  }, [findPackage, mutableState, runtime]);
 
   useEffect(() => {
     let cancelled = false;
-    void dependenciesRef.current.loadStore().then(async (store) => {
+    void mutableState.dependencies.loadStore().then(async (store) => {
       if (cancelled) return;
-      packagesRef.current = store.packages;
+      mutableState.updatePackages(store.packages);
       setPackages(store.packages);
       if (store.activeThemeId !== BUILTIN_THEME_ID) {
         try {
@@ -247,8 +290,8 @@ function ThemeRuntimeProviderCore({
           if (!cancelled) {
             setError(cause instanceof Error ? cause : new Error(String(cause)));
             try {
-              await dependenciesRef.current.setActive(BUILTIN_THEME_ID);
-              await dependenciesRef.current.markHealthy(BUILTIN_THEME_ID);
+              await mutableState.dependencies.setActive(BUILTIN_THEME_ID);
+              await mutableState.dependencies.markHealthy(BUILTIN_THEME_ID);
             } catch {}
           }
         }
@@ -260,11 +303,11 @@ function ThemeRuntimeProviderCore({
     });
     return () => {
       cancelled = true;
-      bundles.current.forEach((bundle) => bundle.unload());
-      bundles.current.clear();
+      mutableState.bundles.forEach((bundle) => bundle.unload());
+      mutableState.bundles.clear();
       healthMonitor.dispose();
     };
-  }, [healthMonitor, prepareTheme, runtime]);
+  }, [healthMonitor, mutableState, prepareTheme, runtime]);
 
   useEffect(() => {
     if (snapshot.activeThemeId === BUILTIN_THEME_ID) return;
@@ -286,14 +329,14 @@ function ThemeRuntimeProviderCore({
     const activePackage = packages.find(
       (item) => item.development && item.manifest.id === snapshot.activeThemeId,
     );
-    if (!activePackage || !dependenciesRef.current.watchDevelopmentTheme) return;
+    if (!activePackage || !mutableState.dependencies.watchDevelopmentTheme) return;
     const watcher = new DevelopmentThemeWatcher({
       async reload(themeId) {
         await refreshThemes();
         await reloadTheme(themeId);
       },
     });
-    const stop = dependenciesRef.current.watchDevelopmentTheme(
+    const stop = mutableState.dependencies.watchDevelopmentTheme(
       activePackage,
       () => watcher.notifyChange(activePackage.manifest.id),
     );
@@ -301,7 +344,7 @@ function ThemeRuntimeProviderCore({
       stop();
       watcher.dispose();
     };
-  }, [packages, refreshThemes, reloadTheme, snapshot.activeThemeId]);
+  }, [mutableState, packages, refreshThemes, reloadTheme, snapshot.activeThemeId]);
 
   useEffect(() => {
     document.documentElement.setAttribute("data-rtl-theme", snapshot.activeThemeId);
@@ -341,7 +384,10 @@ function ConnectedThemeRuntimeProvider({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const eventBus = useMemo(() => new ThemeEventBus(), []);
   const current = useRef({ accounts, downloads, launch, settings, t, language, router, pathname });
-  current.current = { accounts, downloads, launch, settings, t, language, router, pathname };
+
+  useEffect(() => {
+    current.current = { accounts, downloads, launch, settings, t, language, router, pathname };
+  }, [accounts, downloads, language, launch, pathname, router, settings, t]);
 
   const dependencies = useMemo<ThemeHostDependencies>(() => ({
     loadStore: () => invoke<ThemeStoreView>("theme_list"),

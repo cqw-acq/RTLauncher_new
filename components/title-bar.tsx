@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useState, useSyncExternalStore } from 'react'
 import { Copy, Maximize2, Minus, X } from 'lucide-react'
 
 import { ModeToggle } from '@/components/mode-toggle'
@@ -76,13 +76,13 @@ function WindowButton({ onClick, title, children, className }: WindowButtonProps
 export function TitleBar({ className }: TitleBarProps) {
   const { slots, snapshot, reportThemeError } = useThemeRuntime()
   const themeSlot = { registry: slots, owner: snapshot.activeOwner, onError: reportThemeError }
-  const [isMacOS, setIsMacOS] = useState(false)
+  const isMacOS = useSyncExternalStore(
+    () => () => undefined,
+    detectMacOS,
+    () => false
+  )
   const [isMaximized, setIsMaximized] = useState(false)
   const [windowApi, setWindowApi] = useState<WindowApi | null>(null)
-
-  useEffect(() => {
-    setIsMacOS(detectMacOS())
-  }, [])
 
   useEffect(() => {
     let unlisten: (() => void) | undefined

@@ -2,7 +2,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { FolderCode, PackagePlus, RefreshCw, Trash2 } from "lucide-react";
 
 import { useI18n } from "@/components/i18n/use-i18n";
@@ -43,6 +43,14 @@ const DEFAULT_OPERATIONS: ThemeSwitcherOperations = {
   async confirm(message) { return window.confirm(message); },
 };
 
+function uniquePackages(packages: ReturnType<typeof useThemeRuntime>["packages"]) {
+  const byId = new Map<string, (typeof packages)[number]>();
+  packages.forEach((item) => {
+    if (!byId.has(item.manifest.id)) byId.set(item.manifest.id, item);
+  });
+  return [...byId.values()];
+}
+
 export function ThemeSwitcher({
   operations = DEFAULT_OPERATIONS,
 }: {
@@ -53,13 +61,7 @@ export function ThemeSwitcher({
   const theme = useThemeRuntime();
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
-  const packages = useMemo(() => {
-    const byId = new Map<string, (typeof theme.packages)[number]>();
-    theme.packages.forEach((item) => {
-      if (!byId.has(item.manifest.id)) byId.set(item.manifest.id, item);
-    });
-    return [...byId.values()];
-  }, [theme.packages]);
+  const packages = uniquePackages(theme.packages);
   const activePackage = packages.find(
     (item) => item.manifest.id === theme.snapshot.activeThemeId,
   );
