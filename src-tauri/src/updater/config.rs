@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const CONFIG_FILE_NAME: &str = "launcher.json";
-const MIN_CHECK_INTERVAL_SECONDS: i64 = 60;
+const MIN_CHECK_INTERVAL_SECONDS: i64 = 5;
 
 const LIGHTING_TEAM_UPDATE_ENDPOINT: &str =
     "http://update-service.lighting-team.com/api/v1/versions";
@@ -33,6 +33,8 @@ pub struct UpdateConfig {
     pub current_version: String,
     #[serde(default)]
     pub target_version: Option<String>,
+    #[serde(default)]
+    pub changelog: Option<String>,
     #[serde(default)]
     pub target_os: Option<String>,
     #[serde(default)]
@@ -79,6 +81,7 @@ impl Default for UpdateConfig {
             last_check_time: None,
             current_version: env!("CARGO_PKG_VERSION").to_string(),
             target_version: None,
+            changelog: None,
             target_os: None,
             download_url: None,
             file_size: None,
@@ -382,9 +385,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn manual_check_cooldown_opens_at_sixty_seconds() {
-        assert!(!has_check_interval_elapsed(1_000, 1_059));
-        assert!(has_check_interval_elapsed(1_000, 1_060));
+    fn manual_check_cooldown_opens_at_five_seconds() {
+        assert!(!has_check_interval_elapsed(1_000, 1_004));
+        assert!(has_check_interval_elapsed(1_000, 1_005));
     }
 
     #[test]

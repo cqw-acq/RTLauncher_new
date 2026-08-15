@@ -32,6 +32,7 @@ type UpdateStatus =
 interface UpdateInfo {
   status: UpdateStatus;
   version?: string;
+  changelog?: string;
   errorMessage?: string;
   canCheck: boolean;
   lastCheckTime?: number;
@@ -43,6 +44,7 @@ interface UpdateCheckResult {
   current_version: string;
   target_version: string | null;
   message: string;
+  changelog: string | null;
 }
 
 function readAutoStartFlag(): boolean {
@@ -51,9 +53,16 @@ function readAutoStartFlag(): boolean {
   return sp.get("autoStart") === "1";
 }
 
+function readPreparedVersion(): string | null {
+  if (typeof window === "undefined") return null;
+  const version = new URLSearchParams(window.location.search).get("preparedVersion");
+  return version?.trim() || null;
+}
+
 export default function CheckUpdatePage() {
   const router = useRouter();
   const [autoStart] = useState<boolean>(() => readAutoStartFlag());
+  const [preparedVersion] = useState<string | null>(() => readPreparedVersion());
   const autoStartedRef = useRef(false);
 
   const { t } = useI18n();
@@ -66,10 +75,57 @@ export default function CheckUpdatePage() {
 
   useEffect(() => {
     loadVersion();
+    if (autoStart) {
+      if (autoStartedRef.current) return;
+      autoStartedRef.current = true;
+    }
+
+    if (autoStart && preparedVersion) {
+      const startPreparedUpdate = async () => {
+        try {
+          const config = await invoke<{
+            status: string;
+            target_version?: string;
+            changelog?: string;
+          }>("get_update_status");
+          if (
+            config.status !== "available" ||
+            config.target_version !== preparedVersion
+          ) {
+            setInfo({
+              status: "error",
+              errorMessage: t("checkUpdate.preparedUpdateExpired"),
+              canCheck: true,
+            });
+            return;
+          }
+
+          setInfo({
+            status: "available",
+            version: preparedVersion,
+            changelog: config.changelog ?? "",
+            canCheck: true,
+            lastCheckTime: Math.floor(Date.now() / 1000),
+          });
+          const downloadOk = await handleDownload();
+          if (downloadOk) {
+            setTimeout(() => handleInstall(), 600);
+          }
+        } catch (error) {
+          setInfo({
+            status: "error",
+            errorMessage: error instanceof Error ? error.message : String(error),
+            canCheck: true,
+          });
+        }
+      };
+      void startPreparedUpdate();
+      return;
+    }
+
     handleCheck(autoStart).then(async (hadUpdate) => {
       if (autoStart && hadUpdate) {
         // 启动自动下载 → 下载完成自动安装
-        autoStartedRef.current = true;
         const downloadOk = await handleDownload();
         if (downloadOk) {
           // 小延迟让用户看到"已下载"状态
@@ -116,7 +172,7 @@ export default function CheckUpdatePage() {
   };
 
   /**
-   * @param force 是否强制跳过 60 秒间隔（启动自动跳转时传 true）
+   * @param force 是否强制跳过 5 秒间隔（启动自动跳转时传 true）
    * @returns 是否发现有新版本可用
    */
   const handleCheck = async (force = false): Promise<boolean> => {
@@ -139,6 +195,7 @@ export default function CheckUpdatePage() {
         setInfo({
           status: "available",
           version: result.target_version,
+          changelog: result.changelog ?? "",
           canCheck: true,
           lastCheckTime: Math.floor(Date.now() / 1000),
         });
@@ -312,6 +369,23 @@ export default function CheckUpdatePage() {
                 </div>
               )}
 
+              {info.changelog !== undefined && (
+                <div className="rounded-lg border border-border bg-muted/30 p-4">
+                  <p className="mb-2 text-sm font-medium">
+                    {t("checkUpdate.releaseNotes")}
+                  </p>
+                  {info.changelog ? (
+                    <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words text-xs leading-relaxed text-foreground/80">
+                      {info.changelog}
+                    </pre>
+                  ) : (
+                    <p className="text-xs text-muted-foreground">
+                      {t("checkUpdate.noReleaseNotesAvailable")}
+                    </p>
+                  )}
+                </div>
+              )}
+
               {info.status === "downloaded" && info.version && (
                 <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-4">
                   <div className="flex items-center gap-2">
@@ -423,7 +497,6 @@ export default function CheckUpdatePage() {
           <Card>
             <CardContent className="pt-6">
               <div className="text-xs text-muted-foreground space-y-2">
-                <p>{t("checkUpdate.updateIntervalNotice")}</p>
                 {info.lastCheckTime && (
                   <p>
                     {t("checkUpdate.lastCheckTime")}:{" "}

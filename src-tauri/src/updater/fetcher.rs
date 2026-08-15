@@ -204,6 +204,21 @@ fn select_latest_candidate<'a>(
         .max_by_key(|(release, _)| release.source.priority())
 }
 
+fn available_update_result(
+    current_version: &str,
+    release: &NormalizedRelease,
+) -> UpdateCheckResult {
+    let changelog = (!release.notes.trim().is_empty()).then(|| release.notes.clone());
+    UpdateCheckResult {
+        needs_check: true,
+        update_available: true,
+        current_version: current_version.to_string(),
+        target_version: Some(release.version.to_string()),
+        message: "发现新版本可用".to_string(),
+        changelog,
+    }
+}
+
 fn filename_from_download_url(download_url: &str) -> Result<String, String> {
     let parsed = url::Url::parse(download_url).map_err(|e| format!("更新下载地址无效: {}", e))?;
     let encoded_name = parsed
@@ -572,7 +587,8 @@ impl UpdateFetcher {
                 update_available: cached_update_available,
                 current_version: current_version.to_string(),
                 target_version: cfg.target_version,
-                message: "距上次检查不足60秒，请稍后再试".to_string(),
+                message: "距上次检查不足5秒，请稍后再试".to_string(),
+                changelog: cfg.changelog,
             });
         }
 
@@ -628,6 +644,7 @@ impl UpdateFetcher {
 
         let Some(release) = selected_release else {
             cfg.target_version = None;
+            cfg.changelog = None;
             cfg.target_os = None;
             cfg.download_url = None;
             cfg.file_size = None;
@@ -644,6 +661,7 @@ impl UpdateFetcher {
                 } else {
                     "当前已是最新版本".to_string()
                 },
+                changelog: None,
             });
         };
 
@@ -653,6 +671,7 @@ impl UpdateFetcher {
                 release.version, current_os
             );
             cfg.target_version = None;
+            cfg.changelog = None;
             cfg.target_os = None;
             cfg.download_url = None;
             cfg.file_size = None;
@@ -665,11 +684,13 @@ impl UpdateFetcher {
                 current_version: current_version.to_string(),
                 target_version: None,
                 message,
+                changelog: None,
             });
         };
 
         let release_version = release.version.to_string();
         cfg.target_version = Some(release_version.clone());
+        cfg.changelog = (!release.notes.trim().is_empty()).then(|| release.notes.clone());
         cfg.target_os = Some(current_os);
         cfg.download_url = Some(asset.browser_download_url.clone());
         cfg.file_size = asset.size;
@@ -677,17 +698,7 @@ impl UpdateFetcher {
         cfg.status = UpdateStatus::Available;
         let _ = save_update_config(cfg);
 
-        Ok(UpdateCheckResult {
-            needs_check: true,
-            update_available: true,
-            current_version: current_version.to_string(),
-            target_version: Some(release_version),
-            message: if release.notes.trim().is_empty() {
-                "发现新版本可用".to_string()
-            } else {
-                release.notes.clone()
-            },
-        })
+        Ok(available_update_result(current_version, release))
     }
 
     pub async fn download_update(&self) -> Result<DownloadResult, String> {
@@ -1383,6 +1394,7 @@ pub struct UpdateCheckResult {
     pub current_version: String,
     pub target_version: Option<String>,
     pub message: String,
+    pub changelog: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1511,6 +1523,27 @@ mod tests {
             select_latest_release(&releases, "1.1.0").map(|release| release.notes.as_str()),
             Some("primary notes")
         );
+    }
+
+    #[test]
+    fn available_update_returns_release_notes_as_changelog() {
+        let json = r#"{
+            "tag_name":"1.2.0","name":"1.2.0",
+            "body":{"update_info":"Added startup notifications","sum":{}},
+            "prerelease":false,"assets":[]
+        }"#;
+        let releases = parse_release_response(json).expect("fixture must parse");
+        let release =
+            select_latest_release(&releases, "1.1.0").expect("fixture must contain an update");
+
+        let result = available_update_result("1.1.0", release);
+
+        assert_eq!(result.target_version.as_deref(), Some("1.2.0"));
+        assert_eq!(
+            result.changelog.as_deref(),
+            Some("Added startup notifications")
+        );
+        assert_eq!(result.message, "发现新版本可用");
     }
 
     #[test]

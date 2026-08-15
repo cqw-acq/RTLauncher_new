@@ -11,39 +11,29 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { check } from "@tauri-apps/plugin-updater";
-import { invoke } from "@tauri-apps/api/core";
 import { useI18n } from "@/components/i18n/use-i18n";
 import type { AppLanguage } from "@/components/settings/settings-provider";
 
 /**
- * 自动更新组件 — 支持两种使用模式：
- *   - 后台静默检查：不弹窗，仅更新内部状态（用于启动时）
- *   - 用户点击检查：弹窗显示结果
+ * 自动更新组件 — 提供共享更新状态、主页提示和手动更新操作。
+ * 启动检查及 changelog 弹窗由 StartupUpdateNotifier 负责。
  *
  * 通过 AppUpdateProvider 共享状态，AppUpdateBadge 在主页显示小的更新提示。
  */
 
-type UpdateState =
+export type UpdateState =
   | { kind: "idle" }
   | { kind: "checking" }
-  | { kind: "available"; version: string; notes: string }
+  | { kind: "available"; version: string; notes: string; prepared: boolean }
   | { kind: "up-to-date" }
   | { kind: "error"; message: string };
-
-interface UpdateCheckResult {
-  needs_check: boolean;
-  update_available: boolean;
-  current_version: string;
-  target_version: string | null;
-  message: string;
-}
 
 // ---- Provider：全局共享更新状态 ----
 
 let _state: UpdateState = { kind: "idle" };
 const _listeners = new Set<(s: UpdateState) => void>();
 
-function setState(s: UpdateState) {
+export function setAppUpdateState(s: UpdateState) {
   _state = s;
   for (const l of _listeners) l(s);
 }
@@ -53,17 +43,18 @@ function updateAlert(language: AppLanguage, chinese: string, english: string) {
 }
 
 async function checkInBackground(showError = false, language: AppLanguage = "zh-CN") {
-  setState({ kind: "checking" });
+  setAppUpdateState({ kind: "checking" });
   try {
     const update = await check();
     if (update?.available) {
-      setState({
+      setAppUpdateState({
         kind: "available",
         version: update.version ?? "",
         notes: (update.body ?? "").toString(),
+        prepared: false,
       });
     } else {
-      setState({ kind: "up-to-date" });
+      setAppUpdateState({ kind: "up-to-date" });
       if (showError) {
         setTimeout(() => {
           window.alert(updateAlert(language, "当前已是最新版本 ✅", "You're up to date ✅"));
@@ -72,44 +63,12 @@ async function checkInBackground(showError = false, language: AppLanguage = "zh-
     }
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    setState({ kind: "error", message: msg });
+    setAppUpdateState({ kind: "error", message: msg });
     if (showError) {
       setTimeout(() => {
         window.alert(updateAlert(language, "检查更新失败：\n", "Update check failed:\n") + msg);
       }, 50);
     }
-  }
-}
-
-/**
- * 启动器启动时调用：强制跳过 60 秒限制检查更新。
- * 如发现新版本 → 自动跳转到 /check-update 页面并触发下载流程。
- * @param router useRouter() 返回的路由实例，用于跳转子页面
- * @returns true = 发现更新且已经跳转
- */
-async function startupCheckAndNavigate(
-  router: ReturnType<typeof import("next/navigation").useRouter>
-): Promise<boolean> {
-  setState({ kind: "checking" });
-  try {
-    const result = await invoke<UpdateCheckResult>("check_for_updates", { force: true });
-
-    if (result.update_available && result.target_version) {
-      setState({
-        kind: "available",
-        version: result.target_version,
-        notes: result.message,
-      });
-      router.push("/check-update?autoStart=1");
-      return true;
-    }
-
-    setState({ kind: "up-to-date" });
-    return false;
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    setState({ kind: "error", message: msg });
-    return false;
   }
 }
 
@@ -159,7 +118,7 @@ export function AppUpdateBadge() {
       <AppUpdateDialogTrigger
         version={state.version}
         notes={state.notes}
-        variant="banner"
+        prepared={state.prepared}
       />
     );
   }
@@ -295,17 +254,26 @@ export function AppUpdateButton({
 function AppUpdateDialogTrigger({
   version,
   notes,
-  variant,
+  prepared,
 }: {
   version: string;
   notes: string;
-  variant: "banner";
+  prepared: boolean;
 }) {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [installing, setInstalling] = useState(false);
+  const router = useRouter();
   const { t, language } = useI18n();
 
   async function handleInstall() {
+    if (prepared) {
+      setDialogOpen(false);
+      router.push(
+        `/check-update?autoStart=1&preparedVersion=${encodeURIComponent(version)}`,
+      );
+      return;
+    }
+
     setInstalling(true);
     const ok = await downloadAndInstall(language);
     if (!ok) setInstalling(false);
@@ -346,6 +314,7 @@ function AppUpdateDialogTrigger({
                 <span className="text-xs text-muted-foreground">{t("settings.appUpdater.downloadingAndInstalling")}</span>
               </div>
             )}
+
           </div>
 
           <div className="flex items-center justify-end gap-2 px-5 py-3 border-t border-border">
@@ -376,25 +345,8 @@ function AppUpdateDialogTrigger({
   );
 }
 
-// ---- 启动时的后台检查触发器（发现新版本会跳转至自动更新页面）----
+// ---- 用于主页的更新提示条 ----
 
-export function useStartupUpdateCheck() {
-  const router = useRouter();
-  const [done, setDone] = useState(false);
-  useEffect(() => {
-    if (done) return;
-    setDone(true);
-    // 延迟 1.5s，等页面加载完，不抢主线程
-    const t = setTimeout(() => {
-      startupCheckAndNavigate(router);
-    }, 1500);
-    return () => clearTimeout(t);
-  }, [done, router]);
-}
-
-// ---- 用于主页的完整组件：启动后台检查 + 显示提示条 ----
-
-export function AppUpdateSection({ compact = false }: { compact?: boolean } = {}) {
-  useStartupUpdateCheck();
+export function AppUpdateSection() {
   return <AppUpdateBadge />;
 }
