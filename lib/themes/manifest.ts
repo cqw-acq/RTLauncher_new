@@ -24,7 +24,9 @@ interface Version {
 type Issue = Extract<ThemeManifestValidationResult, { ok: false }>["issues"][number];
 
 const THEME_ID_PATTERN = /^[a-z0-9]+(?:[.-][a-z0-9]+)+$/;
-const CONTRIBUTION_ID_PATTERN = /^[a-z0-9]+(?:[._-][a-z0-9]+)+$/;
+const CONTRIBUTION_ID_PATTERN = /^[a-z0-9]+(?:[.-][a-z0-9]+)+$/;
+const SEMVER_PATTERN = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
+const SHA256_INTEGRITY_PATTERN = /^sha256-[0-9a-fA-F]{64}$/;
 const COLOR_SCHEMES = new Set(["light", "dark"]);
 const USER_OVERRIDES = new Set(["accentColor", "fontSize", "backgroundImage"]);
 const ROUTE_MODES = new Set(["replace", "wrap"]);
@@ -259,7 +261,7 @@ export function validateThemeManifest(
     pushIssue(issues, "THEME_ID_INVALID", "id", "Theme ID must be a lowercase reverse-domain identifier.");
   }
   requireString(value.name, "name", issues);
-  if (requireString(value.version, "version", issues) && !parseVersion(value.version)) {
+  if (requireString(value.version, "version", issues) && !SEMVER_PATTERN.test(value.version)) {
     pushIssue(issues, "THEME_MANIFEST_INVALID", "version", "Theme version must use SemVer.");
   }
 
@@ -333,8 +335,11 @@ export function validateThemeManifest(
     if (!isRecord(value.integrity) || value.integrity.algorithm !== "sha256" || !isRecord(value.integrity.files)) {
       pushIssue(issues, "THEME_MANIFEST_INVALID", "integrity", "integrity must declare sha256 file hashes.");
     } else {
+      if (Object.keys(value.integrity.files).length === 0) {
+        pushIssue(issues, "THEME_MANIFEST_INVALID", "integrity.files", "integrity.files must contain at least one file.");
+      }
       Object.entries(value.integrity.files).forEach(([path, hash]) => {
-        if (!isSafeThemePath(path) || !isNonEmptyString(hash)) {
+        if (!isSafeThemePath(path) || typeof hash !== "string" || !SHA256_INTEGRITY_PATTERN.test(hash)) {
           pushIssue(issues, "THEME_PATH_INVALID", `integrity.files.${path}`, "Integrity entries need a safe path and hash.");
         }
       });

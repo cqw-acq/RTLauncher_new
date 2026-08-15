@@ -48,6 +48,7 @@
     "integrity": { "$ref": "#/$defs/integrity" },
     "extensions": {
       "type": "object",
+      "propertyNames": { "pattern": "^[^:]+:.+$" },
       "additionalProperties": true
     }
   },
@@ -55,7 +56,7 @@
     "packagePath": {
       "type": "string",
       "minLength": 1,
-      "pattern": "^(?!/)(?![A-Za-z]:)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\)(?!.*//)[^/]+(?:/[^/]+)*$"
+      "pattern": "^(?!/)(?![A-Za-z]:)(?!\\.{1,2}(?:/|$))(?!.*?/\\.{1,2}(?:/|$))(?!.*\\\\)(?!.*//)[^/]+(?:/[^/]+)*$"
     },
     "author": {
       "type": "object",
@@ -149,7 +150,7 @@
       "properties": {
         "id": { "type": "string", "pattern": "^[a-z0-9]+(?:[.-][a-z0-9]+)+$" },
         "target": { "$ref": "#/$defs/coreRoute" },
-        "path": { "type": "string", "pattern": "^/" },
+        "path": { "type": "string", "pattern": "^/theme/" },
         "mode": { "enum": ["replace", "wrap"] }
       },
       "oneOf": [

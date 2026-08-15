@@ -262,9 +262,12 @@ export async function inspectThemeArchive(path: string): Promise<ThemeArchiveIns
   const manifestFile = archive["manifest.json"];
   if (!manifestFile) throw new Error("THEME_MANIFEST_MISSING manifest.json is missing.");
   const manifest = JSON.parse(strFromU8(manifestFile)) as AuthorManifest;
-  const integrityValid = Object.entries(manifest.integrity?.files ?? {}).every(
+  const integrityEntries = Object.entries(manifest.integrity?.files ?? {});
+  const integrityValid = manifest.integrity?.algorithm === "sha256"
+    && integrityEntries.length > 0
+    && integrityEntries.every(
     ([file, expected]) => archive[file] !== undefined && sha256(archive[file]) === expected,
-  );
+    );
   return { manifest, files, integrityValid };
 }
 

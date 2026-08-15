@@ -56,8 +56,8 @@ function validManifest(): Record<string, unknown> {
     integrity: {
       algorithm: "sha256",
       files: {
-        "dist/theme.js": "sha256-1234",
-        "dist/theme.css": "sha256-5678",
+        "dist/theme.js": `sha256-${"1".repeat(64)}`,
+        "dist/theme.css": `sha256-${"2".repeat(64)}`,
       },
     },
     extensions: {
@@ -83,6 +83,7 @@ describe("isSafeThemePath", () => {
     "dist/../theme.js",
     "dist\\theme.js",
     "dist//theme.js",
+    ".",
   ])("rejects an unsafe package path: %s", (path) => {
     expect(isSafeThemePath(path)).toBe(false);
   });
@@ -169,5 +170,34 @@ describe("validateThemeManifest", () => {
         expect.objectContaining({ code: "THEME_CONTRIBUTION_DUPLICATE" }),
       );
     }
+  });
+
+  it.each([
+    ["version without a patch", (manifest: Record<string, unknown>) => {
+      manifest.version = "1.2";
+    }],
+    ["empty integrity files", (manifest: Record<string, unknown>) => {
+      (manifest.integrity as Record<string, unknown>).files = {};
+    }],
+    ["malformed integrity digest", (manifest: Record<string, unknown>) => {
+      ((manifest.integrity as Record<string, unknown>).files as Record<string, unknown>)["dist/theme.js"] = "sha256-1234";
+    }],
+    ["contribution ID with an underscore", (manifest: Record<string, unknown>) => {
+      const contributes = manifest.contributes as Record<string, unknown>;
+      (contributes.routes as Array<Record<string, unknown>>)[0].id = "nebula_home";
+    }],
+    ["route outside the Theme namespace", (manifest: Record<string, unknown>) => {
+      const contributes = manifest.contributes as Record<string, unknown>;
+      (contributes.routes as Array<Record<string, unknown>>)[0] = {
+        id: "nebula.home",
+        path: "/outside",
+        mode: "replace",
+      };
+    }],
+  ])("rejects %s", (_name, mutate) => {
+    const manifest = validManifest();
+    mutate(manifest);
+
+    expect(validateThemeManifest(manifest, host).ok).toBe(false);
   });
 });

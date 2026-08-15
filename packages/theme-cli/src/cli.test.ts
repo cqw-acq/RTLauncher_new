@@ -5,6 +5,7 @@ import { mkdtemp, readFile, writeFile, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { strToU8, zipSync } from "fflate";
 
 import {
   buildTheme,
@@ -102,5 +103,26 @@ describe("Theme author CLI", () => {
       "manifest.json",
     ]);
     expect(inspection.integrityValid).toBe(true);
+  });
+
+  it("marks an archive without integrity data as invalid", async () => {
+    const root = await fixture();
+    const archivePath = join(root, "no-integrity.rtltheme");
+    const manifest = {
+      schemaVersion: "1.0",
+      id: "com.example.hello",
+      name: "Hello",
+      version: "1.0.0",
+      author: { name: "Example" },
+      engines: { rtlauncher: ">=1.0.0", themeApi: "^1.0.0" },
+      entry: { script: "dist/theme.js" },
+      supports: { colorSchemes: ["light"] },
+    };
+    await writeFile(archivePath, zipSync({
+      "manifest.json": strToU8(JSON.stringify(manifest)),
+      "dist/theme.js": strToU8("export default {}"),
+    }));
+
+    expect((await inspectThemeArchive(archivePath)).integrityValid).toBe(false);
   });
 });

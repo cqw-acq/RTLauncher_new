@@ -49,6 +49,17 @@ describe("Theme manifest JSON Schema", () => {
   it.each([
     ["invalid ID", { ...validManifest, id: "Nebula" }],
     ["unsafe entry", { ...validManifest, entry: { script: "../theme.js" } }],
+    ["single-dot package path", { ...validManifest, icon: "." }],
+    ["extension key without a namespace", {
+      ...validManifest,
+      extensions: { updateChannel: "stable" },
+    }],
+    ["route outside the Theme namespace", {
+      ...validManifest,
+      contributes: {
+        routes: [{ id: "example.page", path: "/outside", mode: "replace" }],
+      },
+    }],
     ["invalid color scheme", {
       ...validManifest,
       supports: { colorSchemes: ["automatic"] },
