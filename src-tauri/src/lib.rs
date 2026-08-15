@@ -8,7 +8,7 @@ mod auth;
 mod downloader;
 mod handler;
 mod http_client;
-mod mutiplayer;
+mod multiplayer;
 mod themes;
 mod updater;
 mod version_management;
@@ -82,11 +82,13 @@ use handler::diagnostics::{
     export_launch_report, check_mod_installed,
 };
 use handler::mod_links::{get_modrinth_required_dependencies, get_curseforge_required_dependencies};
-use mutiplayer::{
+use multiplayer::{
     ensure_openp2p_stopped, mp_check_openp2p, mp_encode_room_info, mp_get_openp2p_dir,
     mp_get_openp2p_path, mp_install_openp2p, mp_is_openp2p_running, mp_poll_log,
-    mp_start_openp2p_host, mp_start_openp2p_join, mp_stop_openp2p, quick_kill_openp2p,
+    mp_start_openp2p_host, mp_start_openp2p_join, mp_stop_openp2p,
 };
+#[cfg(target_os = "windows")]
+use multiplayer::quick_kill_openp2p;
 use updater::handler::{
     cancel_update, can_check_update, check_for_updates, create_updater_state, download_update,
     get_target_version, get_update_status, install_update,
