@@ -1946,14 +1946,18 @@ pub(super) fn build_jvm_arguments_inner(
     // 只在neoforge时使用loadName，其他modloader使用version_name
     // 仅靠 loadName 是否包含 "neoforge" 判断不够可靠：
     // 合并型整合包（如 "PVZ_Survive"）的目录名不含 neoforge 却仍是 NeoForge，
+    // PCL 安装的 NeoForge 实例（如 "_ _ _ _ - _ _ _"）mainClass 与 Forge 相同，
+    // 且没有 net.neoforged:neoforge 坐标，只带 fancymodloader 库。
     // 需要再从已解析的 version.json 主类/库坐标交叉确认。
     let is_neoforge = loadType != "0"
         && (!loadName.is_empty() && loadName.to_lowercase().contains("neoforge")
             || version_json.main_class.to_lowercase().contains("neoforged")
-            || version_json
-                .libraries
-                .iter()
-                .any(|lib| lib.name.to_lowercase().contains("net.neoforged:neoforge:")));
+            || version_json.libraries.iter().any(|lib| {
+                let n = lib.name.to_lowercase();
+                n.contains("net.neoforged:fancymodloader:")
+                    || n.contains("net.neoforged:neoforge:")
+                    || n.contains("net.neoforged:fmlloader:")
+            }));
     // 对于loadType为1的情况，如果是neoforge，使用loadName；否则使用version_name
     let native_version = if loadType == "1" && is_neoforge {
         &loadName
