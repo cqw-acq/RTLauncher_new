@@ -179,9 +179,11 @@ pub async fn download_and_install_neoforge(
                 if let Some(inst_name) = instance_name_cloned {
                     let clean_name = sanitize_instance_name(&inst_name);
                     println!("[NeoForge] 创建实例目录: {}", clean_name);
-                    let default_name = format!("{}-neoforge-{}", version, neoforge_ver);
+                    // default_name 直接使用 install 返回的规范化 loader_version，
+                    // 确保 merge 和 install 操作同一个 versions/<loader_version>/ 目录，
+                    // 避免出现两个不同名称的 NeoForge 版本目录。
                     let final_name = if clean_name.trim().is_empty() {
-                        sanitize_instance_name(&default_name)
+                        sanitize_instance_name(&loader_version)
                     } else {
                         clean_name
                     };
