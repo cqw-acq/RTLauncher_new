@@ -153,7 +153,7 @@ describe("ThemeRoute", () => {
       id: "nebula.broken-frame",
       target: "core.home",
       mode: "wrap",
-      component: (_props: { children?: ReactNode }) => {
+      component: () => {
         throw new Error("wrapper failed");
       },
     });

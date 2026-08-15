@@ -1,6 +1,6 @@
 "use client";
 
-import { Component, type ErrorInfo, type ReactNode } from "react";
+import { Component, type ReactNode } from "react";
 
 interface ThemeErrorBoundaryProps {
   children: ReactNode;
@@ -23,7 +23,7 @@ export class ThemeErrorBoundary extends Component<
     return { error };
   }
 
-  componentDidCatch(error: Error, _info: ErrorInfo): void {
+  componentDidCatch(error: Error): void {
     this.props.onError?.(error, this.props.contributionId);
   }
 
