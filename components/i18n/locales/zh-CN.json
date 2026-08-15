@@ -363,6 +363,7 @@
       "addDevelopment": "添加开发目录",
       "reload": "重新加载",
       "remove": "移除",
+      "recoverBuiltIn": "恢复内置主题",
       "trustWarning": "此主题可以运行本地代码并调用启动器接口。仅在你信任主题作者时启用。",
       "removeWarning": "移除此主题并返回内置界面吗？",
       "switchFailed": "主题无法启用。当前主题保持不变。"

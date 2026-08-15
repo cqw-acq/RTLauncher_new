@@ -117,16 +117,18 @@ export async function loadThemeBundle(
     const definition = await new Promise<ThemeDefinition>((resolve, reject) => {
       window.__RTL_THEME_REGISTER__ = (candidate) => {
         if (registered) {
-          throw new ThemeBundleError(
+          reject(new ThemeBundleError(
             "THEME_BUNDLE_MULTIPLE_REGISTRATIONS",
             `Theme bundle ${manifest.id} registered more than once.`,
-          );
+          ));
+          return;
         }
         if (candidate.id !== manifest.id) {
-          throw new ThemeBundleError(
+          reject(new ThemeBundleError(
             "THEME_BUNDLE_ID_MISMATCH",
             `Theme bundle registered ${candidate.id} instead of ${manifest.id}.`,
-          );
+          ));
+          return;
         }
         registered = candidate;
       };

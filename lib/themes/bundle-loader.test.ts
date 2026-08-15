@@ -34,8 +34,10 @@ function loaderHarness(register?: () => void) {
   const revoked: string[] = [];
   const append = vi.spyOn(document.head, "appendChild").mockImplementation((node) => {
     if (node instanceof HTMLScriptElement) {
-      register?.();
-      queueMicrotask(() => node.onload?.(new Event("load")));
+      queueMicrotask(() => {
+        register?.();
+        node.onload?.(new Event("load"));
+      });
     }
     return node;
   });

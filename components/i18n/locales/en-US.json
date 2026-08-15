@@ -363,6 +363,7 @@
       "addDevelopment": "Add development folder",
       "reload": "Reload",
       "remove": "Remove",
+      "recoverBuiltIn": "Restore the built-in theme",
       "trustWarning": "This theme can run local code and call launcher APIs. Activate it only if you trust its author.",
       "removeWarning": "Remove this theme and return to the built-in interface?",
       "switchFailed": "The theme could not be activated. The previous theme is still active."

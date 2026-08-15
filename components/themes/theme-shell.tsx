@@ -8,6 +8,7 @@ import { Sidebar } from "@/components/sidebar";
 import { TitleBar } from "@/components/title-bar";
 import type { CoreRouteId } from "@/lib/themes/protocol";
 import { ThemeRoute } from "./theme-route";
+import { ThemeRecoveryControl } from "./theme-recovery-control";
 import { useThemeRuntime } from "./theme-runtime-provider";
 import { ThemeSlot } from "./theme-slot";
 
@@ -35,6 +36,7 @@ export function ThemeShell({ children }: { children: ReactNode }) {
   return (
     <>
       <TitleBar />
+      <ThemeRecoveryControl />
       <div className="flex flex-1 overflow-hidden">
         <Sidebar />
         <main className="flex-1 overflow-hidden [view-transition-name:page-content]">

@@ -55,6 +55,9 @@ function detectMacOS() {
   return platform.includes('mac')
 }
 
+const subscribeToNothing = () => () => undefined
+const serverIsMacOS = () => false
+
 function WindowButton({ onClick, title, children, className }: WindowButtonProps) {
   return (
     <Button
@@ -77,9 +80,9 @@ export function TitleBar({ className }: TitleBarProps) {
   const { slots, snapshot, reportThemeError } = useThemeRuntime()
   const themeSlot = { registry: slots, owner: snapshot.activeOwner, onError: reportThemeError }
   const isMacOS = useSyncExternalStore(
-    () => () => undefined,
+    subscribeToNothing,
     detectMacOS,
-    () => false
+    serverIsMacOS
   )
   const [isMaximized, setIsMaximized] = useState(false)
   const [windowApi, setWindowApi] = useState<WindowApi | null>(null)
@@ -205,29 +208,29 @@ export function TitleBar({ className }: TitleBarProps) {
             <ThemeSlot {...themeSlot} slotId='app.titlebar.center' />
           </div>
 
-          <ThemeSlot {...themeSlot} slotId='app.titlebar.actions'>
-            <div className='no-drag flex h-full items-center gap-1 pr-3'>
+          <div className='no-drag flex h-full items-center gap-1'>
+            <ThemeSlot {...themeSlot} slotId='app.titlebar.actions'>
               <ModeToggle />
+            </ThemeSlot>
 
-              <div className='flex items-center gap-1'>
-                <WindowButton onClick={handleMinimize} title='最小化'>
-                  <Minus className='size-4' />
-                </WindowButton>
+            <div className='flex items-center gap-1 pr-3'>
+              <WindowButton onClick={handleMinimize} title='最小化'>
+                <Minus className='size-4' />
+              </WindowButton>
 
-                <WindowButton onClick={handleMaximizeRestore} title={isMaximized ? '还原' : '最大化'}>
-                  {isMaximized ? <Copy className='size-3.5 rotate-90' /> : <Maximize2 className='size-3.5' />}
-                </WindowButton>
+              <WindowButton onClick={handleMaximizeRestore} title={isMaximized ? '还原' : '最大化'}>
+                {isMaximized ? <Copy className='size-3.5 rotate-90' /> : <Maximize2 className='size-3.5' />}
+              </WindowButton>
 
-                <WindowButton
-                  onClick={handleClose}
-                  title='关闭'
-                  className='hover:bg-destructive hover:text-white active:bg-destructive/90 dark:hover:bg-red-600 dark:active:bg-red-700'
-                >
-                  <X className='size-4' />
-                </WindowButton>
-              </div>
+              <WindowButton
+                onClick={handleClose}
+                title='关闭'
+                className='hover:bg-destructive hover:text-white active:bg-destructive/90 dark:hover:bg-red-600 dark:active:bg-red-700'
+              >
+                <X className='size-4' />
+              </WindowButton>
             </div>
-          </ThemeSlot>
+          </div>
         </div>
       )}
     </div>
