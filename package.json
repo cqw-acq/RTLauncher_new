@@ -41,6 +41,7 @@
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "ajv": "^8.17.1",
     "eslint": "^9",
     "eslint-config-next": "16.1.6",
     "jsdom": "^29.1.1",
