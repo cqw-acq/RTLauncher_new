@@ -3706,6 +3706,7 @@ dependencies = [
  "anyhow",
  "base64 0.21.7",
  "dirs",
+ "encoding_rs",
  "env_logger",
  "fastnbt",
  "flate2",
