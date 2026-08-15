@@ -37,18 +37,55 @@ interface NavItem {
 }
 
 let activeNavigation: {
-  transition?: ViewTransition
   controller: AbortController
+  previousPointerEvents: string
+  previousTransition: string
+  previousOpacity: string
 } | null = null
+
+const FADE_OUT_MS = 140
+const FADE_IN_MS = 240
+const SETTLE_MS = 400
+const STABILITY_MS = 150
+const TIMEOUT_MS = 3000
+// 内容持续变动超过该时长且达到该次数时视为"流动内容"（如日志实时刷新），
+// 不再要求静止，避免导航长时间停在旧页面。
+const FLOWING_AFTER_MS = 1000
+const FLOWING_MUTATIONS = 4
+
+function abortActiveNavigation() {
+  const nav = activeNavigation
+  if (!nav) return
+  nav.controller.abort()
+  const main = document.querySelector<HTMLElement>("main")
+  if (main?.isConnected) {
+    main.style.pointerEvents = nav.previousPointerEvents
+    main.style.transition = nav.previousTransition
+    main.style.opacity = nav.previousOpacity
+  }
+  activeNavigation = null
+}
+
+// 归一化路径（去掉结尾斜杠），用于判断路由是否已切换到位。
+function normalizePathname(path: string) {
+  let normalized = path
+  if (normalized.length > 1 && normalized.endsWith("/")) {
+    normalized = normalized.slice(0, -1)
+  }
+  return normalized
+}
 
 function waitForPageContent(
   main: HTMLElement,
   previousText: string,
+  targetPathname: string,
   signal: AbortSignal
 ) {
   return new Promise<void>((resolve) => {
     let settled = false
     let contentChanged = false
+    let contentChangedAt = 0
+    let changeCount = 0
     let settleTimer: number | undefined
 
     const finish = () => {
@@ -62,33 +99,59 @@ function waitForPageContent(
     }
 
     // 新页面往往先渲染出加载中指示器(spinner)再显示真实内容；
-    // 只有等指示器消失后才算内容就绪，否则淡入的是空白/加载圈，观感像"先清空再加载"。
-    const trySettle = () => {
+    // 内容尚未变化前保持等待，避免淡入的是空白/加载圈。
+    // 内容一旦变化就按"保持稳定"收尾，忽略残留的小型 spinner
+    // （如按钮内的加载图标），否则会被它们无限期阻塞。
+    const trySettle = (now: number) => {
       if (!contentChanged) return
-      if (main.querySelector(".animate-spin")) {
-        // 出现新的加载指示器时取消已安排的收尾，继续等待。
-        window.clearTimeout(settleTimer)
-        settleTimer = undefined
+      if (!contentChangedAt) contentChangedAt = now
+      // 内容持续流动（日志实时刷新等）超过阈值时不再等待静止。
+      if (
+        now - contentChangedAt > FLOWING_AFTER_MS &&
+        changeCount >= FLOWING_MUTATIONS
+      ) {
+        finish()
         return
       }
-      if (settleTimer !== undefined) return
-      // 内容更新且无加载指示器后，稍等让入场动画稳定几帧再交叉淡入。
-      settleTimer = window.setTimeout(finish, 100)
+      // 收尾时刻 = 首次内容变化的固定窗口(覆盖新页面入场动画，避免淡入
+      // 截在动画中途导致淡入结束后内容跳动) 与 最近一次变动后的短暂静止窗口
+      // (吸收异步数据波) 的较晚者。入场动画期间的高频样式变动不会无限叠加等待。
+      const deadline = Math.max(
+        contentChangedAt + SETTLE_MS,
+        now + STABILITY_MS
+      )
+      window.clearTimeout(settleTimer)
+      settleTimer = window.setTimeout(finish, Math.max(0, deadline - performance.now()))
     }
 
+    // 用 rAF 批量合并同一帧内的多次 DOM 变动，
+    // 避免实时日志等高频更新场景下逐条重算 innerText 卡顿主线程。
+    let pending = false
     const observer = new MutationObserver(() => {
-      if (main.innerText === previousText) return
-      contentChanged = true
-      trySettle()
+      if (pending) return
+      pending = true
+      requestAnimationFrame(() => {
+        pending = false
+        if (settled) return
+        // 路由尚未切换到目标页面时忽略所有变动：
+        // 路由切换期间旧页面自身的异步更新（下载进度、日志等）也会触发
+        // MutationObserver，不区分会导致"新页面已就绪"的误判，淡入的仍是旧页面。
+        if (normalizePathname(window.location.pathname) !== targetPathname) return
+        if (main.innerText === previousText) return
+        changeCount += 1
+        contentChanged = true
+        trySettle(performance.now())
+      })
     })
 
     observer.observe(main, {
       childList: true,
       subtree: true,
       characterData: true,
+      attributes: true,
     })
 
-    const timeoutTimer = window.setTimeout(finish, 1200)
+    const timeoutTimer = window.setTimeout(finish, TIMEOUT_MS)
 
     if (signal.aborted) {
       finish()
@@ -145,49 +208,46 @@ function NavButton({ item, isActive, isExactActive }: { item: NavItem; isActive:
 
     const previousText = main.innerText
 
-    activeNavigation?.controller.abort()
-    activeNavigation?.transition?.skipTransition()
+    abortActiveNavigation()
 
     const controller = new AbortController()
 
-    const startViewTransition = document.startViewTransition?.bind(document)
-    if (startViewTransition) {
-      const transition = startViewTransition(async () => {
-        const contentReady = waitForPageContent(
-          main,
-          previousText,
-          controller.signal
-        )
-        router.push(item.href)
-        await contentReady
-      })
-
-      const navigation = { transition, controller }
-      activeNavigation = navigation
-
-      void transition.finished
-        .catch(() => undefined)
-        .finally(() => {
-          if (activeNavigation === navigation) activeNavigation = null
-        })
+    // 尊重系统减弱动效设置：直接切换，不做任何过渡动画。
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      router.push(item.href)
       return
     }
 
-    // 无 View Transitions 支持（旧版 WebKitGTK）：
-    // 退化为 CSS 过渡做等价的淡出 → 等待内容就绪 → 淡入。
-    const navigation = { controller }
-    activeNavigation = navigation
+    // 统一采用"旧页淡出 → 路由切换 → 新页内容就绪后淡入"的确定性时序，
+    // 不再使用 View Transitions 交叉淡入：
+    // 旧页彻底不可见之后新页才出现，两者永不同屏，因此不会出现
+    // 旧快照叠在新页面之上造成的"旧页闪现"，也不存在滚动位置错位抖动。
     const previousTransition = main.style.transition
     const previousPointerEvents = main.style.pointerEvents
+    const previousOpacity = main.style.opacity
+
+    const navigation = {
+      controller,
+      previousTransition,
+      previousPointerEvents,
+      previousOpacity,
+    }
+    activeNavigation = navigation
 
     main.style.pointerEvents = "none"
-    main.style.transition = "opacity 0.14s ease-out"
+    main.style.transition = `opacity ${FADE_OUT_MS}ms ease-out`
     main.style.opacity = "0"
 
+    const targetPathname = normalizePathname(item.href)
+
     window.setTimeout(async () => {
+      // 若在此期间已被新的导航中断（abort），不再执行本次路由切换。
+      if (controller.signal.aborted) return
+
       const contentReady = waitForPageContent(
         main,
         previousText,
+        targetPathname,
         controller.signal
       )
       router.push(item.href)
@@ -196,17 +256,18 @@ function NavButton({ item, isActive, isExactActive }: { item: NavItem; isActive:
       if (activeNavigation !== navigation) return
       requestAnimationFrame(() => {
         if (!main.isConnected) return
-        main.style.transition = "opacity 0.24s ease-out"
+        main.style.transition = `opacity ${FADE_IN_MS}ms ease-out`
         main.style.opacity = "1"
         window.setTimeout(() => {
           if (main.isConnected) {
             main.style.transition = previousTransition
             main.style.pointerEvents = previousPointerEvents
+            main.style.opacity = previousOpacity
           }
           if (activeNavigation === navigation) activeNavigation = null
-        }, 260)
+        }, FADE_IN_MS + 20)
       })
-    }, 150)
+    }, FADE_OUT_MS + 20)
   }
 
   return (

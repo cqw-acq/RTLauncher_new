@@ -461,18 +461,22 @@ export function LaunchProvider({ children }: { children: React.ReactNode }) {
     try {
       const report = generateReport();
       const reportJson = JSON.stringify(report, null, 2);
+      const consoleLogs = logs
+        .map((l) => `[${l.timestamp}] [${l.level.toUpperCase()}] ${l.message}`)
+        .join("\n");
       return await invoke<string>("export_launch_report", {
         minecraftPath: config.minecraftPath,
         versionName: config.versionName,
         launchParameters: lastCommandArgs ?? "",
         accountType: selectedProfile?.authType ?? "offline",
         reportJson,
+        consoleLogs,
       });
     } catch (err) {
       console.error("导出启动报告失败:", err);
       throw err;
     }
-  }, [config, lastCommandArgs, selectedProfile, generateReport]);
+  }, [config, lastCommandArgs, selectedProfile, generateReport, logs]);
 
   return (
     <LaunchContext.Provider

@@ -158,6 +158,104 @@ fn detect_hmcl_minecraft_paths() -> Vec<String> {
     paths
 }
 
+/// 从 PCL2 配置文件中提取游戏目录
+/// PCL2 便携模式配置位于 <启动器目录>/PCL/launcher_settings.ini，
+/// 其中 CustomGameFolders= 保存了用户添加的游戏文件夹列表（分号分隔，GBK 编码）
+fn detect_pcl2_minecraft_paths() -> Vec<String> {
+    let mut paths = Vec::new();
+
+    // 收集可能的 PCL2 启动器目录
+    let mut pcl2_roots = Vec::new();
+
+    // 便携模式：当前目录 / 可执行文件同目录
+    pcl2_roots.push(PathBuf::from("."));
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            pcl2_roots.push(dir.to_path_buf());
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(appdata) = std::env::var("APPDATA") {
+            pcl2_roots.push(PathBuf::from(appdata).join("PCL"));
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        if let Ok(home) = std::env::var("HOME") {
+            pcl2_roots.push(PathBuf::from(home).join(".local").join("share").join("PCL"));
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(home) = std::env::var("HOME") {
+            pcl2_roots.push(PathBuf::from(home).join("Library").join("Application Support").join("PCL"));
+        }
+    }
+
+    for root in pcl2_roots {
+        // 便携模式：<root>/PCL/launcher_settings.ini
+        let config_file = root.join("PCL").join("launcher_settings.ini");
+        if config_file.exists() {
+            if let Some(folders) = parse_pcl2_custom_game_folders(&config_file) {
+                paths.extend(folders);
+            }
+            // 便携模式下默认游戏目录为 <root>/.minecraft
+            let default_game_dir = root.join(".minecraft");
+            if default_game_dir.is_dir() {
+                paths.push(default_game_dir.to_string_lossy().into_owned());
+            }
+        } else {
+            // 非便携模式：<root>/launcher_settings.ini
+            let alt = root.join("launcher_settings.ini");
+            if alt.exists() {
+                if let Some(folders) = parse_pcl2_custom_game_folders(&alt) {
+                    paths.extend(folders);
+                }
+            }
+        }
+    }
+
+    paths.sort();
+    paths.dedup();
+    paths
+}
+
+/// 解析 PCL2 launcher_settings.ini 中的自定义游戏文件夹列表
+/// 配置为 GBK 编码，先尝试 UTF-8，失败时用 GBK 解码
+fn parse_pcl2_custom_game_folders(config_file: &Path) -> Option<Vec<String>> {
+    let bytes = fs::read(config_file).ok()?;
+    let content = String::from_utf8(bytes.clone()).unwrap_or_else(|_| {
+        let (decoded, _, _) = encoding_rs::GBK.decode(&bytes);
+        decoded.into_owned()
+    });
+
+    let mut folders = Vec::new();
+    for line in content.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('[') || line.starts_with(';') || line.starts_with('#') {
+            continue;
+        }
+        let Some(eq) = line.find('=') else { continue };
+        let key = line[..eq].trim();
+        if !key.eq_ignore_ascii_case("CustomGameFolders") {
+            continue;
+        }
+        let value = line[eq + 1..].trim();
+        for folder in value.split(';') {
+            let folder = folder.trim();
+            if !folder.is_empty() {
+                folders.push(folder.to_string());
+            }
+        }
+        break;
+    }
+    Some(folders)
+}
+
 /// 智能判断目录是否为有效的 Minecraft 游戏目录
 /// 通过检查关键文件和目录结构来区分 .minecraft 和 .hmcl
 fn is_valid_minecraft_directory(path: &Path) -> bool {
@@ -274,12 +372,18 @@ pub fn get_launcher_paths_config() -> LauncherPathsConfig {
                     cfg.minecraft_paths = dedup;
                 }
                 
-                // 从 HMCL 配置文件检测游戏目录并添加到列表
+                // 从 HMCL / PCL2 配置文件检测游戏目录并添加到列表
                 let hmcl_paths = detect_hmcl_minecraft_paths();
                 for hmcl_path in hmcl_paths {
                     // 只添加通过验证的 Minecraft 目录，避免误判 .hmcl 目录
                     if is_valid_minecraft_directory(Path::new(&hmcl_path)) && !cfg.minecraft_paths.contains(&hmcl_path) {
                         cfg.minecraft_paths.push(hmcl_path);
+                    }
+                }
+                let pcl2_paths = detect_pcl2_minecraft_paths();
+                for pcl2_path in pcl2_paths {
+                    if is_valid_minecraft_directory(Path::new(&pcl2_path)) && !cfg.minecraft_paths.contains(&pcl2_path) {
+                        cfg.minecraft_paths.push(pcl2_path);
                     }
                 }
                 
@@ -288,12 +392,18 @@ pub fn get_launcher_paths_config() -> LauncherPathsConfig {
             Err(_) => def,
         }
     } else {
-        // 即使配置文件不存在，也尝试从 HMCL 检测路径
+        // 即使配置文件不存在，也尝试从 HMCL / PCL2 检测路径
         let mut cfg = def.clone();
         let hmcl_paths = detect_hmcl_minecraft_paths();
         for hmcl_path in hmcl_paths {
             if is_valid_minecraft_directory(Path::new(&hmcl_path)) && !cfg.minecraft_paths.contains(&hmcl_path) {
                 cfg.minecraft_paths.push(hmcl_path);
+            }
+        }
+        let pcl2_paths = detect_pcl2_minecraft_paths();
+        for pcl2_path in pcl2_paths {
+            if is_valid_minecraft_directory(Path::new(&pcl2_path)) && !cfg.minecraft_paths.contains(&pcl2_path) {
+                cfg.minecraft_paths.push(pcl2_path);
             }
         }
         cfg

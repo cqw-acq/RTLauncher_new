@@ -102,6 +102,49 @@ fn detect_loader_from_main_class(main_class: &str) -> &'static str {
     }
 }
 
+/// 从加载器库坐标推断加载器类型（比 mainClass 更可靠）。
+///
+/// NeoForge 与 Forge 的 mainClass 同为 `cpw.mods.bootstraplauncher.BootstrapLauncher`，
+/// 无法区分；而库坐标是各自独占的：
+/// - NeoForge: `net.neoforged:fancymodloader:*` / `net.neoforged:neoforge:*` / `net.neoforged:fmlloader:*`
+/// - Forge: `net.minecraftforge:forge:*` / `net.minecraftforge:fmlloader:*`
+///
+/// 注意 `net.minecraftforge:srgutils` 是两者共用库，不能作为 Forge 的判据。
+fn detect_loader_from_libraries(json: &serde_json::Value) -> Option<&'static str> {
+    let libraries = json.get("libraries")?.as_array()?;
+    let mut has_forge_fml = false;
+    for library in libraries {
+        let name = library.get("name")?.as_str()?.to_lowercase();
+        if name.starts_with("net.neoforged:fancymodloader:")
+            || name.starts_with("net.neoforged:neoforge:")
+            || name.starts_with("net.neoforged:fmlloader:")
+        {
+            return Some("NeoForge");
+        }
+        if name.starts_with("net.minecraftforge:forge:")
+            || name.starts_with("net.minecraftforge:fmlloader:")
+        {
+            has_forge_fml = true;
+        }
+        if name.starts_with("net.fabricmc:loader:")
+            || name.starts_with("net.fabricmc:fabric-loader:")
+        {
+            return Some("Fabric");
+        }
+        if name.starts_with("org.quiltmc:quilt-loader:") {
+            return Some("Quilt");
+        }
+        if name.starts_with("com.mumfrey:liteloader:") {
+            return Some("LiteLoader");
+        }
+    }
+    if has_forge_fml {
+        Some("Forge")
+    } else {
+        None
+    }
+}
+
 /// 从版本文件夹名中快速推断加载器（备用方案）
 fn detect_loader_from_name(name: &str) -> &'static str {
     let lower = name.to_lowercase();
@@ -351,20 +394,27 @@ fn build_instance_data(instance_dir: &Path, minecraft_path: &Path) -> Option<Ins
                                 mc_ver = alt;
                             }
                         }
-                        // 从 mainClass 推断加载器，但与文件夹名交叉验证
-                        // （NeoForge 的 mainClass 可能与 Forge 相同，需要用文件夹名区分）
+                        // 从 mainClass 推断加载器，但用库坐标与文件夹名交叉验证
+                        // （NeoForge 与 Forge 的 mainClass 相同，PCL 等第三方启动器安装的
+                        // NeoForge 实例文件夹名也不含 neoforge，必须靠库坐标区分）
                         let from_main = json
                             .get("mainClass")
                             .and_then(|v| v.as_str())
                             .map(detect_loader_from_main_class)
                             .unwrap_or("Vanilla");
                         let from_name = detect_loader_from_name(&name);
-                        let loader = if from_main == "Forge" && from_name == "NeoForge" {
-                            // mainClass 误判为 Forge，但文件夹名明确是 NeoForge → 以文件夹名为准
-                            "NeoForge"
-                        } else if from_main == "Forge" && from_name == "OptiFine" {
-                            // OptiFine 继承 Forge 的 mainClass，但文件夹名明确是 OptiFine → 以文件夹名为准
+                        let from_libs = detect_loader_from_libraries(&json);
+                        let loader = if from_name == "OptiFine"
+                            && (from_main == "Forge" || from_libs == Some("Forge"))
+                        {
+                            // OptiFine 继承 Forge 的 mainClass 和库，但文件夹名明确是 OptiFine
                             "OptiFine"
+                        } else if let Some(l) = from_libs {
+                            // 库坐标是最可靠的判据（NeoForge 1.20.2+ 独占 net.neoforged 坐标）
+                            l
+                        } else if from_main == "Forge" && from_name == "NeoForge" {
+                            // 合并型整合包无 net.neoforged 库坐标时，用文件夹名兜底区分
+                            "NeoForge"
                         } else if from_main == "Vanilla" {
                             // mainClass 无法判断 → 用文件夹名
                             from_name
@@ -701,7 +751,7 @@ pub async fn vm_delete_cached_file(
 #[cfg(test)]
 mod tests {
     use super::{
-        detect_loader_from_main_class, detect_loader_from_name,
+        detect_loader_from_libraries, detect_loader_from_main_class, detect_loader_from_name,
         detect_minecraft_version_from_libraries, detect_minecraft_version_from_patches,
         extract_minecraft_version, version_from_instance_name,
     };
@@ -851,6 +901,98 @@ mod tests {
             detect_loader_from_name("1.21.1-OptiFine-HD_U_I7"),
             "OptiFine"
         );
+    }
+
+    #[test]
+    fn detects_pcl_style_neoforge_from_fancymodloader_libraries() {
+        // PCL 安装的 NeoForge 1.21.1 实例：mainClass 与 Forge 相同，
+        // 没有 net.neoforged:neoforge 坐标，只有 fancymodloader 库。
+        let version = json!({
+            "mainClass": "cpw.mods.bootstraplauncher.BootstrapLauncher",
+            "libraries": [
+                { "name": "net.neoforged:fancymodloader:loader:4.0.43" },
+                { "name": "net.neoforged:fancymodloader:earlydisplay:4.0.43" },
+                { "name": "net.minecraftforge:srgutils:0.4.15" }
+            ]
+        });
+        assert_eq!(
+            detect_loader_from_libraries(&version),
+            Some("NeoForge")
+        );
+    }
+
+    #[test]
+    fn detects_older_neoforge_from_neoforge_artifact() {
+        // NeoForge 1.20.2-1.20.4 的用户加载器坐标是 net.neoforged:neoforge
+        let version = json!({
+            "libraries": [
+                { "name": "net.neoforged:neoforge:1.20.4-21.0.14" }
+            ]
+        });
+        assert_eq!(
+            detect_loader_from_libraries(&version),
+            Some("NeoForge")
+        );
+    }
+
+    #[test]
+    fn detects_forge_from_net_minecraftforge_coordinates() {
+        let version = json!({
+            "libraries": [
+                { "name": "net.minecraftforge:forge:1.20.1-47.4.9" },
+                { "name": "net.minecraftforge:fmlloader:1.20.1-47.4.9" }
+            ]
+        });
+        assert_eq!(
+            detect_loader_from_libraries(&version),
+            Some("Forge")
+        );
+    }
+
+    #[test]
+    fn srgutils_alone_is_not_forge() {
+        // srgutils 是 Forge/NeoForge 共用库，单独出现不能当作 Forge 判据
+        let version = json!({
+            "libraries": [
+                { "name": "net.minecraftforge:srgutils:0.4.15" },
+                { "name": "cpw.mods:modlauncher:11.0.5" }
+            ]
+        });
+        assert_eq!(detect_loader_from_libraries(&version), None);
+    }
+
+    #[test]
+    fn detects_fabric_and_quilt_from_loader_coordinates() {
+        let fabric = json!({
+            "libraries": [
+                { "name": "net.fabricmc:loader:0.15.11" },
+                { "name": "net.fabricmc:intermediary:1.21.1" }
+            ]
+        });
+        assert_eq!(
+            detect_loader_from_libraries(&fabric),
+            Some("Fabric")
+        );
+        let quilt = json!({
+            "libraries": [
+                { "name": "org.quiltmc:quilt-loader:0.25.0" }
+            ]
+        });
+        assert_eq!(
+            detect_loader_from_libraries(&quilt),
+            Some("Quilt")
+        );
+    }
+
+    #[test]
+    fn no_loader_libraries_means_unknown() {
+        let version = json!({
+            "libraries": [
+                { "name": "com.mojang:minecraft:1.21.1" },
+                { "name": "org.lwjgl:lwjgl:3.3.3" }
+            ]
+        });
+        assert_eq!(detect_loader_from_libraries(&version), None);
     }
 
     #[test]

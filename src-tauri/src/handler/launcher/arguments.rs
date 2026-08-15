@@ -78,6 +78,29 @@ fn shell_split(input: &str) -> Vec<String> {
     tokens
 }
 
+/// 对 -cp / -p 等路径列表参数做去重（保留原有顺序）。
+///
+/// 部分启动器（如 PCL CE）生成的 version.json 会把父版本库与加载器库
+/// 简单拼接而不去重，导致同一个 jar 在 classpath 中出现多次。重复的
+/// 路径会让 NeoForge/Forge 的 UnionFileSystem 在启动阶段直接抛出
+/// "Duplicate key ... (attempted merging values ...)" 并以退出码 1 退出。
+pub(super) fn dedup_path_list(value: &str) -> String {
+    let sep = if value.contains(';') { ';' } else { ':' };
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut parts: Vec<&str> = Vec::new();
+    for piece in value.split(sep) {
+        let piece = piece.trim();
+        if piece.is_empty() {
+            continue;
+        }
+        // Windows 文件系统不区分大小写，统一转小写后去重
+        if seen.insert(piece.to_lowercase()) {
+            parts.push(piece);
+        }
+    }
+    parts.join(&sep.to_string())
+}
+
 /// Add JVM arguments read from a separate loader JSON.
 ///
 /// A selected instance may use the vanilla JSON as `version_name` and a Forge
@@ -95,16 +118,180 @@ pub(super) fn append_loader_jvm_args(args: &mut Vec<String>, loader_args: &[Stri
             key.as_str(),
             "-p" | "--module-path" | "-cp" | "--class-path"
         );
-        let already_present = is_path_key && args.iter().any(|arg| arg == key);
+        // --add-opens/--add-exports/--add-reads 可多次出现且每次开放的目标
+        // 模块不同（ALL-UNNAMED vs 具名模块），不能按键去重，否则 loader
+        // 的具名模块参数会被固定参数吞掉（如 java.base/java.lang.invoke 开放
+        // 给 cpw.mods.securejarhandler 就依赖这条不被吞掉）
+        let is_multi_flag = matches!(
+            key.as_str(),
+            "--add-opens" | "--add-exports" | "--add-reads"
+        );
+        // 已存在的参数键直接跳过，避免同一参数被拼接多次
+        // （如 -Xss1M、-XX:HeapDumpPath、-Djava.library.path 在固定参数、
+        // version json jvm 参数、loader 参数三处都可能出现）。
+        // -D 风格参数按 `-Dxxx` 前缀比较：两处占位符替换结果可能不同
+        // （version json 处理时被替换成 -Dxxx={}，loader 里是真实值），
+        // 完整字符串比较会漏掉重复，导致垃圾值混入启动参数。
+        let already_present = !is_multi_flag && args.iter().any(|arg| {
+            arg == key
+                || (arg.starts_with("-D")
+                    && key.starts_with("-D")
+                    && arg.split('=').next() == key.split('=').next())
+        });
 
         if !already_present {
             args.push(key.clone());
             if has_value {
-                args.push(loader_args[index + 1].clone());
+                let value = &loader_args[index + 1];
+                if is_path_key {
+                    // PCL 等启动器写入的 classpath 可能包含重复 jar，去重后再转发
+                    args.push(dedup_path_list(value));
+                } else {
+                    args.push(value.clone());
+                }
             }
         }
 
         index += if has_value { 2 } else { 1 };
+    }
+}
+
+/// 合并 version json 的 jvm 参数（jvm_args_from_version）到总参数列表。
+///
+/// 去重按参数“键”比较（-Dxxx=value 只取 -Dxxx 部分），而不是比较完整字符串：
+/// 同一个参数在两处占位符替换结果可能不同（例如 jvm 参数里的
+/// -Djava.library.path 在 version json 处理时被替换成 -Djava.library.path={}，
+/// 而 loader 里是完整的原生路径），完整字符串比较会漏掉重复，
+/// 导致 -Djava.library.path={} 这类垃圾值混入启动参数。
+/// -p/--module-path、-cp/--class-path 是加载器精心设计的关键参数，
+/// 始终优先使用 jvm_args_from_version 中的（load json 的 -cp 值可能为 {} 垃圾）。
+pub(super) fn merge_version_jvm_args(
+    args: &mut Vec<String>,
+    jvm_args_from_version: &[String],
+    extra_before_cp: &[String],
+) {
+    let key_of = |p: &str| -> String {
+        if p.starts_with('-') {
+            p.split('=').next().unwrap_or(p).to_string()
+        } else {
+            p.to_string()
+        }
+    };
+
+    // 先收集已在 extra_before_cp 中的参数键，避免重复
+    let mut existing_keys: HashSet<String> = HashSet::new();
+    {
+        let mut ei = 0;
+        while ei < extra_before_cp.len() {
+            let p = &extra_before_cp[ei];
+            let has_value = p.starts_with('-')
+                && ei + 1 < extra_before_cp.len()
+                && !extra_before_cp[ei + 1].starts_with('-');
+            if p.starts_with('-') {
+                // 记录 key（如 -p, -cp, --module-path 等）
+                existing_keys.insert(key_of(p));
+            }
+            if has_value {
+                ei += 2;
+            } else {
+                ei += 1;
+            }
+        }
+    }
+
+    // 然后添加 jvm_args_from_version 中的参数（跳过已在 extra_before_cp 中的 key）
+    let mut i = 0;
+    while i < jvm_args_from_version.len() {
+        let p = &jvm_args_from_version[i];
+        let has_value = p.starts_with('-')
+            && i + 1 < jvm_args_from_version.len()
+            && !jvm_args_from_version[i + 1].starts_with('-');
+
+        // 去重：如果 key 已存在于 extra_before_cp 中，跳过
+        // 但 -p/--module-path、-cp/--class-path 是关键参数，始终优先使用 jvm_args_from_version 中的
+        let is_module_or_class_path_key =
+            p == "-p" || p == "--module-path" || p == "-cp" || p == "--class-path";
+        if !is_module_or_class_path_key && existing_keys.contains(&key_of(p)) {
+            i += if has_value { 2 } else { 1 };
+            continue;
+        }
+
+        // 占位符替换失败的垃圾值（-Dxxx={}）永远不会是合法参数，
+        // 即使 loader 里没有同名键也不允许混入启动命令
+        let is_placeholder_garbage = p.starts_with("-D") && p.ends_with("={}");
+        if is_placeholder_garbage {
+            i += if has_value { 2 } else { 1 };
+            continue;
+        }
+
+        args.push(p.clone());
+        if has_value {
+            // 对于 -p/--module-path，额外检查其中引用的 JAR 是否存在
+            let value = &jvm_args_from_version[i + 1];
+            if is_module_or_class_path_key {
+                debug!("[HMCL 模式] 使用 Forge 参数: {} 值长度: {}", p, value.len());
+                // 对 -cp/-p 的值做去重，避免 PCL 等生成的 json 里重复的
+                // jar 路径导致 UnionFileSystem "Duplicate key" 崩溃
+                args.push(dedup_path_list(value));
+                // 对于 -p，打印其中的每个路径用于调试
+                if p == "-p" || p == "--module-path" {
+                    for piece in value.split(|c| c == ';' || c == ':') {
+                        if !piece.trim().is_empty() {
+                            let path_buf = PathBuf::from(piece.trim());
+                            let exists = path_buf.exists();
+                            debug!("  module-path 项: {} (存在: {})", piece.trim(), exists);
+                        }
+                    }
+                }
+            } else {
+                args.push(value.clone());
+            }
+            i += 2;
+        } else {
+            i += 1;
+        }
+    }
+}
+
+/// 合并 load json 的 game 参数（extra_after_cp）到游戏参数列表。
+///
+/// 只补充缺失的 --key 参数及其值：已存在的 --key 参数整对跳过（包括它的值），
+/// 否则裸值会被再次追加到参数列表末尾（如 --fml.neoForgeVersion 21.1.238 的裸值
+/// 21.1.238 会被重复拼到命令尾部），造成启动参数大量重复拼接。
+pub(super) fn merge_loader_game_args(game_args: &mut Vec<String>, extra_after_cp: &[String]) {
+    let mut li = 0;
+    while li < extra_after_cp.len() {
+        let tok = &extra_after_cp[li];
+
+        // 检查是否是占位符参数（如 ${auth_player_name}）
+        let is_placeholder = tok.starts_with("${") && tok.ends_with("}");
+        if is_placeholder {
+            li += 1;
+            continue;
+        }
+
+        if tok.starts_with("--") {
+            // --key 参数：已存在则整对跳过；缺失则连值一起补入
+            let has_value =
+                li + 1 < extra_after_cp.len() && !extra_after_cp[li + 1].starts_with("--");
+            if !game_args.contains(tok) {
+                game_args.push(tok.clone());
+                if has_value {
+                    game_args.push(extra_after_cp[li + 1].clone());
+                }
+            }
+            li += if has_value { 2 } else { 1 };
+        } else {
+            // 裸值：若它紧跟的 --key 已存在于参数列表，说明它属于那个
+            // 已存在的参数，跳过避免末尾重复；否则保留原行为
+            let value_of_existing_key = li > 0
+                && extra_after_cp[li - 1].starts_with("--")
+                && game_args.contains(&extra_after_cp[li - 1]);
+            if !value_of_existing_key {
+                game_args.push(tok.clone());
+            }
+            li += 1;
+        }
     }
 }
 
@@ -1528,6 +1715,13 @@ pub(super) fn build_jvm_arguments_inner(
         println!("使用模块系统，跳过添加游戏JAR到classpath");
     }
 
+    // ===== 关键修复：classpath 去重 =====
+    // 部分启动器生成的 version.json 的 libraries 列表本身含重复项（例如
+    // PCL 的 NeoForge 实例把原版库与加载器库重复拼接），重复 jar 会令
+    // NeoForge 的 UnionFileSystem 抛出 "Duplicate key" 而启动失败，这里统一去重。
+    let mut seen_classpath: HashSet<String> = HashSet::new();
+    class_path_entries.retain(|p| seen_classpath.insert(p.to_lowercase()));
+
     // ===== 预构建 class_path（用于 ${classpath} 占位符替换）=====
     // 必须在 jvm_args_from_version 之前构建，因为 jvm_args_from_version 的 replace_placeholders
     // 会使用这个变量。
@@ -1709,10 +1903,17 @@ pub(super) fn build_jvm_arguments_inner(
             }
 
             // 占位符替换函数（参照 HMCL）
+            let jvm_natives_dir = format_path(
+                minecraft_path_buf
+                    .join("versions")
+                    .join(&version_name)
+                    .join(format!("{}-natives", &version_name)),
+            );
             let replace_placeholders = |s: &str| -> String {
                 let mut result = s.to_string();
                 result = result.replace("${classpath_separator}", classpath_sep);
                 result = result.replace("${library_directory}", &library_dir);
+                result = result.replace("${natives_directory}", &jvm_natives_dir);
                 result = result.replace("${version_name}", &version_name);
                 result = result.replace("${launcher_name}", "RTLauncher");
                 result = result.replace("${launcher_version}", env!("CARGO_PKG_VERSION"));
@@ -1854,6 +2055,27 @@ pub(super) fn build_jvm_arguments_inner(
             // 不添加针对具名模块的 --add-opens 和 --add-reads
             // 因为这些模块在 Java 启动时还不存在，Forge 会自己创建 ModuleLayer
         ]);
+
+        if uses_module_system {
+            // securejarhandler（Forge/NeoForge 1.17+ 的 jar 处理模块）在类初始化
+            // 时会对 MethodHandles.Lookup.IMPL_LOOKUP 调用 setAccessible，
+            // java.base 必须把 java.lang.invoke 开放给 cpw.mods.securejarhandler
+            // 这个具名模块，否则 UnionFileSystem 类初始化直接崩溃
+            // （ExceptionInInitializerError: Unable to make field ... IMPL_LOOKUP
+            // accessible）。
+            // NeoForge 21.1.x 的 json 只自带 java.util.jar 与 sun.security.util
+            // 两条开放；java.lang.invoke 这条 PCL 等启动器由自身固定参数补齐，
+            // 实例 json 里没有，这里统一兜底（本地自装实例能启动是因为安装器
+            // 把三条都写进了 json，PCL 安装的实例只带两条）。
+            args.extend(vec![
+                "--add-opens".to_string(),
+                "java.base/java.lang.invoke=cpw.mods.securejarhandler".to_string(),
+                "--add-opens".to_string(),
+                "java.base/java.util.jar=cpw.mods.securejarhandler".to_string(),
+                "--add-exports".to_string(),
+                "java.base/sun.security.util=cpw.mods.securejarhandler".to_string(),
+            ]);
+        }
     }
 
     if let Some(logging) = &version_json.logging {
@@ -1910,14 +2132,20 @@ pub(super) fn build_jvm_arguments_inner(
     // 只在neoforge时使用loadName，其他modloader使用version_name
     // 仅靠 loadName 是否包含 "neoforge" 判断不够可靠：
     // 合并型整合包（如 "PVZ_Survive"）的目录名不含 neoforge 却仍是 NeoForge，
+    // PCL 安装的 NeoForge 实例（如 "_ _ _ _ - _ _ _"）mainClass 与 Forge 相同，
+    // 且没有 net.neoforged:neoforge 坐标，只带 fancymodloader 库。
     // 需要再从已解析的 version.json 主类/库坐标交叉确认。
     let is_neoforge = loadType != "0"
         && (!loadName.is_empty() && loadName.to_lowercase().contains("neoforge")
             || version_json.main_class.to_lowercase().contains("neoforged")
-            || version_json
-                .libraries
-                .iter()
-                .any(|lib| lib.name.to_lowercase().contains("net.neoforged:neoforge:")));
+            || version_json.libraries.iter().any(|lib| {
+                let n = lib.name.to_lowercase();
+                // 注意: NeoForge 加载器坐标是 net.neoforged.fancymodloader:loader:4.0.43
+                // （neoforged 后是点而不是冒号），漏掉它会误判为 Forge
+                n.contains("net.neoforged.fancymodloader:")
+                    || n.contains("net.neoforged:neoforge:")
+                    || n.contains("net.neoforged:fmlloader:")
+            }));
     // 对于loadType为1的情况，如果是neoforge，使用loadName；否则使用version_name
     let native_version = if loadType == "1" && is_neoforge {
         &loadName
@@ -2018,73 +2246,7 @@ pub(super) fn build_jvm_arguments_inner(
     // Forge 自己指定的 -p (--module-path) 和 -cp 参数必须被正确加入
     // 处理 -p 和 -cp 等带空格分隔值的参数
     // 同时去重：避免 extra_before_cp 和 jvm_args_from_version 的参数重复（尤其 `-p`/`-cp`）
-    {
-        // 先收集已在 extra_before_cp 中的参数键，避免重复
-        let mut existing_keys: std::collections::HashSet<String> = std::collections::HashSet::new();
-        {
-            let mut ei = 0;
-            while ei < extra_before_cp.len() {
-                let p = &extra_before_cp[ei];
-                let has_value = p.starts_with('-')
-                    && ei + 1 < extra_before_cp.len()
-                    && !extra_before_cp[ei + 1].starts_with('-');
-                if p.starts_with('-') {
-                    // 记录 key（如 -p, -cp, --module-path 等）
-                    existing_keys.insert(p.clone());
-                }
-                if has_value {
-                    ei += 2;
-                } else {
-                    ei += 1;
-                }
-            }
-        }
-
-        // 然后添加 jvm_args_from_version 中的参数（跳过已在 extra_before_cp 中的 key）
-        let mut i = 0;
-        while i < jvm_args_from_version.len() {
-            let p = &jvm_args_from_version[i];
-            let has_value = p.starts_with('-')
-                && i + 1 < jvm_args_from_version.len()
-                && !jvm_args_from_version[i + 1].starts_with('-');
-
-            // 去重：如果 key 已存在于 extra_before_cp 中，跳过
-            // 但 -p/--module-path、-cp/--class-path 是关键参数，始终优先使用 jvm_args_from_version 中的
-            let is_module_or_class_path_key =
-                p == "-p" || p == "--module-path" || p == "-cp" || p == "--class-path";
-            if !is_module_or_class_path_key && existing_keys.contains(p) {
-                if has_value {
-                    i += 2;
-                } else {
-                    i += 1;
-                }
-                continue;
-            }
-
-            args.push(p.clone());
-            if has_value {
-                // 对于 -p/--module-path，额外检查其中引用的 JAR 是否存在
-                let value = &jvm_args_from_version[i + 1];
-                if is_module_or_class_path_key {
-                    debug!("[HMCL 模式] 使用 Forge 参数: {} 值长度: {}", p, value.len());
-                    // 对于 -p，打印其中的每个路径用于调试
-                    if p == "-p" || p == "--module-path" {
-                        for piece in value.split(|c| c == ';' || c == ':') {
-                            if !piece.trim().is_empty() {
-                                let path_buf = PathBuf::from(piece.trim());
-                                let exists = path_buf.exists();
-                                debug!("  module-path 项: {} (存在: {})", piece.trim(), exists);
-                            }
-                        }
-                    }
-                }
-                args.push(value.clone());
-                i += 2;
-            } else {
-                i += 1;
-            }
-        }
-    }
+    merge_version_jvm_args(&mut args, &jvm_args_from_version, &extra_before_cp);
 
     // 再处理独立加载器 JSON 的参数。version_name 可能指向原版 JSON，而
     // loadName 指向 Forge JSON；这种情况下 Forge 的 -p 只在这里出现。
@@ -2198,26 +2360,11 @@ pub(super) fn build_jvm_arguments_inner(
         .to_string(),
     ]);
 
-    // 修复点2: 不进行去重检查，确保load中game里面的所有参数都被加入总启动参数中
-    {
-        let mut li = 0;
-        while li < extra_after_cp.len() {
-            let tok = &extra_after_cp[li];
-
-            // 检查是否是占位符参数（如 ${auth_player_name}）
-            let is_placeholder = tok.starts_with("${") && tok.ends_with("}");
-
-            // 只过滤占位符参数，其他参数都保留
-            if is_placeholder {
-                li += 1;
-                continue;
-            }
-            if !(game_args_vec.contains(tok) && tok.starts_with("--")) {
-                game_args_vec.push(tok.clone());
-            }
-            li += 1;
-        }
-    }
+    // 修复点2: 合并 load 中的 game 参数，只补充缺失的 --key 参数及其值。
+    // 已存在的 --key 参数整对跳过（包括它的值），否则裸值会被再次追加到
+    // 参数列表末尾（如 --fml.neoForgeVersion 21.1.238 的裸值 21.1.238 会被
+    // 重复拼到命令尾部），造成启动参数大量重复拼接。
+    merge_loader_game_args(&mut game_args_vec, &extra_after_cp);
 
     // 修复点3: 改进参数转发逻辑
     let mut forwarded_args: Vec<String> = Vec::new();
