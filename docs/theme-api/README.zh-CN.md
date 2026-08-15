@@ -26,7 +26,7 @@ RTLauncher 对 Theme 包执行以下检查：
 RTLauncher 接受两种 Theme 包：
 
 1. 用于正常安装的 `.rtltheme` ZIP 归档。
-2. 用于开发的源码目录。RTLauncher 直接读取此目录，并在入口文件变化后重新加载 Theme。
+2. 用于开发的构建输出目录。该目录必须包含 `build` 生成的 `manifest.json` 和可执行入口。修改源码后，请重新构建并在 RTLauncher 中重新加载 Theme。
 
 构建后的归档具有以下结构：
 
