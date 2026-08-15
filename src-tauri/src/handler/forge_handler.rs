@@ -179,9 +179,8 @@ pub async fn download_and_install_forge(
                 if let Some(inst_name) = instance_name_cloned {
                     let clean_name = sanitize_instance_name(&inst_name);
                     println!("[Forge] 创建实例目录: {}", clean_name);
-                    let default_name = format!("{}-forge-{}", version, forge_ver);
                     let final_name = if clean_name.trim().is_empty() {
-                        sanitize_instance_name(&default_name)
+                        sanitize_instance_name(&loader_version)
                     } else {
                         clean_name
                     };

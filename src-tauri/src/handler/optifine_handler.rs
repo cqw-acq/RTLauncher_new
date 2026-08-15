@@ -277,9 +277,8 @@ pub async fn download_and_install_optifine(
 
                 if let Some(inst_name) = instance_name_cloned {
                     let clean_name = sanitize_instance_name(&inst_name);
-                    let default_name = format!("{}-optifine-{}", version, optifine_ver);
                     let final_name = if clean_name.trim().is_empty() {
-                        sanitize_instance_name(&default_name)
+                        sanitize_instance_name(&version_folder)
                     } else {
                         clean_name
                     };
