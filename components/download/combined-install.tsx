@@ -28,12 +28,12 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { LOADER_OPTIONS } from "@/constants/data";
-import { canSelectLoader, MOD_LOADER_GROUP } from "@/lib/utils";
+import { canSelectLoader } from "@/lib/utils";
 import { staggerContainer, staggerItem } from "@/lib/motion";
 import { LoaderIcon } from "@/components/launch/loader-icon";
 import { useDownloadManager } from "@/components/download/download-provider";
 import { useI18n } from "@/components/i18n/use-i18n";
-import { Download, CheckCircle2, Loader2, TriangleAlert } from "lucide-react";
+import { Download, CheckCircle2, Loader2, TriangleAlert, ArrowLeft, Puzzle, X } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import type { LoaderType, LoaderVersion, MinecraftVersion } from "@/types";
 
@@ -66,18 +66,19 @@ export function CombinedInstall({ version }: CombinedInstallProps) {
   const [versions, setVersions] = useState<Partial<Record<LoaderType, string>>>({});
   const [versionLists, setVersionLists] = useState<Partial<Record<LoaderType, LoaderVersionEntry[]>>>({});
   const [loadingLists, setLoadingLists] = useState<Partial<Record<LoaderType, boolean>>>({});
-  const [fabricApiEnabled, setFabricApiEnabled] = useState(false);
   const [fabricApiVersion, setFabricApiVersion] = useState("");
   const [fabricApiVersions, setFabricApiVersions] = useState<LoaderVersionEntry[]>([]);
   const [loadingFabricApi, setLoadingFabricApi] = useState(false);
+  const [view, setView] = useState<"grid" | "fabric-api">("grid");
 
   const [showNameDialog, setShowNameDialog] = useState(false);
   const [instanceNameInput, setInstanceNameInput] = useState("");
   const [installing, setInstalling] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  const hasModLoader = selected.some((l) => MOD_LOADER_GROUP.includes(l));
   const hasFabric = selected.includes("fabric");
+  /** 选择了版本即代表启用 Fabric API */
+  const fabricApiEnabled = fabricApiVersion !== "";
 
   const fetchVersions = useCallback(
     async (loader: LoaderType) => {
@@ -141,6 +142,22 @@ export function CombinedInstall({ version }: CombinedInstallProps) {
     if (hasFabric) void fetchFabricApiVersions();
   }, [hasFabric, fetchFabricApiVersions]);
 
+  const openFabricApiView = () => {
+    if (!hasFabric) return;
+    void fetchFabricApiVersions();
+    setView("fabric-api");
+  };
+
+  const selectFabricApiVersion = (apiVersion: string) => {
+    setFabricApiVersion(apiVersion);
+    setView("grid");
+  };
+
+  const clearFabricApiSelection = () => {
+    setFabricApiVersion("");
+    setView("grid");
+  };
+
   const toggleLoader = (loader: LoaderType) => {
     if (loader === "vanilla") return;
     if (selected.includes(loader)) {
@@ -150,6 +167,10 @@ export function CombinedInstall({ version }: CombinedInstallProps) {
         delete next[loader];
         return next;
       });
+      // 取消 Fabric 时连带取消 Fabric API
+      if (loader === "fabric") {
+        setFabricApiVersion("");
+      }
       return;
     }
     const check = canSelectLoader(version.id, loader, selected);
@@ -180,8 +201,7 @@ export function CombinedInstall({ version }: CombinedInstallProps) {
   const allVersionsChosen = selected
     .filter((l) => l !== "vanilla")
     .every((l) => Boolean(versions[l]));
-  const fabricApiReady = !fabricApiEnabled || Boolean(fabricApiVersion);
-  const canInstall = allVersionsChosen && fabricApiReady;
+  const canInstall = allVersionsChosen;
 
   const handleInstall = () => {
     if (!canInstall) return;
@@ -214,8 +234,6 @@ export function CombinedInstall({ version }: CombinedInstallProps) {
       setInstalling(false);
     }
   };
-
-  const selectedOptions = LOADER_OPTIONS.filter((l) => l.id !== "vanilla" && selected.includes(l.id));
 
   return (
     <>
@@ -263,16 +281,17 @@ export function CombinedInstall({ version }: CombinedInstallProps) {
               const isSelected = selected.includes(loader.id);
               const colors = loaderColors[loader.id];
               const disabled = !state.allowed;
+              const list = versionLists[loader.id];
+              const loading = loadingLists[loader.id];
               return (
                 <motion.div key={loader.id} variants={staggerItem}>
                   <Card
                     className={cn(
-                      "group cursor-pointer transition-all duration-200 shadow-sm h-full",
+                      "group transition-all duration-200 shadow-sm h-full",
                       colors.border,
                       disabled && "opacity-45 cursor-not-allowed pointer-events-none",
                       isSelected && "ring-2 ring-primary"
                     )}
-                    onClick={() => toggleLoader(loader.id)}
                   >
                     <CardHeader className="p-4 pb-2">
                       <div className="flex items-center justify-between">
@@ -284,13 +303,17 @@ export function CombinedInstall({ version }: CombinedInstallProps) {
                         >
                           <LoaderIcon kind={loader.id} className="size-full" />
                         </div>
-                        <Switch
-                          checked={isSelected}
-                          disabled={disabled}
-                          onClick={(e) => e.stopPropagation()}
-                          onCheckedChange={() => toggleLoader(loader.id)}
-                          aria-label={loader.name}
-                        />
+                        {isSelected && (
+                          <Button
+                            variant="ghost"
+                            size="icon-sm"
+                            className="size-7 text-muted-foreground hover:text-destructive"
+                            onClick={() => toggleLoader(loader.id)}
+                            aria-label={`${t("download.clearSelection")} ${loader.name}`}
+                          >
+                            <X className="size-3.5" />
+                          </Button>
+                        )}
                       </div>
                       <CardTitle className="text-sm mt-2">{loader.name}</CardTitle>
                     </CardHeader>
@@ -298,117 +321,173 @@ export function CombinedInstall({ version }: CombinedInstallProps) {
                       <CardDescription className="text-xs line-clamp-2">
                         {state.reason ?? loader.description}
                       </CardDescription>
+                      <div className="mt-3">
+                        <Select
+                          value={versions[loader.id] ?? ""}
+                          onOpenChange={(open) => {
+                            if (open) void fetchVersions(loader.id);
+                          }}
+                          onValueChange={(v) => {
+                            setVersions((prev) => ({ ...prev, [loader.id]: v }));
+                            if (!selected.includes(loader.id)) {
+                              setSelected((prev) => [...prev, loader.id]);
+                            }
+                          }}
+                        >
+                          <SelectTrigger className="h-9 text-xs">
+                            <SelectValue placeholder={t("download.selectVersion")} />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {loading && (list ?? []).length === 0 ? (
+                              <div className="flex items-center justify-center gap-2 px-4 py-3 text-xs text-muted-foreground">
+                                <Loader2 className="size-3.5 animate-spin" />
+                                {t("download.loadingVersionList")}
+                              </div>
+                            ) : (list ?? []).length === 0 ? (
+                              <div className="px-4 py-3 text-xs text-muted-foreground">
+                                {t("download.noAvailableLoaderVersions", { name: loader.name })}
+                              </div>
+                            ) : (
+                              (list ?? []).map((v) => (
+                                <SelectItem key={v.id} value={v.id} className="text-xs">
+                                  {v.version}
+                                </SelectItem>
+                              ))
+                            )}
+                          </SelectContent>
+                        </Select>
+                      </div>
                     </CardContent>
                   </Card>
                 </motion.div>
               );
             })}
+            {/* Fabric API 卡片（与 Fabric 一样的一张卡片，需先选 Fabric） */}
+            <motion.div key="fabric-api" variants={staggerItem}>
+              <Card
+                className={cn(
+                  "group cursor-pointer transition-all duration-200 shadow-sm h-full",
+                  "hover:border-blue-400 dark:hover:border-blue-500",
+                  !hasFabric && "opacity-45 cursor-not-allowed pointer-events-none",
+                  fabricApiEnabled && "ring-2 ring-primary"
+                )}
+                onClick={openFabricApiView}
+              >
+                <CardHeader className="p-4 pb-2">
+                  <div className="flex items-center justify-between">
+                    <div className="flex size-10 items-center justify-center rounded-xl p-1.5 bg-blue-100 dark:bg-blue-900/30">
+                      <Puzzle className="size-full text-blue-600 dark:text-blue-400" />
+                    </div>
+                    {fabricApiEnabled && (
+                      <Button
+                        variant="ghost"
+                        size="icon-sm"
+                        className="size-7 text-muted-foreground hover:text-destructive"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          clearFabricApiSelection();
+                        }}
+                        aria-label={`${t("download.clearSelection")} Fabric API`}
+                      >
+                        <X className="size-3.5" />
+                      </Button>
+                    )}
+                  </div>
+                  <CardTitle className="text-sm mt-2">Fabric API</CardTitle>
+                </CardHeader>
+                <CardContent className="p-4 pt-0">
+                  <CardDescription className="text-xs line-clamp-2">
+                    {!hasFabric
+                      ? t("download.fabricApiRequiresFabric")
+                      : fabricApiEnabled
+                        ? t("download.selectedVersion", { version: fabricApiVersion })
+                        : t("download.fabricApiHint")}
+                  </CardDescription>
+                </CardContent>
+              </Card>
+            </motion.div>
           </motion.div>
 
-          {/* Fabric API（仅选 Fabric 时出现） */}
-          {hasFabric && (
+          {/* Fabric API 版本选择视图（点击卡片进入，选择版本即启用） */}
+          {view === "fabric-api" ? (
             <motion.div
-              initial={{ opacity: 0, y: 8 }}
-              animate={{ opacity: 1, y: 0 }}
-              className="mt-4"
+              key="fabric-api-view"
+              initial={{ opacity: 0, x: 24 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: -24 }}
+              className="flex h-full flex-col gap-3"
             >
-              <div className="rounded-xl border border-border bg-card px-4 py-3">
-                <div className="flex items-center justify-between gap-3">
-                  <div className="flex items-center gap-3 min-w-0">
-                    <Switch
-                      checked={fabricApiEnabled}
-                      onCheckedChange={setFabricApiEnabled}
-                      aria-label="Fabric API"
-                    />
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2">
-                        <span className="text-sm font-semibold">Fabric API</span>
-                        <Badge variant="secondary" className="text-[10px] px-1.5 py-0">
-                          {t("download.mod")}
-                        </Badge>
-                      </div>
-                      <p className="text-xs text-muted-foreground mt-0.5">
-                        {t("download.fabricApiHint")}
-                      </p>
-                    </div>
-                  </div>
-                  {fabricApiEnabled && (
-                    <div className="w-52 shrink-0">
-                      {loadingFabricApi ? (
-                        <div className="flex items-center justify-center py-2 text-muted-foreground">
-                          <Loader2 className="size-4 animate-spin" />
-                        </div>
-                      ) : (
-                        <Select value={fabricApiVersion} onValueChange={setFabricApiVersion}>
-                          <SelectTrigger className="h-9 text-xs">
-                            <SelectValue placeholder={t("download.selectVersion")} />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {fabricApiVersions.map((v) => (
-                              <SelectItem key={v.id} value={v.id} className="text-xs">
-                                {v.version}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      )}
-                    </div>
-                  )}
+              <div className="flex items-center gap-2 shrink-0">
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  onClick={() => setView("grid")}
+                  aria-label={t("download.backToLoaderSelection")}
+                >
+                  <ArrowLeft className="size-4" />
+                </Button>
+                <div className="min-w-0 flex-1">
+                  <h3 className="text-sm font-medium">{t("download.selectFabricApiVersion")}</h3>
+                  <p className="text-xs text-muted-foreground/70 mt-0.5">
+                    {t("download.selectFabricApiVersionHint")}
+                  </p>
                 </div>
+                {fabricApiEnabled && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-8 text-xs shrink-0"
+                    onClick={clearFabricApiSelection}
+                  >
+                    <X className="size-3.5 mr-1" />
+                    {t("download.clearSelection")}
+                  </Button>
+                )}
+              </div>
+              <div className="flex-1 min-h-0 overflow-y-auto space-y-2">
+                {loadingFabricApi ? (
+                  <div className="flex flex-col items-center justify-center gap-3 py-12 text-muted-foreground">
+                    <Loader2 className="size-6 animate-spin" />
+                    <p className="text-sm">{t("download.loadingVersionList")}</p>
+                  </div>
+                ) : fabricApiVersions.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center gap-2 py-12 text-muted-foreground">
+                    <p className="text-sm">{t("download.noAvailableLoaderVersions", { name: "Fabric API" })}</p>
+                  </div>
+                ) : (
+                  fabricApiVersions.map((v) => {
+                    const isChosen = fabricApiVersion === v.id;
+                    return (
+                      <button
+                        key={v.id}
+                        onClick={() => selectFabricApiVersion(v.id)}
+                        className={cn(
+                          "w-full flex items-center justify-between gap-3 rounded-xl border bg-card px-4 py-3 text-left transition-all duration-200",
+                          isChosen
+                            ? "border-primary ring-2 ring-primary"
+                            : "border-border hover:border-primary/50"
+                        )}
+                      >
+                        <div className="min-w-0">
+                          <p className="text-sm font-medium truncate">{v.version}</p>
+                          {v.isRecommended && (
+                            <Badge variant="secondary" className="text-[10px] px-1.5 py-0 mt-1">
+                              {t("download.recommended")}
+                            </Badge>
+                          )}
+                        </div>
+                        {isChosen ? (
+                          <CheckCircle2 className="size-4 text-primary shrink-0" />
+                        ) : (
+                          <span className="text-xs text-muted-foreground shrink-0">{t("download.select")}</span>
+                        )}
+                      </button>
+                    );
+                  })
+                )}
               </div>
             </motion.div>
-          )}
-
-          {/* 已选加载器版本选择 */}
-          {selectedOptions.length > 0 && (
-            <div className="mt-4 space-y-3">
-              {selectedOptions.map((loader) => {
-                const colors = loaderColors[loader.id];
-                const list = versionLists[loader.id];
-                const loading = loadingLists[loader.id];
-                return (
-                  <motion.div
-                    key={loader.id}
-                    initial={{ opacity: 0, y: 8 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    className="rounded-xl border border-border bg-card px-4 py-3"
-                  >
-                    <div className="flex items-center justify-between gap-3">
-                      <div className="flex items-center gap-3 min-w-0">
-                        <div className={cn("flex size-9 items-center justify-center rounded-lg p-1.5", colors.bg)}>
-                          <LoaderIcon kind={loader.id} className="size-full" />
-                        </div>
-                        <span className="text-sm font-semibold">{loader.name}</span>
-                      </div>
-                      <div className="w-60 shrink-0">
-                        {loading ? (
-                          <div className="flex items-center justify-center py-2 text-muted-foreground">
-                            <Loader2 className="size-4 animate-spin" />
-                          </div>
-                        ) : (
-                          <Select
-                            value={versions[loader.id] ?? ""}
-                            onValueChange={(v) => setVersions((prev) => ({ ...prev, [loader.id]: v }))}
-                          >
-                            <SelectTrigger className="h-9 text-xs">
-                              <SelectValue placeholder={t("download.selectVersion")} />
-                            </SelectTrigger>
-                            <SelectContent>
-                              {(list ?? []).map((v) => (
-                                <SelectItem key={v.id} value={v.id} className="text-xs">
-                                  {v.version}
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                        )}
-                      </div>
-                    </div>
-                  </motion.div>
-                );
-              })}
-            </div>
-          )}
+          ) : null}
         </div>
 
         {/* 底部安装按钮 */}
