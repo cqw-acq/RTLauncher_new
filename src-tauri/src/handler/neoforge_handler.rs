@@ -2,7 +2,9 @@ use crate::downloader::dwPatch::get_minecraft_dir;
 use crate::downloader::mod_loader_installer_shared::pick_java_executable;
 use crate::downloader::neoforge_installer;
 use crate::downloader::original_dwl::process_version;
-use crate::downloader::shared_utils::{merge_version_jsons_to_instance, sanitize_instance_name};
+use crate::downloader::shared_utils::{
+    cleanup_loader_version_dir, merge_version_jsons_to_instance, sanitize_instance_name,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -194,7 +196,12 @@ pub async fn download_and_install_neoforge(
                         "neoforge",
                         &minecraft_path_clone,
                     ) {
-                        Ok(_) => println!("[NeoForge] 实例 JSON 合并完成: {}", final_name),
+                        Ok(_) => {
+                            println!("[NeoForge] 实例 JSON 合并完成: {}", final_name);
+                            if final_name != loader_version {
+                                cleanup_loader_version_dir(&loader_version, &minecraft_path_clone);
+                            }
+                        }
                         Err(e) => println!("[NeoForge] 警告: 合并实例 JSON 失败: {}", e),
                     }
                 }

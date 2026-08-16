@@ -119,6 +119,7 @@ export async function setupAllDownloadListeners(
     ["neoforge-download-progress", "neoforge-download-finished", "other"],
     ["liteloader-download-progress", "liteloader-download-finished", "other"],
     ["quilt-download-progress", "quilt-download-finished", "other"],
+    ["combined-download-progress", "combined-download-finished", "other"],
   ];
 
   const unlistens: UnlistenFn[] = [];

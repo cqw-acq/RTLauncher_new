@@ -1241,9 +1241,15 @@ pub(super) fn build_jvm_arguments_inner(
             .join(parent)
             .join(format!("{}.json", parent));
 
-        let parent_json: VersionJson = serde_json::from_reader(
-            std::fs::File::open(parent_path).context("Failed to open parent json")?,
-        )?;
+        let parent_json: VersionJson = serde_json::from_reader(std::fs::File::open(&parent_path)
+            .with_context(|| {
+                format!(
+                    "无法打开父版本 JSON (inheritsFrom={}, 路径: {:?})\n请确认原版版本 {} 已下载",
+                    parent,
+                    parent_path,
+                    parent
+                )
+            })?)?;
 
         if version_json.asset_index.is_none() {
             version_json.asset_index = parent_json.asset_index;

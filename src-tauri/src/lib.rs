@@ -64,6 +64,9 @@ use handler::modpack_installer_handler::{
 use handler::neoforge_handler::{
     cancel_neoforge_download, download_and_install_neoforge, get_neoforge_versions,
 };
+use handler::combined_install_handler::{
+    cancel_combined_download, install_combined_package,
+};
 use handler::optifine_handler::{
     cancel_optifine_download, download_and_install_optifine, get_optifine_version_names,
     get_optifine_versions, install_optifine,
@@ -216,6 +219,8 @@ pub fn run() {
             get_neoforge_versions,
             download_and_install_neoforge,
             cancel_neoforge_download,
+            install_combined_package,
+            cancel_combined_download,
             get_liteloader_versions,
             download_and_install_liteloader,
             cancel_liteloader_download,

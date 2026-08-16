@@ -473,6 +473,8 @@ struct ExtraLibraries {
     version_folder_name: String,
     main_class: String,
     game_args_tweaks: Vec<String>,
+    /// 以 mod 形式安装到已装 Forge/NeoForge 加载器的 mods 目录（而非作为库加入 classpath）
+    install_as_mod: bool,
 }
 
 fn run_patcher(
@@ -501,12 +503,57 @@ fn run_patcher(
     Ok(())
 }
 
+/// 检测该 MC 版本是否已安装 Forge/NeoForge 加载器版本目录（用于 OptiFine 叠加安装）。
+///
+/// 优先选择 version.json 带 `inheritsFrom: {mc_version}` 的原始加载器版本目录，
+/// 其次选择名称含 forge/neoforge 且带 mainClass 的目录（如 HMCL 合并实例）。
+pub fn detect_installed_loader_version(mc_dir: &Path, mc_version: &str) -> Option<String> {
+    let versions_root = mc_dir.join("versions");
+    let mut candidates: Vec<(u8, String)> = Vec::new();
+    if let Ok(entries) = fs::read_dir(&versions_root) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            let dir_name = entry.file_name().to_string_lossy().to_string();
+            let lower = dir_name.to_lowercase();
+            if !dir_name.starts_with(mc_version)
+                || dir_name == mc_version
+                || lower.contains("optifine")
+                || !(lower.contains("forge") || lower.contains("neoforge"))
+            {
+                continue;
+            }
+            let json_path = path.join(format!("{}.json", dir_name));
+            let Ok(text) = fs::read_to_string(&json_path) else {
+                continue;
+            };
+            let Ok(v) = serde_json::from_str::<Value>(&text) else {
+                continue;
+            };
+            if v.get("mainClass").and_then(|m| m.as_str()).is_none() {
+                continue;
+            }
+            let score = if v.get("inheritsFrom").and_then(|x| x.as_str()) == Some(mc_version) {
+                1
+            } else {
+                0
+            };
+            candidates.push((score, dir_name));
+        }
+    }
+    candidates.sort_by(|a, b| b.0.cmp(&a.0));
+    candidates.into_iter().next().map(|(_, name)| name)
+}
+
 fn process_installer_and_build_json(
     installer_path: &Path,
     mc_dir: &Path,
     mc_version: &str,
     optifine_full_ver: &str,
     optifine_self_ver: &str,
+    base_loader: Option<&str>,
 ) -> Result<ExtraLibraries> {
     let installer_bytes = fs::read(installer_path)
         .with_context(|| format!("读取 OptiFine 安装器失败: {}", installer_path.display()))?;
@@ -554,35 +601,39 @@ fn process_installer_and_build_json(
     let mut libraries: Vec<Value> = Vec::new();
     let mut has_launch_wrapper = false;
 
-    if zip_entry_exists(&mut installer_zip, "launchwrapper-2.0.jar") {
-        let lw_lib_name = "optifine:launchwrapper:2.0".to_string();
-        let lw_path = get_library_file(mc_dir, &lw_lib_name)?;
-        if extract_zip_entry_to_file(&mut installer_zip, "launchwrapper-2.0.jar", &lw_path)? {
-            libraries.push(json!({ "name": lw_lib_name }));
-            has_launch_wrapper = true;
+    // 以 mod 形式叠加到已装 Forge/NeoForge 时，不加入 launchwrapper/OptiFine 库，
+    // 安装完成的 jar 会放入加载器版本的 mods/ 目录。
+    if base_loader.is_none() {
+        if zip_entry_exists(&mut installer_zip, "launchwrapper-2.0.jar") {
+            let lw_lib_name = "optifine:launchwrapper:2.0".to_string();
+            let lw_path = get_library_file(mc_dir, &lw_lib_name)?;
+            if extract_zip_entry_to_file(&mut installer_zip, "launchwrapper-2.0.jar", &lw_path)? {
+                libraries.push(json!({ "name": lw_lib_name }));
+                has_launch_wrapper = true;
+            }
         }
-    }
 
-    if !has_launch_wrapper {
-        if let Some(launchwrapper_of_bytes) = read_zip_entry_to_vec(&mut installer_zip, "launchwrapper-of.txt") {
-            if let Ok(ver) = String::from_utf8(launchwrapper_of_bytes) {
-                let ver = ver.trim().to_string();
-                let entry_name = format!("launchwrapper-of-{}.jar", ver);
-                let lw_lib_name = format!("optifine:launchwrapper-of:{}", ver);
-                let lw_path = get_library_file(mc_dir, &lw_lib_name)?;
-                if extract_zip_entry_to_file(&mut installer_zip, &entry_name, &lw_path)? {
-                    libraries.push(json!({ "name": lw_lib_name }));
-                    has_launch_wrapper = true;
+        if !has_launch_wrapper {
+            if let Some(launchwrapper_of_bytes) = read_zip_entry_to_vec(&mut installer_zip, "launchwrapper-of.txt") {
+                if let Ok(ver) = String::from_utf8(launchwrapper_of_bytes) {
+                    let ver = ver.trim().to_string();
+                    let entry_name = format!("launchwrapper-of-{}.jar", ver);
+                    let lw_lib_name = format!("optifine:launchwrapper-of:{}", ver);
+                    let lw_path = get_library_file(mc_dir, &lw_lib_name)?;
+                    if extract_zip_entry_to_file(&mut installer_zip, &entry_name, &lw_path)? {
+                        libraries.push(json!({ "name": lw_lib_name }));
+                        has_launch_wrapper = true;
+                    }
                 }
             }
         }
-    }
 
-    if !has_launch_wrapper {
-        libraries.push(json!({ "name": "net.minecraft:launchwrapper:1.12" }));
-    }
+        if !has_launch_wrapper {
+            libraries.push(json!({ "name": "net.minecraft:launchwrapper:1.12" }));
+        }
 
-    libraries.insert(0, json!({ "name": optifine_lib_name }));
+        libraries.insert(0, json!({ "name": optifine_lib_name }));
+    }
 
     let buildof = read_buildof(&mut installer_zip);
     if let Some(buildof_str) = buildof.as_ref() {
@@ -593,11 +644,19 @@ fn process_installer_and_build_json(
     let mc_major: i32 = mc_ver_parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(0);
 
     let (main_class, game_args_tweaks) = if mc_major >= 17 {
-        let vanilla_json_path = mc_dir
-            .join("versions")
-            .join(mc_version)
-            .join(format!("{}.json", mc_version));
-        let original_main = if let Ok(text) = fs::read_to_string(&vanilla_json_path) {
+        // 优先读取已装加载器版本的 json（PCL/HMCL 行为：OptiFine 叠加 Forge/NeoForge）
+        let base_json_path = if let Some(base) = base_loader {
+            mc_dir
+                .join("versions")
+                .join(base)
+                .join(format!("{}.json", base))
+        } else {
+            mc_dir
+                .join("versions")
+                .join(mc_version)
+                .join(format!("{}.json", mc_version))
+        };
+        let original_main = if let Ok(text) = fs::read_to_string(&base_json_path) {
             serde_json::from_str::<Value>(&text)
                 .ok()
                 .and_then(|v| v.get("mainClass")?.as_str().map(|s| s.to_string()))
@@ -606,11 +665,12 @@ fn process_installer_and_build_json(
             VANILLA_MAIN.to_string()
         };
 
-        if FORGE_OPTIFINE_COMPATIBLE_MAINS.contains(&original_main.as_str())
-            && (original_main == MOD_LAUNCHER_MAIN
-                || original_main == BOOTSTRAP_LAUNCHER_MAIN
-                || original_main == FORGE_BOOTSTRAP_MAIN
-                || original_main == NEO_FORGE_BOOTSTRAP_MAIN)
+        if base_loader.is_some()
+            || (FORGE_OPTIFINE_COMPATIBLE_MAINS.contains(&original_main.as_str())
+                && (original_main == MOD_LAUNCHER_MAIN
+                    || original_main == BOOTSTRAP_LAUNCHER_MAIN
+                    || original_main == FORGE_BOOTSTRAP_MAIN
+                    || original_main == NEO_FORGE_BOOTSTRAP_MAIN))
         {
             println!("[OptiFine] Forge/NeoForge 检测到，OptiFine 将作为 mod 加载（不替换 mainClass）");
             (original_main, Vec::new())
@@ -621,11 +681,17 @@ fn process_installer_and_build_json(
         (LAUNCH_WRAPPER_MAIN.to_string(), vec!["--tweakClass".to_string(), "optifine.OptiFineTweaker".to_string()])
     };
 
+    let version_folder_name = match base_loader {
+        Some(base) => format!("{}-OptiFine-{}", base, optifine_self_ver),
+        None => format!("{}-OptiFine-{}", mc_version, optifine_self_ver),
+    };
+
     Ok(ExtraLibraries {
         libraries,
-        version_folder_name: format!("{}-OptiFine-{}", mc_version, optifine_self_ver),
+        version_folder_name,
         main_class,
         game_args_tweaks,
+        install_as_mod: base_loader.is_some(),
     })
 }
 
@@ -635,33 +701,58 @@ fn build_optifine_version_json(
     extra: &ExtraLibraries,
     optifine_self_ver: &str,
     optifine_full_ver: &str,
+    base_loader: Option<&str>,
 ) -> Result<PathBuf> {
     let versions_root = mc_dir.join("versions");
-    let vanilla_json_path = versions_root
-        .join(mc_version)
-        .join(format!("{}.json", mc_version));
-    if !vanilla_json_path.exists() {
-        bail!("找不到原版 version.json: {:?}", vanilla_json_path);
+
+    // 叠加到已装加载器时以加载器 json 为基础，否则以原版 json 为基础
+    let base_json_path = if let Some(base) = base_loader {
+        versions_root
+            .join(base)
+            .join(format!("{}.json", base))
+    } else {
+        versions_root
+            .join(mc_version)
+            .join(format!("{}.json", mc_version))
+    };
+    if !base_json_path.exists() {
+        bail!(
+            "找不到基础版本 version.json: {:?}",
+            base_json_path
+        );
     }
 
-    let vanilla_text = fs::read_to_string(&vanilla_json_path)?;
-    let mut vanilla: Value = serde_json::from_str(&vanilla_text)
-        .context("解析原版 version.json 失败")?;
+    let base_text = fs::read_to_string(&base_json_path)?;
+    let mut base: Value = serde_json::from_str(&base_text)
+        .context("解析基础版本 version.json 失败")?;
 
     let instance_id = extra.version_folder_name.clone();
+    let base_name = base_loader.unwrap_or(mc_version);
 
-    let obj = vanilla
+    let obj = base
         .as_object_mut()
-        .ok_or_else(|| anyhow!("原版 version.json 不是对象"))?;
+        .ok_or_else(|| anyhow!("基础版本 version.json 不是对象"))?;
 
     obj.insert("id".to_string(), Value::String(instance_id.clone()));
-    obj.insert("inheritsFrom".to_string(), Value::String(mc_version.to_string()));
+    obj.insert("inheritsFrom".to_string(), Value::String(base_name.to_string()));
     obj.insert("mainClass".to_string(), Value::String(extra.main_class.clone()));
     obj.insert("releaseTime".to_string(), Value::String(iso_now()));
     obj.insert("time".to_string(), Value::String(iso_now()));
     obj.insert("type".to_string(), Value::String("release".to_string()));
 
-    if !extra.game_args_tweaks.is_empty() {
+    if extra.install_as_mod {
+        // Forge/NeoForge 叠加安装：OptiFine 作为 mod 放入加载器版本的 mods/ 目录，
+        // 不向 json 注入 OptiFine 库（基础 json 自带加载器全部库）。
+        let of_lib_path = get_library_file(mc_dir, &format!("optifine:OptiFine:{}", optifine_full_ver))?;
+        let mods_dir = versions_root.join(base_name).join("mods");
+        fs::create_dir_all(&mods_dir).ok();
+        let mod_jar = mods_dir.join(format!("optifine-{}.jar", optifine_self_ver));
+        if of_lib_path.exists() && !mod_jar.exists() {
+            fs::copy(&of_lib_path, &mod_jar)
+                .with_context(|| format!("复制 OptiFine mod jar 失败: {}", mod_jar.display()))?;
+            println!("[OptiFine] 已复制到 mods 目录: {}", mod_jar.display());
+        }
+    } else if !extra.game_args_tweaks.is_empty() {
         let args_obj = obj
             .get_mut("arguments")
             .and_then(|v| v.as_object_mut());
@@ -710,8 +801,14 @@ fn build_optifine_version_json(
         .cloned()
         .unwrap_or_default();
 
-    let mut merged = extra.libraries.clone();
-    merged.extend(existing_libs);
+    // 叠加安装时基础 json 已含加载器全部库，不重复注入 OptiFine 库
+    let mut merged = if extra.install_as_mod {
+        existing_libs.clone()
+    } else {
+        let mut libs = extra.libraries.clone();
+        libs.extend(existing_libs);
+        libs
+    };
     obj.insert("libraries".to_string(), Value::Array(merged));
 
     let target_dir = versions_root.join(&instance_id);
@@ -720,7 +817,7 @@ fn build_optifine_version_json(
     let target_json = target_dir.join(format!("{}.json", instance_id));
     fs::write(
         &target_json,
-        serde_json::to_string_pretty(&vanilla)?,
+        serde_json::to_string_pretty(&base)?,
     )
     .with_context(|| format!("写入 OptiFine version.json 失败: {}", target_json.display()))?;
 
@@ -808,12 +905,19 @@ pub async fn install_optifine_from_bmcl_with_fallback(
         mc_version, self_ver, full_ver
     );
 
+    // 若已装 Forge/NeoForge 则叠加安装（PCL/HMCL 行为）
+    let base_loader = detect_installed_loader_version(mc_dir, mc_version);
+    if let Some(base) = &base_loader {
+        println!("[OptiFine] 检测到已安装加载器 {}, OptiFine 将叠加安装", base);
+    }
+
     let extra = process_installer_and_build_json(
         &installer_path,
         mc_dir,
         mc_version,
         &full_ver,
         &self_ver,
+        base_loader.as_deref(),
     )?;
 
     let _ = build_optifine_version_json(
@@ -822,6 +926,7 @@ pub async fn install_optifine_from_bmcl_with_fallback(
         &extra,
         &self_ver,
         &full_ver,
+        base_loader.as_deref(),
     )?;
 
     Ok(extra.version_folder_name)
@@ -852,12 +957,19 @@ pub async fn install_optifine_from_local(
         parsed_mc, self_ver, full_ver
     );
 
+    // 若已装 Forge/NeoForge 则叠加安装（PCL/HMCL 行为）
+    let base_loader = detect_installed_loader_version(mc_dir, mc_version);
+    if let Some(base) = &base_loader {
+        println!("[OptiFine] 检测到已安装加载器 {}, OptiFine 将叠加安装", base);
+    }
+
     let extra = process_installer_and_build_json(
         installer_path,
         mc_dir,
         mc_version,
         &full_ver,
         &self_ver,
+        base_loader.as_deref(),
     )?;
 
     let _ = build_optifine_version_json(
@@ -866,6 +978,7 @@ pub async fn install_optifine_from_local(
         &extra,
         &self_ver,
         &full_ver,
+        base_loader.as_deref(),
     )?;
 
     Ok(extra.version_folder_name)

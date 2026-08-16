@@ -533,6 +533,173 @@ pub fn merge_version_jsons_to_instance(
     Ok(())
 }
 
+/// 扫描所有版本的 version.json，判断是否有版本通过 inheritsFrom 引用 target。
+fn is_referenced_by_other_versions(versions_root: &Path, target: &str) -> bool {
+    if let Ok(entries) = fs::read_dir(versions_root) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            let dir_name = entry.file_name().to_string_lossy().to_string();
+            let json_path = path.join(format!("{}.json", dir_name));
+            let Ok(text) = fs::read_to_string(&json_path) else {
+                continue;
+            };
+            let Ok(v) = serde_json::from_str::<Value>(&text) else {
+                continue;
+            };
+            if v.get("inheritsFrom")
+                .and_then(|x| x.as_str())
+                .is_some_and(|s| s == target)
+            {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// 合并成功后清理中间的 loader 版本目录（如 {mc}-neoforge-{lv}）。
+///
+/// 该目录只有一份 raw loader version.json（inheritsFrom 原版），既没有
+/// 独立游戏 JAR，也缺少 -p/-DignoreList 等模块引导参数，无法直接启动，
+/// 留着只会让版本列表多出一个启动失败的条目。
+/// 仅当没有其他版本的 version.json 通过 inheritsFrom 引用它时才删除，
+/// 避免破坏以简单 inherits 模式安装的整合包。
+pub fn cleanup_loader_version_dir(loader_version: &str, minecraft_path: &Path) {
+    let versions_root = minecraft_path.join("versions");
+    let loader_dir = versions_root.join(loader_version);
+    if !loader_dir.is_dir() {
+        return;
+    }
+    if is_referenced_by_other_versions(&versions_root, loader_version) {
+        println!(
+            "[Cleanup] 版本 {} 仍被其他版本 inheritsFrom 引用，保留中间目录",
+            loader_version
+        );
+        return;
+    }
+    match fs::remove_dir_all(&loader_dir) {
+        Ok(_) => println!(
+            "[Cleanup] 已删除中间 loader 版本目录: {}",
+            loader_dir.display()
+        ),
+        Err(e) => eprintln!("[Cleanup] 删除中间 loader 版本目录失败（忽略）: {}", e),
+    }
+}
+
+/// 组包后清理原版版本目录（versions/{mc}）。
+///
+/// merge_version_jsons_to_instance 产出的合并实例是自包含的（无 inheritsFrom、
+/// 库已全量合并、游戏 JAR 已复制进实例目录），启动不再依赖原版目录。
+/// 与 HMCL 一致：原版与模组加载器合并为单个版本条目。
+/// 安全删除条件：
+/// 1. 没有其他版本 json 通过 inheritsFrom 引用它；
+/// 2. 目录内容干净（仅 json/jar/natives 与空的标准子目录），避免误删用户文件。
+pub fn cleanup_vanilla_version_dir(mc_version: &str, minecraft_path: &Path) {
+    let versions_root = minecraft_path.join("versions");
+    let vanilla_dir = versions_root.join(mc_version);
+    if !vanilla_dir.is_dir() {
+        return;
+    }
+    if is_referenced_by_other_versions(&versions_root, mc_version) {
+        println!(
+            "[Cleanup] 原版版本 {} 仍被其他版本 inheritsFrom 引用，保留目录",
+            mc_version
+        );
+        return;
+    }
+    let Ok(entries) = fs::read_dir(&vanilla_dir) else {
+        return;
+    };
+    let mut not_pristine = false;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().to_string();
+        let is_core_file = path.is_file()
+            && (name == format!("{}.json", mc_version) || name == format!("{}.jar", mc_version));
+        let is_natives_dir =
+            path.is_dir() && name == format!("{}-natives", mc_version);
+        let is_empty_std_dir = path.is_dir()
+            && [
+                "mods",
+                "resourcepacks",
+                "shaderpacks",
+                "config",
+                "saves",
+                "datapacks",
+                "logs",
+                "crash-reports",
+            ]
+            .contains(&name.as_str())
+            && fs::read_dir(&path)
+                .map(|mut d| d.next().is_none())
+                .unwrap_or(false);
+        if !(is_core_file || is_natives_dir || is_empty_std_dir) {
+            not_pristine = true;
+            println!(
+                "[Cleanup] 原版目录含用户文件，跳过删除: {}",
+                path.display()
+            );
+            break;
+        }
+    }
+    if not_pristine {
+        return;
+    }
+    match fs::remove_dir_all(&vanilla_dir) {
+        Ok(_) => println!(
+            "[Cleanup] 已删除原版版本目录（已与加载器合并为单个实例）: {}",
+            vanilla_dir.display()
+        ),
+        Err(e) => eprintln!("[Cleanup] 删除原版版本目录失败（忽略）: {}", e),
+    }
+}
+
+/// 把原版/加载器版本目录里的 mods/*.jar 复制到实例的 mods/ 目录。
+///
+/// 用于 Fabric API、Quilt API、叠加安装的 OptiFine 等以 mod 形式安装的文件，
+/// 安装时它们落在 versions/{mc}/mods 或 versions/{loader}/mods，
+/// 而 merge_version_jsons_to_instance 只复制 jar/natives，需要单独搬运 mods。
+pub fn copy_version_mods_to_instance(
+    instance_name: &str,
+    from_version: &str,
+    minecraft_path: &Path,
+) {
+    let versions_root = minecraft_path.join("versions");
+    let src_mods = versions_root.join(from_version).join("mods");
+    let dst_mods = versions_root.join(instance_name).join("mods");
+    if !src_mods.is_dir() {
+        return;
+    }
+    fs::create_dir_all(&dst_mods).ok();
+    let Ok(entries) = fs::read_dir(&src_mods) else {
+        return;
+    };
+    let mut copied = 0usize;
+    for entry in entries.flatten() {
+        let src = entry.path();
+        if !src.is_file() {
+            continue;
+        }
+        let dst = dst_mods.join(entry.file_name());
+        if dst.exists() {
+            continue;
+        }
+        if fs::copy(&src, &dst).is_ok() {
+            copied += 1;
+        }
+    }
+    if copied > 0 {
+        println!(
+            "[Mods] 已复制 {} 个 mod 文件到实例 mods 目录: {}",
+            copied,
+            dst_mods.display()
+        );
+    }
+}
+
 /// 为原版 Minecraft 创建实例目录（复制 JSON 和 JAR）
 pub fn create_vanilla_instance(
     instance_name: &str,
