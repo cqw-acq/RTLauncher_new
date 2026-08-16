@@ -18,13 +18,13 @@ jobs:
           - platform: 'macos-latest' # for Intel based macs.
             args: '--target x86_64-apple-darwin'
           - platform: 'ubuntu-22.04' # for Tauri v1 you could replace this with ubuntu-20.04.
-            args: ''
+            args: '--bundles deb'
             name: 'linux-bundle'
           - platform: 'ubuntu-22.04' # Linux portable binary
-            args: '--config src-tauri/tauri.linux.conf.json'
+            args: '--config src-tauri/tauri.portable.conf.json'
             name: 'linux-portable'
           - platform: 'windows-latest'
-            args: '--no-bundle'
+            args: '--bundles nsis'
 
     runs-on: ${{ matrix.platform }}
     steps:
@@ -79,23 +79,27 @@ jobs:
           $certBytes = [Convert]::FromBase64String($env:CERT_BASE64)
           $certPath = Join-Path $env:RUNNER_TEMP "signing-cert.pfx"
           [System.IO.File]::WriteAllBytes($certPath, $certBytes)
-          $signArgs = @(
-            "sign",
-            "/fd", "SHA256",
-            "/f", $certPath,
-            "/tr", "http://timestamp.digicert.com",
-            "/td", "SHA256",
-            "src-tauri/target/release/rtlauncher.exe"
-          )
-          if ($env:CERT_PASSWORD) {
-            $signArgs = @("sign", "/fd", "SHA256", "/f", $certPath, "/p", $env:CERT_PASSWORD, "/tr", "http://timestamp.digicert.com", "/td", "SHA256", "src-tauri/target/release/rtlauncher.exe")
+          $signTargets = @("src-tauri/target/release/rtlauncher.exe")
+          $signTargets += @(Get-ChildItem -Path "src-tauri/target/release/bundle/nsis/*-setup.exe" -File | ForEach-Object { $_.FullName })
+          foreach ($target in $signTargets) {
+            $signArgs = @(
+              "sign",
+              "/fd", "SHA256",
+              "/f", $certPath,
+              "/tr", "http://timestamp.digicert.com",
+              "/td", "SHA256",
+              $target
+            )
+            if ($env:CERT_PASSWORD) {
+              $signArgs = @("sign", "/fd", "SHA256", "/f", $certPath, "/p", $env:CERT_PASSWORD, "/tr", "http://timestamp.digicert.com", "/td", "SHA256", $target)
+            }
+            & signtool $signArgs
+            if ($LASTEXITCODE -ne 0) {
+              Write-Host "[ERROR] Signing failed for $target with exit code $LASTEXITCODE"
+              exit 1
+            }
+            Write-Host "[OK] Signed $target"
           }
-          & signtool $signArgs
-          if ($LASTEXITCODE -ne 0) {
-            Write-Host "[ERROR] Signing failed with exit code $LASTEXITCODE"
-            exit 1
-          }
-          Write-Host "[OK] rtlauncher.exe signed successfully"
           Remove-Item $certPath -ErrorAction SilentlyContinue
 
       # ===== 上传构建产物 =====
@@ -108,7 +112,7 @@ jobs:
             src-tauri/target/*/release/bundle/**/*.dmg
             src-tauri/target/*/release/bundle/**/*.app
           if-no-files-found: warn
-          retention-days: 7
+          retention-days: 90
 
       - name: upload artifacts (Ubuntu bundle)
         if: matrix.platform == 'ubuntu-22.04' && matrix.name == 'linux-bundle'
@@ -117,8 +121,8 @@ jobs:
           name: tauri-app-linux-bundle
           path: |
             src-tauri/target/release/bundle/**/*.deb
-          if-no-files-found: warn
-          retention-days: 7
+          if-no-files-found: error
+          retention-days: 90
 
       - name: package portable version
         if: matrix.platform == 'ubuntu-22.04' && matrix.name == 'linux-portable'
@@ -134,7 +138,7 @@ jobs:
           name: tauri-app-linux-portable
           path: RTLauncher-portable.tar.gz
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 90
 
       - name: upload artifacts (Windows)
         if: matrix.platform == 'windows-latest'
@@ -142,6 +146,6 @@ jobs:
         with:
           name: tauri-app-windows
           path: |
-            src-tauri/target/release/rtlauncher.exe
-          if-no-files-found: warn
-          retention-days: 7
+            src-tauri/target/release/bundle/nsis/*-setup.exe
+          if-no-files-found: error
+          retention-days: 90
