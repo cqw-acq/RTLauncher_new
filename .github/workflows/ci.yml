@@ -9,6 +9,10 @@ on:
       - achieve-RTLauncher
     types: [opened, synchronize, labeled]
 
+# 构建产物统一命名（与 0.1.2 Release 保持一致），修改版本时只需更新这里
+env:
+  APP_VERSION: 0.1.2
+
 jobs:
   test-tauri:
     if: |
@@ -28,27 +32,30 @@ jobs:
           - platform: 'macos-latest'
             args: '--target aarch64-apple-darwin'
             name: 'macOS ARM64'
-            artifact_name: 'macos-arm64'
+            artifact_name: 'macos_aarch64'
             bundle_path: 'src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg'
           - platform: 'macos-latest'
             args: '--target x86_64-apple-darwin'
             name: 'macOS x64'
-            artifact_name: 'macos-x64'
+            artifact_name: 'macos_x64'
             bundle_path: 'src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/*.dmg'
           - platform: 'ubuntu-22.04'
             args: '--bundles deb'
             name: 'Linux'
-            artifact_name: 'linux'
+            artifact_name: 'linux_amd64'
             bundle_path: 'src-tauri/target/release/bundle/deb/*.deb'
           - platform: 'ubuntu-22.04'
             args: '--config src-tauri/tauri.portable.conf.json'
             name: 'Linux Portable'
-            artifact_name: 'linux-portable'
-            bundle_path: 'src-tauri/target/release/rtlauncher'
+            artifact_name: 'linuxx64-portable'
+            bundle_path: |
+              src-tauri/target/release/rtlauncher
+              src-tauri/install-deps.sh
+              src-tauri/PORTABLE_README.md
           - platform: 'windows-latest'
             args: '--bundles nsis'
             name: 'Windows'
-            artifact_name: 'windows'
+            artifact_name: 'windows_x64'
             bundle_path: 'src-tauri/target/release/bundle/nsis/*-setup.exe'
 
     runs-on: ${{ matrix.platform }}
@@ -139,28 +146,10 @@ jobs:
 
       # --- 5. 产物上传 (只提取 .dmg/.exe/.deb) ---
       - name: Upload Bundles
-        if: matrix.name != 'Linux Portable'
         uses: actions/upload-artifact@v7
         with:
-          name: ${{ matrix.artifact_name }}-bundle
+          name: RTLauncher_${{ env.APP_VERSION }}_${{ matrix.artifact_name }}
           path: ${{ matrix.bundle_path }}
-          if-no-files-found: error
-          retention-days: 90
-
-      - name: Package portable version
-        if: matrix.name == 'Linux Portable'
-        run: |
-          tar -czf RTLauncher-portable.tar.gz \
-            src-tauri/target/release/rtlauncher \
-            src-tauri/install-deps.sh \
-            src-tauri/PORTABLE_README.md
-
-      - name: Upload portable package
-        if: matrix.name == 'Linux Portable'
-        uses: actions/upload-artifact@v7
-        with:
-          name: ${{ matrix.artifact_name }}-bundle
-          path: RTLauncher-portable.tar.gz
           if-no-files-found: error
           retention-days: 90
 

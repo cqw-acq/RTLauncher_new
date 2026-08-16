@@ -4,6 +4,10 @@ on:
   pull_request:
     types: [opened, labeled]
 
+# 构建产物统一命名（与 0.1.2 Release 保持一致），修改版本时只需更新这里
+env:
+  APP_VERSION: 0.1.2
+
 jobs:
   test-tauri:
     if: github.event.action == 'opened' || (github.event.action == 'labeled' && github.event.label.name == '需要 Action 构建')
@@ -19,19 +23,19 @@ jobs:
           - platform: 'macos-latest'
             args: '--target aarch64-apple-darwin'
             name: 'macOS ARM64'
-            artifact_name: 'macos-arm64'
+            artifact_name: 'macos_aarch64'
           - platform: 'macos-latest'
             args: '--target x86_64-apple-darwin'
             name: 'macOS x64'
-            artifact_name: 'macos-x64'
+            artifact_name: 'macos_x64'
           - platform: 'ubuntu-22.04'
             args: '--bundles deb'
             name: 'Linux'
-            artifact_name: 'linux'
+            artifact_name: 'linux_amd64'
           - platform: 'windows-latest'
             args: '--bundles nsis'
             name: 'Windows'
-            artifact_name: 'windows'
+            artifact_name: 'windows_x64'
 
     runs-on: ${{ matrix.platform }}
     steps:
@@ -105,7 +109,7 @@ jobs:
         if: matrix.platform == 'macos-latest'
         uses: actions/upload-artifact@v7
         with:
-          name: tauri-app-${{ matrix.artifact_name }}
+          name: RTLauncher_${{ env.APP_VERSION }}_${{ matrix.artifact_name }}
           path: |
             src-tauri/target/*/release/bundle/**/*.dmg
             src-tauri/target/*/release/bundle/**/*.app
@@ -116,7 +120,7 @@ jobs:
         if: matrix.platform == 'ubuntu-22.04'
         uses: actions/upload-artifact@v7
         with:
-          name: tauri-app-${{ matrix.artifact_name }}
+          name: RTLauncher_${{ env.APP_VERSION }}_${{ matrix.artifact_name }}
           path: |
             src-tauri/target/release/bundle/**/*.AppImage
             src-tauri/target/release/bundle/**/*.deb
@@ -127,7 +131,7 @@ jobs:
         if: matrix.platform == 'windows-latest'
         uses: actions/upload-artifact@v7
         with:
-          name: tauri-app-${{ matrix.artifact_name }}
+          name: RTLauncher_${{ env.APP_VERSION }}_${{ matrix.artifact_name }}
           path: |
             src-tauri/target/release/bundle/nsis/*-setup.exe
           if-no-files-found: error
