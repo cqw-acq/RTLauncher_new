@@ -25,11 +25,11 @@ jobs:
             name: 'macOS x64'
             artifact_name: 'macos-x64'
           - platform: 'ubuntu-22.04'
-            args: ''
+            args: '--bundles deb'
             name: 'Linux'
             artifact_name: 'linux'
           - platform: 'windows-latest'
-            args: '--no-bundle'
+            args: '--bundles nsis'
             name: 'Windows'
             artifact_name: 'windows'
 
@@ -78,23 +78,27 @@ jobs:
           $certBytes = [Convert]::FromBase64String($env:CERT_BASE64)
           $certPath = Join-Path $env:RUNNER_TEMP "signing-cert.pfx"
           [System.IO.File]::WriteAllBytes($certPath, $certBytes)
-          $signArgs = @(
-            "sign",
-            "/fd", "SHA256",
-            "/f", $certPath,
-            "/tr", "http://timestamp.digicert.com",
-            "/td", "SHA256",
-            "src-tauri/target/release/rtlauncher.exe"
-          )
-          if ($env:CERT_PASSWORD) {
-            $signArgs = @("sign", "/fd", "SHA256", "/f", $certPath, "/p", $env:CERT_PASSWORD, "/tr", "http://timestamp.digicert.com", "/td", "SHA256", "src-tauri/target/release/rtlauncher.exe")
+          $signTargets = @("src-tauri/target/release/rtlauncher.exe")
+          $signTargets += @(Get-ChildItem -Path "src-tauri/target/release/bundle/nsis/*-setup.exe" -File | ForEach-Object { $_.FullName })
+          foreach ($target in $signTargets) {
+            $signArgs = @(
+              "sign",
+              "/fd", "SHA256",
+              "/f", $certPath,
+              "/tr", "http://timestamp.digicert.com",
+              "/td", "SHA256",
+              $target
+            )
+            if ($env:CERT_PASSWORD) {
+              $signArgs = @("sign", "/fd", "SHA256", "/f", $certPath, "/p", $env:CERT_PASSWORD, "/tr", "http://timestamp.digicert.com", "/td", "SHA256", $target)
+            }
+            & signtool $signArgs
+            if ($LASTEXITCODE -ne 0) {
+              Write-Host "[ERROR] Signing failed for $target with exit code $LASTEXITCODE"
+              exit 1
+            }
+            Write-Host "[OK] Signed $target"
           }
-          & signtool $signArgs
-          if ($LASTEXITCODE -ne 0) {
-            Write-Host "[ERROR] Signing failed with exit code $LASTEXITCODE"
-            exit 1
-          }
-          Write-Host "[OK] rtlauncher.exe signed successfully"
           Remove-Item $certPath -ErrorAction SilentlyContinue
 
       - name: Upload macOS bundles
@@ -106,7 +110,7 @@ jobs:
             src-tauri/target/*/release/bundle/**/*.dmg
             src-tauri/target/*/release/bundle/**/*.app
           if-no-files-found: warn
-          retention-days: 7
+          retention-days: 90
 
       - name: Upload Linux bundles
         if: matrix.platform == 'ubuntu-22.04'
@@ -116,8 +120,8 @@ jobs:
           path: |
             src-tauri/target/release/bundle/**/*.AppImage
             src-tauri/target/release/bundle/**/*.deb
-          if-no-files-found: warn
-          retention-days: 7
+          if-no-files-found: error
+          retention-days: 90
 
       - name: Upload Windows bundles
         if: matrix.platform == 'windows-latest'
@@ -125,9 +129,9 @@ jobs:
         with:
           name: tauri-app-${{ matrix.artifact_name }}
           path: |
-            src-tauri/target/release/rtlauncher.exe
-          if-no-files-found: warn
-          retention-days: 7
+            src-tauri/target/release/bundle/nsis/*-setup.exe
+          if-no-files-found: error
+          retention-days: 90
 
     outputs:
       result: ${{ job.status }}
