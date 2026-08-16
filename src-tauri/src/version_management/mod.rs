@@ -116,35 +116,58 @@ fn detect_loader_from_main_class(main_class: &str) -> &'static str {
 /// - 只要出现任何 net.neoforged:* loader 坐标就直接返回 NeoForge，
 ///   比 Forge 的 net.minecraftforge:forge/fmlloader 判据优先级更高。
 fn detect_loader_from_libraries(json: &serde_json::Value) -> Option<&'static str> {
-    let libraries = json.get("libraries")?.as_array()?;
     let mut has_forge_fml = false;
-    for library in libraries {
-        let name = library.get("name")?.as_str()?.to_lowercase();
-        if name.starts_with("net.neoforged:fancymodloader:")
-            || name.starts_with("net.neoforged:neoforge:")
-            || name.starts_with("net.neoforged:fmlloader:")
-            || name.starts_with("net.neoforged:forge:")
-            || name.starts_with("net.neoforged:fml:")
-        {
-            return Some("NeoForge");
+
+    let mut scan_libraries = |libs: &[serde_json::Value]| -> Option<&'static str> {
+        for library in libs {
+            let Some(name) = library.get("name").and_then(|v| v.as_str()) else {
+                continue;
+            };
+            let name = name.to_lowercase();
+            if name.starts_with("net.neoforged:fancymodloader:")
+                || name.starts_with("net.neoforged:neoforge:")
+                || name.starts_with("net.neoforged:fmlloader:")
+                || name.starts_with("net.neoforged:forge:")
+                || name.starts_with("net.neoforged:fml:")
+            {
+                return Some("NeoForge");
+            }
+            if name.starts_with("net.minecraftforge:forge:")
+                || name.starts_with("net.minecraftforge:fmlloader:")
+            {
+                has_forge_fml = true;
+            }
+            if name.starts_with("net.fabricmc:loader:")
+                || name.starts_with("net.fabricmc:fabric-loader:")
+            {
+                return Some("Fabric");
+            }
+            if name.starts_with("org.quiltmc:quilt-loader:") {
+                return Some("Quilt");
+            }
+            if name.starts_with("com.mumfrey:liteloader:") {
+                return Some("LiteLoader");
+            }
         }
-        if name.starts_with("net.minecraftforge:forge:")
-            || name.starts_with("net.minecraftforge:fmlloader:")
-        {
-            has_forge_fml = true;
-        }
-        if name.starts_with("net.fabricmc:loader:")
-            || name.starts_with("net.fabricmc:fabric-loader:")
-        {
-            return Some("Fabric");
-        }
-        if name.starts_with("org.quiltmc:quilt-loader:") {
-            return Some("Quilt");
-        }
-        if name.starts_with("com.mumfrey:liteloader:") {
-            return Some("LiteLoader");
+        None
+    };
+
+    if let Some(libs) = json.get("libraries").and_then(|v| v.as_array()) {
+        if let Some(result) = scan_libraries(libs) {
+            return Some(result);
         }
     }
+
+    if let Some(patches) = json.get("patches").and_then(|v| v.as_array()) {
+        for patch in patches {
+            if let Some(libs) = patch.get("libraries").and_then(|v| v.as_array()) {
+                if let Some(result) = scan_libraries(libs) {
+                    return Some(result);
+                }
+            }
+        }
+    }
+
     if has_forge_fml {
         Some("Forge")
     } else {
@@ -162,23 +185,58 @@ fn detect_loader_from_libraries(json: &serde_json::Value) -> Option<&'static str
 /// 此外也扫描 json 其他顶层字段中是否出现 `neoforge` / `neoforged` 关键词，
 /// 以覆盖某些启动器改写 arguments 后把 NeoForge 痕迹藏在别处的情况。
 fn detect_loader_from_arguments(json: &serde_json::Value) -> Option<&'static str> {
+    let check_game_args = |args: &[serde_json::Value]| -> Option<&'static str> {
+        let mut iter = args.iter().peekable();
+        while let Some(arg) = iter.next() {
+            let Some(s) = arg.as_str() else { continue };
+            let lower = s.to_lowercase();
+            if lower == "--fml.neoforgeversion"
+                || lower == "--fml.neoformversion"
+                || lower == "--fml.neoforge"
+            {
+                return Some("NeoForge");
+            }
+            if lower == "--launchtarget" {
+                if let Some(next) = iter.peek() {
+                    if let Some(target) = next.as_str() {
+                        let t = target.to_lowercase();
+                        if matches!(
+                            t.as_str(),
+                            "forgeclient" | "neoforgeclient" | "forgeserver" | "neoforgeserver"
+                        ) {
+                            return Some("NeoForge");
+                        }
+                    }
+                }
+            }
+        }
+        None
+    };
+
     if let Some(game_args) = json
         .get("arguments")
         .and_then(|v| v.get("game"))
         .and_then(|v| v.as_array())
     {
-        for arg in game_args {
-            let s = arg.as_str()?.to_lowercase();
-            if s == "--fml.neoforgeversion"
-                || s == "--fml.neoformversion"
-                || s == "--fml.neoforge"
+        if let Some(result) = check_game_args(game_args) {
+            return Some(result);
+        }
+    }
+
+    if let Some(patches) = json.get("patches").and_then(|v| v.as_array()) {
+        for patch in patches {
+            if let Some(game_args) = patch
+                .get("arguments")
+                .and_then(|v| v.get("game"))
+                .and_then(|v| v.as_array())
             {
-                return Some("NeoForge");
+                if let Some(result) = check_game_args(game_args) {
+                    return Some(result);
+                }
             }
         }
     }
 
-    // 兜底：扫描 json 的常见字符串字段，找 neoforge / neoforged 关键词
     let scan_str = |key: &str| -> Option<&'static str> {
         let v = json.get(key)?.as_str()?.to_lowercase();
         if v.contains("neoforge") || v.contains("neoforged") {
@@ -207,6 +265,32 @@ fn detect_loader_from_arguments(json: &serde_json::Value) -> Option<&'static str
         })
     {
         return Some(r);
+    }
+
+    fn deep_scan_for_neoforge(v: &serde_json::Value) -> bool {
+        match v {
+            serde_json::Value::String(s) => {
+                let lower = s.to_lowercase();
+                lower.contains("neoforge") || lower.contains("neoforged")
+            }
+            serde_json::Value::Array(arr) => arr.iter().any(deep_scan_for_neoforge),
+            serde_json::Value::Object(map) => {
+                for (k, val) in map {
+                    let lower = k.to_lowercase();
+                    if lower.contains("neoforge") || lower.contains("neoforged") {
+                        return true;
+                    }
+                    if deep_scan_for_neoforge(val) {
+                        return true;
+                    }
+                }
+                false
+            }
+            _ => false,
+        }
+    }
+    if deep_scan_for_neoforge(json) {
+        return Some("NeoForge");
     }
 
     None
@@ -1264,5 +1348,264 @@ mod tests {
     fn empty_id_does_not_panic() {
         let version = json!({});
         assert_eq!(detect_loader_from_arguments(&version), None);
+    }
+
+    // ==== 以下是本次修复新增的测试：patches 扫描、launchTarget、全量深搜 ====
+
+    #[test]
+    fn detects_neoforge_from_patches_libraries() {
+        // 合并型整合包：顶层 libraries 被改写，但 patches[*].libraries 还留着 NeoForge 坐标
+        let version = json!({
+            "patches": [
+                {
+                    "id": "forge",
+                    "version": "21.1.228",
+                    "libraries": [
+                        { "name": "net.neoforged:neoforge:21.1.228" }
+                    ]
+                }
+            ]
+        });
+        assert_eq!(
+            detect_loader_from_libraries(&version),
+            Some("NeoForge")
+        );
+    }
+
+    #[test]
+    fn detects_neoforge_from_patches_libraries_fancymodloader() {
+        let version = json!({
+            "patches": [
+                {
+                    "id": "forge",
+                    "libraries": [
+                        { "name": "net.neoforged:fancymodloader:loader:4.0.43" },
+                        { "name": "cpw.mods:bootstraplauncher:2.1.4" }
+                    ]
+                }
+            ]
+        });
+        assert_eq!(
+            detect_loader_from_libraries(&version),
+            Some("NeoForge")
+        );
+    }
+
+    #[test]
+    fn detects_forge_from_patches_libraries() {
+        let version = json!({
+            "patches": [
+                {
+                    "id": "forge",
+                    "libraries": [
+                        { "name": "net.minecraftforge:fmlloader:1.20.1-47.4.9" }
+                    ]
+                }
+            ]
+        });
+        assert_eq!(
+            detect_loader_from_libraries(&version),
+            Some("Forge")
+        );
+    }
+
+    #[test]
+    fn neoforge_in_patches_wins_over_forge_in_top() {
+        // 顶层被改写成 Forge，patches 里是 NeoForge，应优先返回 NeoForge
+        let version = json!({
+            "libraries": [
+                { "name": "net.minecraftforge:fmlloader:1.20.1-47.4.9" }
+            ],
+            "patches": [
+                {
+                    "id": "forge",
+                    "libraries": [
+                        { "name": "net.neoforged:neoforge:21.1.228" }
+                    ]
+                }
+            ]
+        });
+        assert_eq!(
+            detect_loader_from_libraries(&version),
+            Some("NeoForge")
+        );
+    }
+
+    #[test]
+    fn detects_neoforge_from_launch_target_forgeclient() {
+        // NeoForge 1.20.x 用 --launchTarget forgeclient
+        let version = json!({
+            "arguments": {
+                "game": [
+                    "--launchTarget", "forgeclient",
+                    "--fml.forgeVersion", "47.3.0"
+                ]
+            }
+        });
+        assert_eq!(
+            detect_loader_from_arguments(&version),
+            Some("NeoForge")
+        );
+    }
+
+    #[test]
+    fn detects_neoforge_from_launch_target_neoforgeclient() {
+        // NeoForge 1.21.5+ 用 --launchTarget neoforgeclient
+        let version = json!({
+            "arguments": {
+                "game": [
+                    "--launchTarget", "neoforgeclient"
+                ]
+            }
+        });
+        assert_eq!(
+            detect_loader_from_arguments(&version),
+            Some("NeoForge")
+        );
+    }
+
+    #[test]
+    fn forge_launch_target_fmlclient_does_not_trigger_neoforge() {
+        // Forge 用 --launchTarget fmlclient，不应触发 NeoForge
+        let version = json!({
+            "arguments": {
+                "game": [
+                    "--launchTarget", "fmlclient",
+                    "--fml.forgeVersion", "47.4.9"
+                ]
+            }
+        });
+        assert_eq!(detect_loader_from_arguments(&version), None);
+    }
+
+    #[test]
+    fn detects_neoforge_from_patches_arguments_game() {
+        let version = json!({
+            "patches": [
+                {
+                    "id": "forge",
+                    "arguments": {
+                        "game": [
+                            "--fml.neoForgeVersion", "21.1.228",
+                            "--fml.neoFormVersion", "20240808.144430",
+                            "--fml.mcVersion", "1.21.1"
+                        ]
+                    }
+                }
+            ]
+        });
+        assert_eq!(
+            detect_loader_from_arguments(&version),
+            Some("NeoForge")
+        );
+    }
+
+    #[test]
+    fn detects_neoforge_from_patches_launch_target() {
+        let version = json!({
+            "patches": [
+                {
+                    "id": "forge",
+                    "arguments": {
+                        "game": [
+                            "--launchTarget", "forgeclient"
+                        ]
+                    }
+                }
+            ]
+        });
+        assert_eq!(
+            detect_loader_from_arguments(&version),
+            Some("NeoForge")
+        );
+    }
+
+    #[test]
+    fn deep_scan_finds_neoforge_in_unusual_field() {
+        // 启动器改写了所有常规字段，但 neoforge 被藏在 comment / note 这类非常规字段
+        let version = json!({
+            "id": "MyCustomPack-1.21.1",
+            "mainClass": "cpw.mods.bootstraplauncher.BootstrapLauncher",
+            "comment": "Built with neoforge 21.1.228",
+            "data": {
+                "installer": {
+                    "artifact": "net.neoforged:neoforge:21.1.228"
+                }
+            }
+        });
+        assert_eq!(
+            detect_loader_from_arguments(&version),
+            Some("NeoForge")
+        );
+    }
+
+    #[test]
+    fn deep_scan_does_not_false_positive_forge() {
+        let version = json!({
+            "id": "MyCustomPack-1.21.1",
+            "mainClass": "cpw.mods.bootstraplauncher.BootstrapLauncher",
+            "comment": "Built with forge 47.4.9",
+            "data": {
+                "installer": {
+                    "artifact": "net.minecraftforge:forge:1.20.1-47.4.9"
+                }
+            }
+        });
+        assert_eq!(detect_loader_from_arguments(&version), None);
+    }
+
+    #[test]
+    fn custom_neoforge_modpack_everything_rewritten() {
+        // 自定义包名的 NeoForge 整合包：所有常规识别信号都被启动器改写了，
+        // 只剩 patches 里的 launchTarget
+        let version = json!({
+            "id": "My Awesome Pack v3.0",
+            "mainClass": "cpw.mods.bootstraplauncher.BootstrapLauncher",
+            "arguments": {
+                "game": []
+            },
+            "patches": [
+                {
+                    "id": "forge",
+                    "version": "21.1.228",
+                    "arguments": {
+                        "game": [
+                            "--launchTarget", "forgeclient",
+                            "--fml.forgeVersion", "21.1.228",
+                            "--fml.mcVersion", "1.21.1"
+                        ]
+                    },
+                    "libraries": []
+                }
+            ]
+        });
+        assert_eq!(
+            detect_loader_from_arguments(&version),
+            Some("NeoForge")
+        );
+    }
+
+    #[test]
+    fn custom_neoforge_modpack_deep_scan() {
+        // 更极端的场景：launchTarget 也被改写了，但 data 里有 neoforged 线索
+        let version = json!({
+            "id": "My Awesome Pack v3.0",
+            "mainClass": "cpw.mods.bootstraplauncher.BootstrapLauncher",
+            "patches": [
+                {
+                    "id": "forge",
+                    "version": "21.1.228",
+                    "data": {
+                        "neoforgeJar": {
+                            "client": "clients/1.21.1-20240808.144430-srg.jar"
+                        }
+                    }
+                }
+            ]
+        });
+        assert_eq!(
+            detect_loader_from_arguments(&version),
+            Some("NeoForge")
+        );
     }
 }
