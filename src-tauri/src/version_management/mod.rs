@@ -159,20 +159,56 @@ fn detect_loader_from_libraries(json: &serde_json::Value) -> Option<&'static str
 /// - `--fml.neoFormVersion`
 /// - `--fml.neoForge`（NeoForge 1.20.2+）
 ///
-/// 这对合并型整合包尤其重要：有些启动器生成的 version.json 里
-/// loader 库可能被改写或移除，但 arguments 通常保留原样。
+/// 此外也扫描 json 其他顶层字段中是否出现 `neoforge` / `neoforged` 关键词，
+/// 以覆盖某些启动器改写 arguments 后把 NeoForge 痕迹藏在别处的情况。
 fn detect_loader_from_arguments(json: &serde_json::Value) -> Option<&'static str> {
-    let game_args = json
+    if let Some(game_args) = json
         .get("arguments")
         .and_then(|v| v.get("game"))
-        .and_then(|v| v.as_array())?;
-
-    for arg in game_args {
-        let s = arg.as_str()?.to_lowercase();
-        if s == "--fml.neoforgeversion" || s == "--fml.neoformversion" || s == "--fml.neoforge" {
-            return Some("NeoForge");
+        .and_then(|v| v.as_array())
+    {
+        for arg in game_args {
+            let s = arg.as_str()?.to_lowercase();
+            if s == "--fml.neoforgeversion"
+                || s == "--fml.neoformversion"
+                || s == "--fml.neoforge"
+            {
+                return Some("NeoForge");
+            }
         }
     }
+
+    // 兜底：扫描 json 的常见字符串字段，找 neoforge / neoforged 关键词
+    let scan_str = |key: &str| -> Option<&'static str> {
+        let v = json.get(key)?.as_str()?.to_lowercase();
+        if v.contains("neoforge") || v.contains("neoforged") {
+            Some("NeoForge")
+        } else {
+            None
+        }
+    };
+    if let Some(r) = scan_str("id") {
+        return Some(r);
+    }
+    if let Some(r) = scan_str("inheritsFrom") {
+        return Some(r);
+    }
+    if let Some(r) = scan_str("type") {
+        return Some(r);
+    }
+    if let Some(r) = json
+        .get("downloads")
+        .and_then(|d| d.get("installer"))
+        .and_then(|u| u.get("url"))
+        .and_then(|s| s.as_str())
+        .and_then(|s| {
+            let lower = s.to_lowercase();
+            (lower.contains("neoforge") || lower.contains("neoforged")).then_some("NeoForge")
+        })
+    {
+        return Some(r);
+    }
+
     None
 }
 
@@ -1161,6 +1197,72 @@ mod tests {
                 { "name": "com.mojang:minecraft:1.21.1" }
             ]
         });
+        assert_eq!(detect_loader_from_arguments(&version), None);
+    }
+
+    #[test]
+    fn detects_neoforge_from_id_field() {
+        // 某些启动器改写了 arguments 和 libraries，
+        // 但 id 字段仍保留 "neoforge" 字样
+        let version = json!({
+            "id": "1.21.1-neoforge-52.0.0",
+            "mainClass": "cpw.mods.bootstraplauncher.BootstrapLauncher"
+        });
+        assert_eq!(
+            detect_loader_from_arguments(&version),
+            Some("NeoForge")
+        );
+    }
+
+    #[test]
+    fn detects_neoforge_from_inherits_from() {
+        let version = json!({
+            "inheritsFrom": "1.20.1-neoforge-47.3.0"
+        });
+        assert_eq!(
+            detect_loader_from_arguments(&version),
+            Some("NeoForge")
+        );
+    }
+
+    #[test]
+    fn detects_neoforge_from_inherits_from_netneoforged() {
+        let version = json!({
+            "inheritsFrom": "net.neoforged:forge:1.20.1-47.3.0"
+        });
+        assert_eq!(
+            detect_loader_from_arguments(&version),
+            Some("NeoForge")
+        );
+    }
+
+    #[test]
+    fn detects_neoforge_from_installer_url() {
+        let version = json!({
+            "downloads": {
+                "installer": {
+                    "url": "https://maven.neoforged.net/releases/net/neoforged/forge/installer/1.20.1-47.3.0/installer-1.20.1-47.3.0.jar"
+                }
+            }
+        });
+        assert_eq!(
+            detect_loader_from_arguments(&version),
+            Some("NeoForge")
+        );
+    }
+
+    #[test]
+    fn forge_id_and_inherits_from_do_not_trigger_neoforge() {
+        let version = json!({
+            "id": "1.20.1-forge-47.4.9",
+            "inheritsFrom": "1.20.1-forge-47.4.9"
+        });
+        assert_eq!(detect_loader_from_arguments(&version), None);
+    }
+
+    #[test]
+    fn empty_id_does_not_panic() {
+        let version = json!({});
         assert_eq!(detect_loader_from_arguments(&version), None);
     }
 }

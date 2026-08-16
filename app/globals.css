@@ -173,7 +173,22 @@ body {
   isolation: isolate;
   background-color: var(--background);
   transition: background-color 0.3s ease;
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
+  user-select: none;
   /* 基准字号由 JS 动态写入 style.fontSize */
+}
+
+/* 恢复交互元素的文本选择能力 */
+input,
+textarea,
+select,
+[contenteditable="true"] {
+  -webkit-user-select: text;
+  -moz-user-select: text;
+  -ms-user-select: text;
+  user-select: text;
 }
 
 /* 标题：按比例缩放 */
