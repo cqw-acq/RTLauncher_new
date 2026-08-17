@@ -1,3 +1,7 @@
+import type { LucideIcon } from "lucide-react";
+
+import type { TranslationKey } from "@/components/i18n/use-i18n";
+
 /**
  * 登录类型
  */
@@ -298,6 +302,22 @@ export type SidebarTabConfig = {
 export type UIConfig = {
   /** 侧边栏标签页配置 */
   sidebarTabs: SidebarTabConfig[];
+};
+
+/**
+ * 首页快捷入口配置
+ */
+export type HomeQuickAction = {
+  /** 跳转路由 */
+  href: string;
+  /** i18n 标题 key */
+  titleKey: TranslationKey;
+  /** i18n 描述 key */
+  descriptionKey: TranslationKey;
+  /** 图标组件 */
+  icon: LucideIcon;
+  /** 图标配色类名 */
+  iconClassName: string;
 };
 
 /**
