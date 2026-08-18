@@ -4,9 +4,8 @@ on:
   pull_request:
     types: [opened, labeled]
 
-# 构建产物统一命名（与 0.1.2 Release 保持一致），修改版本时只需更新这里
-env:
-  APP_VERSION: 0.1.2
+# 构建产物统一命名：UTC时间戳 + PR号 + 步进版本号（重新运行工作流时自动递增）
+# 时间戳无法在 workflow 级 env 中生成，故在 test-tauri job 首步写入 GITHUB_ENV
 
 jobs:
   test-tauri:
@@ -40,6 +39,13 @@ jobs:
     runs-on: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v6
+
+      - name: Generate version (timestamp + PR# + attempt)
+        id: version
+        shell: bash
+        run: |
+          echo "APP_VERSION=$(date -u +%Y%m%d%H%M%S)-pr${{ github.event.pull_request.number }}-${{ github.run_attempt }}" >> "$GITHUB_ENV"
+          echo "Generated APP_VERSION: $APP_VERSION"
 
       - uses: pnpm/action-setup@v6
         with:
