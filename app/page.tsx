@@ -1,23 +1,20 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { motion } from "framer-motion";
 import {
   ArrowRight,
   Boxes,
-  Download,
-  Gamepad2,
   Loader2,
   Package,
   Play,
-  Rocket,
   Shirt,
   User,
   UserPlus,
   Users,
 } from "lucide-react";
+import { HOME_GAME_QUICK_ACTIONS, HOME_QUICK_ACTIONS } from "@/constants";
 import { AccountSwitcher } from "@/components/accounts/account-switcher";
 import { SkinCapeManager } from "@/components/accounts/skin-cape-manager";
 import { SkinViewer3D } from "@/components/accounts/skin-viewer-3d";
@@ -46,7 +43,6 @@ import type { Account } from "@/types";
 
 /** 首页仪表盘：把启动状态、实例资源与账户操作集中在一个可滚动页面。 */
 export default function Home() {
-  const router = useRouter();
   const [isProfileSelectorOpen, setIsProfileSelectorOpen] = useState(false);
   const [isSkinManagerOpen, setIsSkinManagerOpen] = useState(false);
   const { selectedProfile, selectProfile } = useAccountContext();
@@ -95,11 +91,6 @@ export default function Home() {
   const profileStatus = selectedProfile?.status
     ? profileStatusMap[selectedProfile.status] ?? selectedProfile.status
     : t("home.addAnAccountToLaunchTheGame");
-  const quickActions = [
-    { href: "/launch", title: t("home.launchSettings"), description: t("home.versionJavaAndMemory"), icon: Rocket, iconClassName: "bg-primary/10 text-primary" },
-    { href: "/download", title: t("home.downloads"), description: t("home.gameLoadersAndResources"), icon: Download, iconClassName: "bg-sky-500/10 text-sky-600 dark:text-sky-400" },
-    { href: "/game-settings", title: t("home.gameManagement"), description: t("home.modsWorldsAndResourcePacks"), icon: Gamepad2, iconClassName: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400" },
-  ];
 
   const handleProfileSelect = (profile: Account) => {
     selectProfile(profile);
@@ -110,10 +101,6 @@ export default function Home() {
       await cancelLaunch();
       return;
     }
-    if (!canLaunch) {
-      router.push("/launch");
-      return;
-    }
     await launchGame();
   };
 
@@ -121,9 +108,7 @@ export default function Home() {
     ? status === "running"
       ? t("launch.stopGame")
       : t("home.cancelLaunch")
-    : canLaunch
-      ? t("home.launchNow")
-      : t("home.finishLaunchSetup");
+    : t("home.launchNow");
 
   return (
     <div className="h-full overflow-y-auto">
@@ -242,7 +227,7 @@ export default function Home() {
                 >
                   <Card className="relative min-h-[280px] overflow-hidden border-primary/20 bg-gradient-to-br from-primary/12 via-card to-card shadow-sm">
                     <div className="pointer-events-none absolute -right-12 -top-16 size-52 rounded-full bg-primary/10 blur-3xl" />
-                    <CardContent className="relative flex h-full min-h-[280px] flex-col justify-between gap-4 p-5 sm:p-6">
+                    <CardContent className="relative flex h-full min-h-[280px] flex-col p-5 sm:p-6">
                       <div className="flex items-start justify-between gap-3">
                         <div className="min-w-0 flex-1">
                           <div className="mb-3 flex flex-wrap items-center gap-2">
@@ -278,37 +263,39 @@ export default function Home() {
                               </>
                             )}
                           </p>
-
-                          <div className="mt-4">
-                            <p className="text-xs font-medium text-muted-foreground mb-2">{t("launch.config.gameVersion")}</p>
-                            <VersionSelectorDialog compact />
-                          </div>
                         </div>
                         <div className="flex size-11 shrink-0 items-center justify-center rounded-2xl bg-primary text-primary-foreground shadow-sm">
                           <Boxes className="size-5" />
                         </div>
                       </div>
 
-                      <div className="flex flex-wrap items-center gap-2">
-                        <Button
-                          size="lg"
-                          className="gap-2"
-                          disabled={!configLoaded}
-                          onClick={() => void handlePrimaryAction()}
-                        >
-                          {isLaunchActive ? (
-                            <Loader2 className="size-4 animate-spin" />
-                          ) : (
-                            <Play className="size-4" />
-                          )}
-                          {primaryActionLabel}
-                        </Button>
-                        <Button variant="outline" size="lg" asChild>
-                          <Link href="/launch" className="gap-2">
-                            {t("home.viewLaunchDetails")}
-                            <ArrowRight className="size-4" />
-                          </Link>
-                        </Button>
+                      <div className="mt-auto mb-8">
+                        <div className="flex flex-wrap items-center gap-2">
+                          {isLaunchActive || canLaunch ? (
+                            <Button
+                              size="lg"
+                              className="gap-2"
+                              disabled={!configLoaded}
+                              onClick={() => void handlePrimaryAction()}
+                            >
+                              {isLaunchActive ? (
+                                <Loader2 className="size-4 animate-spin" />
+                              ) : (
+                                <Play className="size-4" />
+                              )}
+                              {primaryActionLabel}
+                            </Button>
+                          ) : null}
+                          <div className="order-3 w-full sm:order-none sm:min-w-0 sm:w-auto sm:flex-1">
+                            <VersionSelectorDialog compact />
+                          </div>
+                          <Button variant="outline" size="lg" asChild>
+                            <Link href="/launch" className="gap-2">
+                              {t("home.viewLaunchDetails")}
+                              <ArrowRight className="size-4" />
+                            </Link>
+                          </Button>
+                        </div>
                       </div>
 
                       {errorMessage && (
@@ -336,8 +323,8 @@ export default function Home() {
                   <CardDescription>{t("home.accessCommonFeaturesWithoutNavigatingMultipleMenus")}</CardDescription>
                 </CardHeader>
                 <CardContent>
-                  <div className="grid gap-2 sm:grid-cols-3">
-                    {quickActions.map(({ href, title, description, icon: Icon, iconClassName }) => (
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    {HOME_QUICK_ACTIONS.map(({ href, titleKey, descriptionKey, icon: Icon, iconClassName }) => (
                       <Link
                         key={href}
                         href={href}
@@ -347,8 +334,29 @@ export default function Home() {
                           <Icon className="size-4" />
                         </span>
                         <span className="min-w-0 flex-1">
-                          <span className="block text-sm font-medium">{title}</span>
-                          <span className="block truncate text-xs text-muted-foreground">{description}</span>
+                          <span className="block text-sm font-medium">{t(titleKey)}</span>
+                          <span className="block truncate text-xs text-muted-foreground">{t(descriptionKey)}</span>
+                        </span>
+                        <ArrowRight className="size-3.5 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
+                      </Link>
+                    ))}
+                  </div>
+
+                  <div className="h-px bg-border my-2" />
+
+                  <div className="grid gap-2 grid-cols-[repeat(auto-fill,minmax(min(200px,100%),1fr))]">
+                    {HOME_GAME_QUICK_ACTIONS.map(({ href, titleKey, descriptionKey, icon: Icon, iconClassName }) => (
+                      <Link
+                        key={href}
+                        href={href}
+                        className="group flex min-w-0 items-center gap-3 rounded-xl border border-transparent p-3 transition-colors hover:border-border hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                      >
+                        <span className={`flex size-9 shrink-0 items-center justify-center rounded-xl ${iconClassName}`}>
+                          <Icon className="size-4" />
+                        </span>
+                        <span className="min-w-0 flex-1">
+                          <span className="block text-sm font-medium">{t(titleKey)}</span>
+                          <span className="block truncate text-xs text-muted-foreground">{t(descriptionKey)}</span>
                         </span>
                         <ArrowRight className="size-3.5 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
                       </Link>
