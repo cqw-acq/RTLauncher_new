@@ -38,16 +38,29 @@ pub(super) fn safe_max_memory_mb(
 }
 
 pub(super) fn resolve_max_memory_mb(max_memory: &str) -> anyhow::Result<(u64, Option<String>)> {
-    let requested_mb = max_memory
-        .trim()
-        .parse::<u64>()
-        .map_err(|_| anyhow::anyhow!("最大内存必须是一个有效的 MB 数值，当前值为: {max_memory}"))?;
-
-    if requested_mb < 512 {
-        return Err(anyhow::anyhow!(
-            "最大内存不能低于 512MB，当前值为: {requested_mb}MB"
-        ));
-    }
+    // 内存硬性要求已解除：值非法或低于下限时不再报错拒绝启动，
+    // 而是根据系统剩余内存自动分配一个合适的堆大小。
+    let requested_mb = match max_memory.trim().parse::<u64>() {
+        Ok(v) if v >= 512 => v,
+        Ok(v) => {
+            let (auto, total_mb, available_mb) = auto_allocate();
+            return Ok((
+                auto,
+                Some(format!(
+                    "最大内存不能低于 512MB（当前值: {v}MB），已根据系统剩余内存自动分配为 {auto}MB（系统总内存 {total_mb}MB，当前可用 {available_mb}MB）。"
+                )),
+            ));
+        }
+        Err(_) => {
+            let (auto, total_mb, available_mb) = auto_allocate();
+            return Ok((
+                auto,
+                Some(format!(
+                    "最大内存不是有效的 MB 数值（当前值: {max_memory}），已根据系统剩余内存自动分配为 {auto}MB（系统总内存 {total_mb}MB，当前可用 {available_mb}MB）。"
+                )),
+            ));
+        }
+    };
 
     let mut system = System::new();
     system.refresh_memory();
@@ -57,8 +70,13 @@ pub(super) fn resolve_max_memory_mb(max_memory: &str) -> anyhow::Result<(u64, Op
     let effective_mb = match safe_max_memory_mb(requested_mb, total_mb, available_mb) {
         SafeMemoryLimit::Unknown => return Ok((requested_mb, None)),
         SafeMemoryLimit::Insufficient { min_available_mb } => {
-            return Err(anyhow::anyhow!(
-                "当前可用内存不足，至少需要约 {min_available_mb}MB 可用内存后再启动游戏。（系统总内存 {total_mb}MB，当前可用 {available_mb}MB）"
+            // 可用内存不足时不再拒绝启动，退回自动分配值。
+            let (auto, ..) = auto_allocate();
+            return Ok((
+                auto,
+                Some(format!(
+                    "当前可用内存不足（系统总内存 {total_mb}MB，当前可用 {available_mb}MB，至少需要约 {min_available_mb}MB），已根据系统剩余内存自动分配为 {auto}MB。"
+                )),
             ));
         }
         SafeMemoryLimit::Limited(effective_mb) => effective_mb,
@@ -70,6 +88,23 @@ pub(super) fn resolve_max_memory_mb(max_memory: &str) -> anyhow::Result<(u64, Op
         )
     });
     Ok((effective_mb, warning))
+}
+
+/// 根据系统剩余内存自动分配最大堆大小（MB）：
+/// 可用内存减去系统保留余量，再以总内存的 3/4 封顶，最低 512MB。
+/// 返回 (分配值, 总内存MB, 可用内存MB)。
+fn auto_allocate() -> (u64, u64, u64) {
+    let mut system = System::new();
+    system.refresh_memory();
+    let total_mb = system.total_memory() / 1024 / 1024;
+    let available_mb = system.available_memory() / 1024 / 1024;
+    if total_mb == 0 || available_mb == 0 {
+        return (2048, total_mb, available_mb);
+    }
+    let reserve_mb = (total_mb / 8).clamp(512, 2048);
+    let by_available = available_mb.saturating_sub(reserve_mb);
+    let by_total = total_mb.saturating_mul(3) / 4;
+    (by_available.min(by_total).max(512), total_mb, available_mb)
 }
 
 pub(super) fn is_heap_size_argument(argument: &str) -> bool {

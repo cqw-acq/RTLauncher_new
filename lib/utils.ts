@@ -108,3 +108,50 @@ export function isLoaderCompatible(mcVersion: string, loader: LoaderType): boole
   if (range.max && compareMcVersions(mcVersion, range.max) > 0) return false;
   return true;
 }
+
+/** 模组加载器互斥组：同一时刻最多选择一个 */
+export const MOD_LOADER_GROUP: LoaderType[] = [
+  "forge",
+  "neoforge",
+  "fabric",
+  "quilt",
+  "liteloader",
+];
+
+/** 与 OptiFine 兼容的加载器（参考 PCL/HMCL：可叠加 Forge/NeoForge，不能与 Fabric/Quilt/LiteLoader 组合） */
+const OPTIFINE_COMPATIBLE_LOADERS: LoaderType[] = ["forge", "neoforge"];
+
+/**
+ * 判断两个加载器是否可以同时选择。
+ * - 模组加载器（Forge/NeoForge/Fabric/Quilt/LiteLoader）互斥
+ * - OptiFine 可与 Forge/NeoForge 叠加，不能与 Fabric/Quilt/LiteLoader 组合
+ */
+export function isLoaderPairCompatible(a: LoaderType, b: LoaderType): boolean {
+  if (a === b) return true;
+  if (a === "vanilla" || b === "vanilla") return true;
+  if (MOD_LOADER_GROUP.includes(a) && MOD_LOADER_GROUP.includes(b)) return false;
+  if (a === "optifine") return OPTIFINE_COMPATIBLE_LOADERS.includes(b);
+  if (b === "optifine") return OPTIFINE_COMPATIBLE_LOADERS.includes(a);
+  return true;
+}
+
+/**
+ * 判断加载器在当前已选集合下是否可勾选。
+ * 返回 { allowed, reason }，reason 用于禁用时提示不兼容原因。
+ */
+export function canSelectLoader(
+  mcVersion: string,
+  loader: LoaderType,
+  selected: LoaderType[]
+): { allowed: boolean; reason?: string } {
+  if (loader !== "vanilla" && !isLoaderCompatible(mcVersion, loader)) {
+    return { allowed: false, reason: "当前 Minecraft 版本不支持该加载器" };
+  }
+  for (const other of selected) {
+    if (other === loader) continue;
+    if (!isLoaderPairCompatible(other, loader)) {
+      return { allowed: false, reason: `与「${other}」不兼容` };
+    }
+  }
+  return { allowed: true };
+}

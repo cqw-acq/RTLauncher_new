@@ -23,6 +23,7 @@ pub mod modpack_builder;
 pub mod modpack_installer_handler;
 #[allow(dead_code, non_snake_case)]
 pub mod neoforge_handler;
+pub mod combined_install_handler;
 #[allow(dead_code, non_snake_case)]
 pub mod optifine_handler;
 #[allow(dead_code, non_snake_case)]
