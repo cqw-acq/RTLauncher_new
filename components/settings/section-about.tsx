@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Loader2, Download, Check, RefreshCcw, Package, Sparkles } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/components/i18n/use-i18n";
+import { invoke } from "@tauri-apps/api/core";
 
 type UpdateState =
   | { kind: "idle" }
@@ -13,6 +14,15 @@ type UpdateState =
   | { kind: "available"; version: string; notes: string }
   | { kind: "up-to-date" }
   | { kind: "error"; message: string };
+
+interface UpdateCheckResult {
+  needs_check: boolean;
+  update_available: boolean;
+  current_version: string;
+  target_version: string | null;
+  message: string;
+  changelog: string | null;
+}
 
 export function AboutSection() {
   const { t } = useI18n();
@@ -35,13 +45,12 @@ export function AboutSection() {
   const check = async () => {
     setState({ kind: "checking" });
     try {
-      const { check } = await import("@tauri-apps/plugin-updater");
-      const update = await check();
-      if (update?.available) {
+      const result = await invoke<UpdateCheckResult>("check_for_updates", { force: true });
+      if (result.update_available && result.target_version) {
         setState({
           kind: "available",
-          version: update.version ?? "",
-          notes: (update.body ?? "").toString(),
+          version: result.target_version,
+          notes: result.changelog ?? "",
         });
       } else {
         setState({ kind: "up-to-date" });
@@ -54,10 +63,11 @@ export function AboutSection() {
   const install = async () => {
     setInstalling(true);
     try {
-      const { check } = await import("@tauri-apps/plugin-updater");
-      const update = await check();
-      if (!update?.available) return;
-      await update.downloadAndInstall(() => {});
+      const result = await invoke<UpdateCheckResult>("check_for_updates", { force: true });
+      if (!result.update_available || !result.target_version) return;
+      const dl = await invoke<{ success: boolean }>("download_update");
+      if (!dl.success) return;
+      await invoke("install_update");
     } catch (e) {
       setState({ kind: "error", message: e instanceof Error ? e.message : String(e) });
     } finally {

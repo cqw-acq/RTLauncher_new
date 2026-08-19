@@ -10,9 +10,24 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { check } from "@tauri-apps/plugin-updater";
+import { invoke } from "@tauri-apps/api/core";
 import { useI18n } from "@/components/i18n/use-i18n";
 import type { AppLanguage } from "@/components/settings/settings-provider";
+
+interface UpdateCheckResult {
+  needs_check: boolean;
+  update_available: boolean;
+  current_version: string;
+  target_version: string | null;
+  message: string;
+  changelog: string | null;
+}
+
+interface DownloadResult {
+  success: boolean;
+  path: string;
+  size: number;
+}
 
 /**
  * 自动更新组件 — 提供共享更新状态、主页提示和手动更新操作。
@@ -45,12 +60,12 @@ function updateAlert(language: AppLanguage, chinese: string, english: string) {
 async function checkInBackground(showError = false, language: AppLanguage = "zh-CN") {
   setAppUpdateState({ kind: "checking" });
   try {
-    const update = await check();
-    if (update?.available) {
+    const result = await invoke<UpdateCheckResult>("check_for_updates", { force: true });
+    if (result.update_available && result.target_version) {
       setAppUpdateState({
         kind: "available",
-        version: update.version ?? "",
-        notes: (update.body ?? "").toString(),
+        version: result.target_version,
+        notes: result.changelog ?? "",
         prepared: false,
       });
     } else {
@@ -75,13 +90,18 @@ async function checkInBackground(showError = false, language: AppLanguage = "zh-
 // 手动触发下载安装（弹窗模式用）
 async function downloadAndInstall(language: AppLanguage = "zh-CN"): Promise<boolean> {
   try {
-    const update = await check();
-    if (!update?.available) {
+    const result = await invoke<UpdateCheckResult>("check_for_updates", { force: true });
+    if (!result.update_available || !result.target_version) {
       window.alert(updateAlert(language, "没有可用更新", "No updates are available"));
       return false;
     }
-    await update.downloadAndInstall(() => {});
+    const dl = await invoke<DownloadResult>("download_update");
+    if (!dl.success) {
+      window.alert(updateAlert(language, "下载失败", "Download failed"));
+      return false;
+    }
     window.alert(updateAlert(language, "新版本下载完成，即将重启并安装。", "The update has downloaded and will restart to install."));
+    await invoke("install_update");
     return true;
   } catch (e) {
     console.error("[updater] install failed:", e);
