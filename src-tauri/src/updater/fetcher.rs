@@ -997,6 +997,19 @@ impl UpdateFetcher {
         })
     }
 
+    /// 当前运行中的可执行文件名（portable 为小写 `rtlauncher`，安装版为大写）。
+    /// 拿不到时按平台回退到历史硬编码名字。
+    fn current_exe_file_name() -> String {
+        std::env::current_exe()
+            .ok()
+            .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+            .unwrap_or_else(|| match get_current_os() {
+                os if os.starts_with("windows") => "RTLauncher.exe".to_string(),
+                os if os.starts_with("macos") => "RTLauncher".to_string(),
+                _ => "RTLauncher".to_string(),
+            })
+    }
+
     fn install_windows(
         &self,
         download_path: &PathBuf,
@@ -1006,7 +1019,7 @@ impl UpdateFetcher {
         extracted: bool,
         exe_dir: &PathBuf,
     ) -> Result<(), String> {
-        let target_exe = exe_dir.join("RTLauncher.exe");
+        let target_exe = exe_dir.join(Self::current_exe_file_name());
         if target_exe.exists() {
             let backup_path = backup_dir.join(format!("RTLauncher_backup_{}.exe", timestamp));
             let _ = fs::copy(&target_exe, &backup_path);
@@ -1106,7 +1119,7 @@ impl UpdateFetcher {
 
             std::process::exit(0);
         } else {
-            let target_binary = exe_dir.join("RTLauncher");
+            let target_binary = exe_dir.join(Self::current_exe_file_name());
             if target_binary.exists() {
                 let backup_path = backup_dir.join(format!("RTLauncher_backup_{}", timestamp));
                 let _ = fs::copy(&target_binary, &backup_path);
@@ -1158,7 +1171,7 @@ impl UpdateFetcher {
         extracted: bool,
         exe_dir: &PathBuf,
     ) -> Result<(), String> {
-        let target_binary = exe_dir.join("RTLauncher");
+        let target_binary = exe_dir.join(Self::current_exe_file_name());
         if target_binary.exists() {
             let backup_path = backup_dir.join(format!("RTLauncher_backup_{}", timestamp));
             let _ = fs::copy(&target_binary, &backup_path);
@@ -1302,11 +1315,18 @@ impl UpdateFetcher {
             _ => "RTLauncher",
         };
 
+        // portable 构建的可执行文件名是小写 `rtlauncher`（Cargo 包名），必须一起找
+        let expected_name_lower = expected_name.to_lowercase();
+
         let search_paths = vec![
             dir.join(expected_name),
+            dir.join(&expected_name_lower),
             dir.join("RTLauncher"),
+            dir.join("rtlauncher"),
             dir.join("bin").join(expected_name),
+            dir.join("bin").join(&expected_name_lower),
             dir.join("bin").join("RTLauncher"),
+            dir.join("bin").join("rtlauncher"),
         ];
 
         for path in &search_paths {
@@ -1327,7 +1347,11 @@ impl UpdateFetcher {
                     if let Ok(found) = self.find_file_recursive(&path, name) {
                         return Ok(found);
                     }
-                } else if path.file_name().map(|f| f == name).unwrap_or(false) {
+                } else if path
+                    .file_name()
+                    .map(|f| f == name || f.to_string_lossy().eq_ignore_ascii_case(name))
+                    .unwrap_or(false)
+                {
                     return Ok(path);
                 }
             }
