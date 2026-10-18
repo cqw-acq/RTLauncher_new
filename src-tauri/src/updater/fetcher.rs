@@ -531,6 +531,13 @@ impl UpdateFetcher {
         )
     }
 
+    /// .deb / .appimage 这类"包"资产无法通过替换当前二进制完成安装
+    /// （Linux 更新走的是便携版就地替换模型）。
+    fn is_package_asset(name: &str) -> bool {
+        let lower = name.to_lowercase();
+        lower.ends_with(".deb") || lower.ends_with(".appimage")
+    }
+
     fn select_asset<'a>(
         release: &'a NormalizedRelease,
         current_os: &str,
@@ -551,6 +558,13 @@ impl UpdateFetcher {
                 (platform_bonus + Self::score_asset_match(&asset.name), asset)
             })
             .collect();
+        // Linux 下只要存在便携资产（裸二进制 / tar.gz / zip），就优先选择，
+        // 避免 platform 加分让 .deb 压过便携资产导致"把 deb 当二进制覆盖"。
+        if current_os.starts_with("linux")
+            && assets.iter().any(|(_, asset)| !Self::is_package_asset(&asset.name))
+        {
+            assets.retain(|(_, asset)| !Self::is_package_asset(&asset.name));
+        }
         assets.sort_by(|left, right| right.0.cmp(&left.0));
         assets.first().map(|(_, asset)| *asset)
     }
@@ -609,26 +623,27 @@ impl UpdateFetcher {
             .timeout(std::time::Duration::from_secs(30))
             .build()
             .map_err(|e| format!("创建 HTTP 客户端失败: {}", e))?;
-        let [lighting_team_endpoint, github_endpoint] = get_update_endpoints();
-        let (lighting_team_result, github_result) = tokio::join!(
-            Self::fetch_source_releases(
-                &client,
-                lighting_team_endpoint,
+        let endpoints = get_update_endpoints();
+        let mut results = Vec::new();
+        for (index, endpoint) in endpoints.iter().enumerate() {
+            let source = if index == 0 {
                 ReleaseSource::LightingTeam
-            ),
-            Self::fetch_source_releases(&client, github_endpoint, ReleaseSource::GitHub)
-        );
+            } else {
+                ReleaseSource::GitHub
+            };
+            results.push(Self::fetch_source_releases(&client, endpoint, source).await);
+        }
 
         let mut releases = Vec::new();
         let mut errors = Vec::new();
-        for result in [lighting_team_result, github_result] {
+        for result in results {
             match result {
                 Ok(mut source_releases) => releases.append(&mut source_releases),
                 Err(error) => errors.push(error),
             }
         }
 
-        if releases.is_empty() && errors.len() == 2 {
+        if releases.is_empty() && !errors.is_empty() && errors.len() == endpoints.len() {
             let message = format!("所有更新源均不可用: {}", errors.join("；"));
             cfg.status = UpdateStatus::Error(message.clone());
             let _ = save_update_config(cfg);
@@ -997,6 +1012,19 @@ impl UpdateFetcher {
         })
     }
 
+    /// 当前运行中的可执行文件名（portable 为小写 `rtlauncher`，安装版为大写）。
+    /// 拿不到时按平台回退到历史硬编码名字。
+    fn current_exe_file_name() -> String {
+        std::env::current_exe()
+            .ok()
+            .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+            .unwrap_or_else(|| match get_current_os() {
+                os if os.starts_with("windows") => "RTLauncher.exe".to_string(),
+                os if os.starts_with("macos") => "RTLauncher".to_string(),
+                _ => "RTLauncher".to_string(),
+            })
+    }
+
     fn install_windows(
         &self,
         download_path: &PathBuf,
@@ -1006,7 +1034,7 @@ impl UpdateFetcher {
         extracted: bool,
         exe_dir: &PathBuf,
     ) -> Result<(), String> {
-        let target_exe = exe_dir.join("RTLauncher.exe");
+        let target_exe = exe_dir.join(Self::current_exe_file_name());
         if target_exe.exists() {
             let backup_path = backup_dir.join(format!("RTLauncher_backup_{}.exe", timestamp));
             let _ = fs::copy(&target_exe, &backup_path);
@@ -1106,7 +1134,7 @@ impl UpdateFetcher {
 
             std::process::exit(0);
         } else {
-            let target_binary = exe_dir.join("RTLauncher");
+            let target_binary = exe_dir.join(Self::current_exe_file_name());
             if target_binary.exists() {
                 let backup_path = backup_dir.join(format!("RTLauncher_backup_{}", timestamp));
                 let _ = fs::copy(&target_binary, &backup_path);
@@ -1158,7 +1186,7 @@ impl UpdateFetcher {
         extracted: bool,
         exe_dir: &PathBuf,
     ) -> Result<(), String> {
-        let target_binary = exe_dir.join("RTLauncher");
+        let target_binary = exe_dir.join(Self::current_exe_file_name());
         if target_binary.exists() {
             let backup_path = backup_dir.join(format!("RTLauncher_backup_{}", timestamp));
             let _ = fs::copy(&target_binary, &backup_path);
@@ -1290,6 +1318,59 @@ impl UpdateFetcher {
                 }
                 Ok(true)
             }
+            "gz" | "tgz" => {
+                let file = fs::File::open(source).map_err(|e| e.to_string())?;
+                let gz = flate2::read::GzDecoder::new(file);
+                let mut archive = tar::Archive::new(gz);
+
+                let canonical_dest = dest
+                    .canonicalize()
+                    .or_else(|_| {
+                        fs::create_dir_all(dest).ok();
+                        dest.canonicalize()
+                    })
+                    .map_err(|e| format!("无法解析目标目录: {}", e))?;
+
+                let entries = archive
+                    .entries()
+                    .map_err(|e| format!("读取 tar 压缩包失败: {}", e))?;
+
+                for entry in entries {
+                    let mut entry = entry.map_err(|e| format!("读取 tar 条目失败: {}", e))?;
+
+                    // tar 的 path() 内置安全检查：绝对路径 / 含 .. 的条目会直接返回 Err
+                    let safe_rel_path = entry
+                        .path()
+                        .map_err(|e| format!("非法的 tar 条目路径: {}", e))?
+                        .into_owned();
+
+                    if safe_rel_path.is_absolute() {
+                        return Err(format!("拒绝解压绝对路径条目: {}", safe_rel_path.display()));
+                    }
+
+                    if safe_rel_path
+                        .components()
+                        .any(|c| matches!(c, std::path::Component::ParentDir))
+                    {
+                        return Err(format!(
+                            "拒绝解压包含上级目录引用的条目: {}",
+                            safe_rel_path.display()
+                        ));
+                    }
+
+                    let outpath = canonical_dest.join(&safe_rel_path);
+
+                    if entry.header().entry_type().is_dir() {
+                        fs::create_dir_all(&outpath).map_err(|e| e.to_string())?;
+                    } else {
+                        if let Some(parent) = outpath.parent() {
+                            fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+                        }
+                        entry.unpack(&outpath).map_err(|e| format!("解压条目失败: {}", e))?;
+                    }
+                }
+                Ok(true)
+            }
             _ => Ok(false),
         }
     }
@@ -1302,11 +1383,18 @@ impl UpdateFetcher {
             _ => "RTLauncher",
         };
 
+        // portable 构建的可执行文件名是小写 `rtlauncher`（Cargo 包名），必须一起找
+        let expected_name_lower = expected_name.to_lowercase();
+
         let search_paths = vec![
             dir.join(expected_name),
+            dir.join(&expected_name_lower),
             dir.join("RTLauncher"),
+            dir.join("rtlauncher"),
             dir.join("bin").join(expected_name),
+            dir.join("bin").join(&expected_name_lower),
             dir.join("bin").join("RTLauncher"),
+            dir.join("bin").join("rtlauncher"),
         ];
 
         for path in &search_paths {
@@ -1327,7 +1415,11 @@ impl UpdateFetcher {
                     if let Ok(found) = self.find_file_recursive(&path, name) {
                         return Ok(found);
                     }
-                } else if path.file_name().map(|f| f == name).unwrap_or(false) {
+                } else if path
+                    .file_name()
+                    .map(|f| f == name || f.to_string_lossy().eq_ignore_ascii_case(name))
+                    .unwrap_or(false)
+                {
                     return Ok(path);
                 }
             }
