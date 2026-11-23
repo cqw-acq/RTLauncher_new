@@ -1,6 +1,7 @@
 {
   "name": "rtlauncher",
   "version": "0.1.2",
+  "license": "MIT",
   "private": true,
   "scripts": {
     "dev": "next dev -p 51515",
