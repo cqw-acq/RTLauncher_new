@@ -510,6 +510,48 @@ pub fn build_jvm_arguments(
     .map_err(|e| e.to_string())
 }
 
+/// 计算本次启动实际使用的游戏目录（版本隔离判定）。
+pub(super) fn resolve_game_directory(
+    minecraft_path: &str,
+    version_name: &str,
+    load_type: &str,
+    load_name: &str,
+) -> PathBuf {
+    let minecraft_path_buf = PathBuf::from(minecraft_path);
+    let isolation_name = if load_type != "0" && !load_name.is_empty() {
+        load_name.to_string()
+    } else {
+        version_name.to_string()
+    };
+    let isolation_dir = minecraft_path_buf.join("versions").join(&isolation_name);
+
+    // 由于对我们强大的 version_management 里的 vm_ensure_instance_dirs 实在是不敢恭维，所以不能单纯从文件（夹）存在判断是否开启版本隔离
+    // options.txt 真是个伟大的发明
+    let has_entries = |p: &std::path::Path| {
+        std::fs::read_dir(p).map(|mut it| it.next().is_some()).unwrap_or(false)
+    };
+    let options_has_content = std::fs::read_to_string(isolation_dir.join("options.txt"))
+        .map(|s| !s.trim().is_empty())
+        .unwrap_or(false);
+
+    let isolated = if load_type != "0" && !load_name.is_empty() {
+        true
+    } else {
+        options_has_content
+            || has_entries(&isolation_dir.join("logs"))
+            || has_entries(&isolation_dir.join("mods"))
+            || has_entries(&isolation_dir.join("shaderpacks"))
+            || has_entries(&isolation_dir.join("resourcepacks"))
+            || has_entries(&isolation_dir.join("saves"))
+    };
+
+    if isolated {
+        isolation_dir
+    } else {
+        minecraft_path_buf
+    }
+}
+
 pub(super) fn build_jvm_arguments_inner(
     app_handle: tauri::AppHandle,
     minecraft_path: &str,
@@ -543,14 +585,8 @@ pub(super) fn build_jvm_arguments_inner(
         );
     }
 
-    // 确定实际的游戏目录（用于运行游戏）
-    let game_directory = if loadType != "0" && !loadName.is_empty() {
-        // 对于有加载器的情况，游戏目录应该是版本隔离目录
-        minecraft_path_buf.join("versions").join(loadName)
-    } else {
-        // 对于原版，游戏目录应该是 minecraft_path 本身
-        minecraft_path_buf.clone()
-    };
+    // 确定实际的游戏目录（用于运行游戏，issue #95）
+    let game_directory = resolve_game_directory(minecraft_path, version_name, loadType, loadName);
 
     // 如果 uuid 为空或不合法，根据玩家名生成离线 UUID
     let uuid = if uuid.is_empty() || !is_valid_uuid(uuid) {

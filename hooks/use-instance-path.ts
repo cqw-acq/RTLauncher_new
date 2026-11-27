@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useLaunchContext } from "@/components/launch/launch-provider";
 import { useInstances } from "@/hooks/use-instances";
@@ -109,10 +109,57 @@ export function useInstancePath(): InstancePathInfo {
     ?? (config.loadName || undefined)
     ?? (config.versionName || undefined);
 
-  // 构建实例目录
-  const instanceDir = config.minecraftPath && instanceFolderName
+  // 与启动侧一致的实际游戏目录
+  const [resolved, setResolved] = useState<{ key: string; dir: string } | null>(null);
+
+  const resolveKey = [
+    config.minecraftPath,
+    config.versionName,
+    config.loadType,
+    config.loadName,
+    instanceFolderName,
+  ].join("|");
+
+  // 构建实例目录：解析输入匹配时用判定结果，否则退回旧逻辑占位 (PR #106 CodeRabbit #1)
+  const computedInstanceDir = config.minecraftPath && instanceFolderName
     ? `${config.minecraftPath}/versions/${instanceFolderName}`
     : undefined;
+  const instanceDir = resolved && resolved.key === resolveKey
+    ? resolved.dir
+    : computedInstanceDir;
+
+  useEffect(() => {
+    if (!config.minecraftPath || !instanceFolderName) {
+      setResolved(null);
+      return;
+    }
+    let cancelled = false;
+    invoke<string>("resolve_game_directory_cmd", {
+      minecraftPath: config.minecraftPath,
+      versionName: config.versionName || "",
+      loadType: config.loadType || "0",
+      loadName: config.loadName || "",
+    })
+      .then((dir) => {
+        if (!cancelled) {
+          // 调用失败/无结果
+          setResolved(dir ? { key: resolveKey, dir } : null);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setResolved(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    resolveKey,
+    config.minecraftPath,
+    config.versionName,
+    config.loadType,
+    config.loadName,
+    instanceFolderName,
+  ]);
 
   useEffect(() => {
     // 等待扫描确认实例后再创建标准目录；否则首页与目标页面会在路由
