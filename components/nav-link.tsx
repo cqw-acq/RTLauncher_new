@@ -8,14 +8,18 @@ type NavLinkProps = React.AnchorHTMLAttributes<HTMLAnchorElement> & {
 };
 
 /** 内部链接统一添补尾斜杠 */
-function normalizeHref(href: string): string {
+export function normalizeHref(href: string): string {
   if (href.startsWith("//")) return href;
   if (!href.startsWith("/")) return href;
-  if (href === "/") return href;
-  if (href.includes("#") || href.includes("?")) return href;
-  return href.endsWith("/") ? href : `${href}/`;
-}
 
+  const cut = href.search(/[?#]/);
+  const path = cut === -1 ? href : href.slice(0, cut);
+  const suffix = cut === -1 ? "" : href.slice(cut);
+
+  if (path === "" || path === "/") return href;
+  const normalized = path.endsWith("/") ? path : `${path}/`;
+  return normalized + suffix;
+}
 /**
  * 内部导航链接。
  *
