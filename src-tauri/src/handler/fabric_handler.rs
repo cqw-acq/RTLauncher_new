@@ -223,12 +223,12 @@ pub async fn download_and_install_fabric(
 
             let minecraft_path_str = mc_path_b.to_string_lossy().to_string();
 
-            // 安装 Fabric Loader (60-80%)
+            // 安装 Fabric Loader (60-80%)：镜像优先，镜像不可用时自动回退到 Fabric 官方源
             let loader_dir = fabric_installer::install_fabric_loader(
                 &version_b,
                 &loader_ver_b,
                 &minecraft_path_str,
-                true,
+                fabric_installer::PREFER_MIRROR,
             )
             .await
             .map_err(|e| format!("Fabric Loader 安装失败: {}", e))?;

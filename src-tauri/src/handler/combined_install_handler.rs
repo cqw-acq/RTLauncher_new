@@ -291,11 +291,12 @@ async fn run_combined_install(
                 .await
             }
             "fabric" => {
+                // 镜像优先，镜像不可用时自动回退到 Fabric 官方源
                 crate::downloader::fabric_installer::install_fabric_loader(
                     mc_version,
                     &sel.version,
                     &mc_path_str,
-                    true,
+                    crate::downloader::fabric_installer::PREFER_MIRROR,
                 )
                 .await
             }
