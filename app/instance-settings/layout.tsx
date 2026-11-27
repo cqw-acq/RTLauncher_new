@@ -20,6 +20,10 @@ export default function InstanceSettingsLayout({
 }) {
   const pathname = usePathname();
   const current = pathname.replace(/\/+$/, "");
+  const isActive = (href: string) => {
+    const target = href.replace(/\/+$/, "");
+    return current === target || current.startsWith(`${target}/`);
+  };
 
   return (
     <div className="h-full flex flex-col">
@@ -31,7 +35,7 @@ export default function InstanceSettingsLayout({
               href={item.href}
               className={cn(
                 "px-3 py-1 rounded-md text-xs font-medium transition-colors whitespace-nowrap",
-                current === item.href.replace(/\/+$/, "")
+                isActive(item.href)
                   ? "bg-accent text-accent-foreground"
                   : "text-muted-foreground hover:text-foreground hover:bg-accent/50"
               )}

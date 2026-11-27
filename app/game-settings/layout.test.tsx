@@ -43,4 +43,14 @@ describe("GameSettingsLayout", () => {
     );
     expect(screen.getByText("panel.mods").className).toContain("bg-accent");
   });
+
+  it("highlights the parent tab for a nested route", () => {
+    state.pathname = "/game-settings/schematics/viewer";
+    render(
+      <GameSettingsLayout>
+      <div />
+      </GameSettingsLayout>,
+    );
+    expect(screen.getByText("home.cardGrid.schematics").className).toContain("bg-accent");
+  });
 });
