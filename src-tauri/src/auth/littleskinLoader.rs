@@ -13,10 +13,13 @@ use sqlite::Connection;
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream, ToSocketAddrs};
-use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 use url::Url;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{mpsc, Arc};
+
+const OAUTH_TIMEOUT: Duration = Duration::from_secs(180);
 
 // ---------------------------------------------------------------------------
 // 数据结构
@@ -142,6 +145,11 @@ fn upsert_player(
 // ---------------------------------------------------------------------------
 // OAuth 登录方式（保留，与原实现一致）
 // ---------------------------------------------------------------------------
+static LOGIN_CANCELLED: AtomicBool = AtomicBool::new(false);
+
+pub fn request_cancel() {
+    LOGIN_CANCELLED.store(true, Ordering::SeqCst);
+}
 
 fn check_network_connection() -> Result<(), String> {
     let test_hosts = vec![
@@ -168,7 +176,6 @@ struct LittleSkinClient {
     redirect_uri: String,
     client_id: String,
     client_secret: String,
-    code: Arc<Mutex<Option<String>>>,
 }
 
 impl LittleSkinClient {
@@ -178,7 +185,6 @@ impl LittleSkinClient {
             redirect_uri: "http://localhost:40323".to_string(),
             client_id: "1340".to_string(),
             client_secret: "vF9bybNWzp3AzSrICE6pZMrMzZgEKJtdf8HTz9Ep".to_string(),
-            code: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -193,44 +199,108 @@ impl LittleSkinClient {
         let _ = webbrowser::open(&authorize_url);
 
         let bind_address = self.redirect_uri.replace("http://", "");
-        let listener =
-            TcpListener::bind(&bind_address).map_err(|e| format!("无法绑定地址: {}", e))?;
+        let listener = 
+            TcpListener::bind(&bind_address).map_err(|e| {format!("无法绑定本地回调端口 {}（端口被占用）：{}",bind_address, e)})?;
+        listener
+            .set_nonblocking(true)
+            .map_err(|e| format!("无法将回调端口设为非阻塞模式: {}", e))?;
 
-        let code_clone = Arc::clone(&self.code);
+        let (code_tx, code_rx) = mpsc::channel::<String>();
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop_clone = Arc::clone(&stop);
         let start_time = Instant::now();
 
         let handle = thread::spawn(move || {
-            for stream in listener.incoming() {
-                if let Ok(mut stream) = stream {
-                    let mut buffer = [0; 1024];
-                    let _ = stream.read(&mut buffer);
-                    if let Ok(request) = String::from_utf8(buffer.to_vec()) {
-                        let lines: Vec<&str> = request.split('\r').collect();
-                        let request_line = lines[0].trim();
-                        if let Some(url) = request_line.split_whitespace().nth(1) {
-                            if let Ok(parsed_url) = Url::parse(&format!("http://localhost{}", url))
-                            {
-                                let query_pairs: HashMap<_, _> =
-                                    parsed_url.query_pairs().into_owned().collect();
-                                if let Some(code) = query_pairs.get("code") {
-                                    *code_clone.lock().unwrap() = Some(code.clone());
+            while !stop_clone.load(Ordering::SeqCst) {
+                match listener.accept() {
+                    Ok((mut stream, _addr)) => {
+                        let _ = stream.set_nonblocking(false);
+                        let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
+                        let _ = stream.set_write_timeout(Some(Duration::from_secs(5)));
+                        let mut buf: Vec<u8> = Vec::new();
+                        let mut chunk = [0u8; 4096];
+                        loop {
+                            match stream.read(&mut chunk) {
+                                Ok(0) => break,
+                                Ok(n) => {
+                                    buf.extend_from_slice(&chunk[..n]);
+                                    if buf.windows(4).any(|w| w == b"\r\n\r\n") {
+                                        break;
+                                    }
+                                    if buf.len() > 64 * 1024 {
+                                        break;
+                                    }
                                 }
+                                Err(_) => break,
                             }
                         }
-                        let response = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n<html><body><h1>授权成功！请关闭此页面</h1></body></html>";
-                        let _ = stream.write(response.as_bytes());
+
+                        let request = String::from_utf8_lossy(&buf).to_string();
+                        let first_line = request.lines().next().unwrap_or("");
+                        let path = first_line.split_whitespace().nth(1).unwrap_or("");
+                        let mut got_code = false;
+                        if let Ok(parsed_url) = Url::parse(&format!("http://localhost{}", path))
+                        {
+                            let query_pairs: HashMap<_, _> =
+                                parsed_url.query_pairs().into_owned().collect();
+                            if let Some(code) = query_pairs.get("code") {
+                                let _ = code_tx.send(code.clone());
+                                got_code = true;
+                            }
+                        }
+
+                        if got_code {
+                            let body = "<html><body><h1>授权成功！请关闭此页面</h1></body></html>";
+                            let response = format!(
+                                "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                                body.len(),
+                                body
+                            );
+                            let _ = stream.write_all(response.as_bytes());
+                            let _ = stream.flush();
+                            break;
+                        }
+
+                        // 没有 code（预连接 / favicon / 用户点了拒绝）：回 400 后继续等真正的回调，
+                        // 不能退出监听，否则后面的授权回调没人接（PR #105 CodeRabbit #9）
+                        let body = "<html><body><h1>未收到授权码，请回到启动器重试</h1></body></html>";
+                        let response = format!(
+                            "HTTP/1.1 400 Bad Request\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                            body.len(),
+                            body
+                        );
+                        let _ = stream.write_all(response.as_bytes());
                         let _ = stream.flush();
+                        continue;
                     }
-                    break;
+                    Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(100));
+                    }
+                    Err(_) => break,
                 }
             }
         });
 
         loop {
-            if let Some(code) = self.code.lock().unwrap().take() {
+            if LOGIN_CANCELLED.load(Ordering::SeqCst) {
+                stop.store(true, Ordering::SeqCst);
                 let _ = handle.join();
+                return Err("已取消 LittleSkin 登录".to_string());
+            }
+            if let Ok(code) = code_rx.try_recv() {
+                stop.store(true, Ordering::SeqCst);
+                let _ = handle.join();
+
+                // 更换 token 期间用户可能已经取消登录 (PR #105 CodeRabbit #5)
                 let token_response = self.request_token(&code)?;
+                if LOGIN_CANCELLED.load(Ordering::SeqCst) {
+                    return Err("已取消 LittleSkin 登录".to_string());
+                }
                 let player_info = self.get_player_info(&token_response.access_token);
+                if LOGIN_CANCELLED.load(Ordering::SeqCst) {
+                    return Err("已取消 LittleSkin 登录".to_string());
+                }
+
                 let player_data: Value = serde_json::from_str(&player_info).unwrap_or(Value::Null);
 
                 let conn = Connection::open(super::db_path()).map_err(|e| e.to_string())?;
@@ -283,10 +353,14 @@ impl LittleSkinClient {
                 }
                 return Err("未找到有效的玩家信息".to_string());
             }
-            thread::sleep(Duration::from_secs(1));
-            if start_time.elapsed() >= Duration::from_secs(360) {
+            thread::sleep(Duration::from_millis(200));
+            if start_time.elapsed() >= OAUTH_TIMEOUT {
+                stop.store(true, Ordering::SeqCst);
                 let _ = handle.join();
-                return Err("登录超时，请重新登录".to_string());
+                return Err(format!(
+                    "登录超时：{} 秒内未完成浏览器授权，请重试",
+                    OAUTH_TIMEOUT.as_secs()
+                ));
             }
         }
     }
@@ -526,9 +600,21 @@ fn format_uuid(id: &str) -> String {
 
 /// 原有的 OAuth 登录命令（保留以兼容旧接口）
 #[tauri::command]
-pub fn useMethod() -> Result<super::AccountInfo, String> {
-    let mut client = LittleSkinClient::new();
-    client.authenticate_and_return()
+pub async fn useMethod() -> Result<super::AccountInfo, String> {
+    // 需要在派发阻塞任务之前重置，防止用户在 check_network_connection() 期间取消登录 (PR #105 CodeRabbit #3)
+    LOGIN_CANCELLED.store(false, Ordering::SeqCst);
+    tauri::async_runtime::spawn_blocking(|| {
+        let mut client = LittleSkinClient::new();
+        client.authenticate_and_return()
+    })
+    .await
+    .map_err(|e| format!("LittleSkin OAuth 登录任务异常结束: {}", e))?
+}
+
+/// 取消正在等待中的 LittleSkin OAuth 登录。
+#[tauri::command]
+pub fn littleskin_cancel_login() {
+    request_cancel();
 }
 
 /// 新命令：使用 LittleSkin 账号密码直接登录（返回玩家角色列表）

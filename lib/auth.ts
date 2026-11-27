@@ -54,6 +54,13 @@ export async function loginLittleSkin(): Promise<AccountInfo> {
 }
 
 /**
+ * 取消正在等待中的 LittleSkin OAuth 登录
+ */
+export async function cancelLittleSkinLogin(): Promise<void> {
+  return safeInvoke<void>("littleskin_cancel_login");
+}
+
+/**
  * LittleSkin 账号密码登录（PCL2 风格，无需浏览器）
  * 返回玩家角色列表（一个 LittleSkin 账号可能关联多个玩家）
  * @param username LittleSkin 账号（邮箱或用户名）

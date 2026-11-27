@@ -642,8 +642,14 @@ export function AccountProvider({ children }: { children: React.ReactNode }) {
       setLoginState("idle");
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
+      // 用户主动取消不算作错误
+      if (msg.includes("已取消")) {
+        setLoginState("idle");
+        return;
+      }
       setLoginError(msg);
       setLoginState("error");
+      throw e;
     }
   }, []);
 
