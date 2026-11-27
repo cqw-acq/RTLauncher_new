@@ -250,7 +250,7 @@ impl LittleSkinClient {
                         }
 
                         if got_code {
-                            let body = "<html><body><h1>授权成功！请关闭此页面</h1></body></html>";
+                            let body = "<html><body><h1>已收到授权，请回到启动器查看结果</h1></body></html>";
                             let response = format!(
                                 "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                                 body.len(),
@@ -273,7 +273,12 @@ impl LittleSkinClient {
                         let _ = stream.flush();
                         continue;
                     }
-                    Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    Err(ref e)
+                        if e.kind() == std::io::ErrorKind::WouldBlock
+                            || e.kind() == std::io::ErrorKind::Interrupted
+                            || e.kind() == std::io::ErrorKind::ConnectionAborted =>
+                    {
+                        // 临时错误，不退出监听
                         thread::sleep(Duration::from_millis(100));
                     }
                     Err(_) => break,
@@ -352,6 +357,10 @@ impl LittleSkinClient {
                     }
                 }
                 return Err("未找到有效的玩家信息".to_string());
+            }
+            // 监听线程退出且 channel 也空了，就说明是异常退出，立刻失败，不空等到 180 秒
+            if handle.is_finished() {
+                return Err("回调监听已停止，请重试".to_string());
             }
             thread::sleep(Duration::from_millis(200));
             if start_time.elapsed() >= OAUTH_TIMEOUT {

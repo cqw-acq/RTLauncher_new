@@ -31,7 +31,7 @@ type AccountContextType = {
   /** 更新单个账户信息（例如刷新皮肤URL） */
   updateProfile: (id: string, patch: Partial<Account>) => void;
   /** LittleSkin OAuth 登录 */
-  loginWithLittleSkin: () => Promise<void>;
+  loginWithLittleSkin: () => Promise<boolean>;
   /** LittleSkin 账号密码登录（PCL2 风格，无需浏览器），返回玩家列表 */
   loginWithLittleSkinCredentials: (
     username: string,
@@ -640,12 +640,13 @@ export function AccountProvider({ children }: { children: React.ReactNode }) {
         })();
       }
       setLoginState("idle");
+      return true;         // 告知调用方登录成功
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
       // 用户主动取消不算作错误
       if (msg.includes("已取消")) {
         setLoginState("idle");
-        return;
+        return false;          // 告知调用方用户取消
       }
       setLoginError(msg);
       setLoginState("error");

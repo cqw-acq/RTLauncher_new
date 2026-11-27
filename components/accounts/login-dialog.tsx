@@ -153,15 +153,14 @@ export function LoginDialog({
   const handleLittleSkin = async () => {
     setLsOauthWaiting(true);
     try {
-      await loginWithLittleSkin();
-      handleClose();
+      const ok = await loginWithLittleSkin();
+      if (ok) handleClose();   // 只有成功才关闭弹窗
     } catch {
-      // 失败（超时 / 网络 / 端口占用）需要显示原因
+      // 失败则不关闭弹窗，使用 loginError 显示原因
     } finally {
       setLsOauthWaiting(false);
     }
   };
-
   // LittleSkin 账号密码登录（PCL2 风格，无需浏览器）
   const handleLittleSkinCredentials = async () => {
     try {
