@@ -43,6 +43,7 @@ use handler::java_downloader::{download_java_runtime, get_java_versions};
 use handler::java_scanner::{search_java_installations, validate_java_path};
 use handler::launcher::build_jvm_arguments;
 use handler::launcher::kill_game_process;
+use handler::launcher::resolve_game_directory_cmd;
 use handler::launcher::launch_game;
 use handler::liteloader_handler::{
     cancel_liteloader_download, download_and_install_liteloader, get_liteloader_versions,
@@ -136,6 +137,7 @@ pub fn run() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
             build_jvm_arguments,
+            resolve_game_directory_cmd,
             launch_game,
             kill_game_process,
             download_patcher,

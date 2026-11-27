@@ -7,7 +7,7 @@ mod process;
 use std::path::PathBuf;
 use tauri::Manager;
 
-use arguments::{build_jvm_arguments_inner, VersionJson};
+use arguments::{build_jvm_arguments_inner, resolve_game_directory, VersionJson};
 use java_runtime::{
     get_java_major_version, major_version_to_runtime_name, required_java_major_from_jar,
 };
@@ -15,6 +15,19 @@ use process::run_command;
 
 pub use arguments::build_jvm_arguments;
 pub use process::kill_game_process;
+
+/// 返回当前配置下实际会使用的游戏目录（供设置页显示）
+#[tauri::command]
+pub fn resolve_game_directory_cmd(
+    minecraft_path: &str,
+    version_name: &str,
+    load_type: &str,
+    load_name: &str,
+) -> String {
+    resolve_game_directory(minecraft_path, version_name, load_type, load_name)
+        .to_string_lossy()
+        .to_string()
+}
 
 /// 启动游戏（构建参数并执行 Java 进程）
 #[tauri::command]
