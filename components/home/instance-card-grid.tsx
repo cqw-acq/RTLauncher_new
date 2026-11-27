@@ -1,7 +1,7 @@
 "use client";
 
 import { motion } from "framer-motion";
-import Link from "next/link";
+import { NavLink } from "@/components/nav-link";
 import { useMemo } from "react";
 import {
   Card,
@@ -151,9 +151,8 @@ export function InstanceCardGrid({
         const copy = CARD_COPY[card.id];
         return (
         <motion.div key={card.id} variants={staggerItem} className="h-full">
-          <Link
+          <NavLink
             href={card.href}
-            prefetch={false}
             className="block h-full"
             suppressHydrationWarning
           >
@@ -190,7 +189,7 @@ export function InstanceCardGrid({
                 </div>
               </CardContent>
             </Card>
-          </Link>
+          </NavLink>
         </motion.div>
       )})}
     </motion.div>
