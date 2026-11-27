@@ -147,6 +147,26 @@ fn upsert_player(
 // ---------------------------------------------------------------------------
 static LOGIN_CANCELLED: AtomicBool = AtomicBool::new(false);
 
+/// 生成 OAuth state（防登录 CSRF）
+fn generate_oauth_state() -> String {
+    use std::collections::hash_map::RandomState;
+    use std::hash::{BuildHasher, Hasher};
+
+    let mut out = String::new();
+    for _ in 0..2 {
+        let mut hasher = RandomState::new().build_hasher();
+        hasher.write_u64(std::process::id() as u64);
+        hasher.write_u128(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0),
+        );
+        out.push_str(&format!("{:016x}", hasher.finish()));
+    }
+    out
+}
+
 pub fn request_cancel() {
     LOGIN_CANCELLED.store(true, Ordering::SeqCst);
 }
@@ -191,9 +211,11 @@ impl LittleSkinClient {
     pub fn authenticate_and_return(&mut self) -> Result<super::AccountInfo, String> {
         check_network_connection()?;
 
+        // OAuth state
+        let expected_state = generate_oauth_state();
         let authorize_url = format!(
-            "https://littleskin.cn/oauth/authorize?client_id={}&redirect_uri={}&response_type=code&scope=Player.ReadWrite",
-            self.client_id, self.redirect_uri
+            "https://littleskin.cn/oauth/authorize?client_id={}&redirect_uri={}&response_type=code&scope=Player.ReadWrite&state={}",
+            self.client_id, self.redirect_uri, expected_state
         );
 
         let _ = webbrowser::open(&authorize_url);
@@ -209,6 +231,8 @@ impl LittleSkinClient {
         let stop = Arc::new(AtomicBool::new(false));
         let stop_clone = Arc::clone(&stop);
         let start_time = Instant::now();
+
+        let expected_state_for_thread = expected_state.clone();
 
         let handle = thread::spawn(move || {
             while !stop_clone.load(Ordering::SeqCst) {
@@ -244,8 +268,17 @@ impl LittleSkinClient {
                             let query_pairs: HashMap<_, _> =
                                 parsed_url.query_pairs().into_owned().collect();
                             if let Some(code) = query_pairs.get("code") {
-                                let _ = code_tx.send(code.clone());
-                                got_code = true;
+                                let state_ok = query_pairs
+                                    .get("state")
+                                    .map(|s| s == &expected_state_for_thread)
+                                    .unwrap_or(false);
+                                if state_ok {
+                                    let _ = code_tx.send(code.clone());
+                                    got_code = true;
+                                } else {
+                                    // state 不匹配
+                                    eprintln!("[LittleSkin OAuth] 收到 state 不匹配的回调，已忽略");
+                                }
                             }
                         }
 
