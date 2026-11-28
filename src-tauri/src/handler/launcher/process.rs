@@ -3,7 +3,7 @@ use std::{
     io::{BufRead, BufReader},
     path::PathBuf,
     process::{Command, Stdio},
-    sync::{Mutex, OnceLock},
+    sync::{Mutex, MutexGuard, OnceLock, PoisonError},
     thread,
 };
 use tauri::Emitter;
@@ -16,9 +16,78 @@ struct GameProcess {
     termination_requested: bool,
 }
 
-fn game_process_store() -> &'static Mutex<Option<GameProcess>> {
-    static STORE: OnceLock<Mutex<Option<GameProcess>>> = OnceLock::new();
-    STORE.get_or_init(|| Mutex::new(None))
+/// 全局启动状态：已拉起的游戏进程，以及仍在准备阶段（检测/下载 Java、
+/// 构建参数）、尚未拉起进程的启动请求。
+///
+/// `launch_game` 改为 async 后，准备阶段不再占住主线程，终止命令可能在
+/// 进程拉起之前到达；准备中的启动登记在这里，终止命令才能取消它。
+#[derive(Default)]
+struct LaunchState {
+    process: Option<GameProcess>,
+    /// 处于准备阶段的启动请求数量
+    preparing: usize,
+    /// 每次终止命令取消准备中的启动时递增。启动请求记录登记时的值，
+    /// 值发生变化即表示它已被取消。
+    cancel_generation: u64,
+}
+
+fn game_process_store() -> &'static Mutex<LaunchState> {
+    static STORE: OnceLock<Mutex<LaunchState>> = OnceLock::new();
+    STORE.get_or_init(|| Mutex::new(LaunchState::default()))
+}
+
+/// 登记/注销准备阶段只做计数，状态被毒化时仍继续，避免注销失败导致计数泄漏。
+fn lock_launch_state() -> MutexGuard<'static, LaunchState> {
+    game_process_store()
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+}
+
+pub(super) const LAUNCH_CANCELLED_MESSAGE: &str = "启动已取消";
+
+fn register_preparation(state: &mut LaunchState) -> u64 {
+    state.preparing += 1;
+    state.cancel_generation
+}
+
+fn finish_preparation(state: &mut LaunchState) {
+    state.preparing = state.preparing.saturating_sub(1);
+}
+
+fn is_launch_cancelled(state: &LaunchState, generation: u64) -> bool {
+    state.cancel_generation != generation
+}
+
+/// 一次处于准备阶段的启动请求。存活期间终止命令可以取消它，drop 时自动注销。
+pub(super) struct LaunchTicket {
+    generation: u64,
+}
+
+impl LaunchTicket {
+    pub(super) fn register() -> Self {
+        let generation = register_preparation(&mut lock_launch_state());
+        Self { generation }
+    }
+
+    /// 准备阶段的检查点：已收到终止命令时返回错误，不再继续启动。
+    pub(super) fn ensure_not_cancelled(&self) -> Result<(), String> {
+        if is_launch_cancelled(&lock_launch_state(), self.generation) {
+            Err(LAUNCH_CANCELLED_MESSAGE.to_string())
+        } else {
+            Ok(())
+        }
+    }
+
+    /// 交给 `run_command`，在拉起进程的同一把锁内做最后一次取消检查。
+    pub(super) fn generation(&self) -> u64 {
+        self.generation
+    }
+}
+
+impl Drop for LaunchTicket {
+    fn drop(&mut self) {
+        finish_preparation(&mut lock_launch_state());
+    }
 }
 
 fn insert_process_if_empty(
@@ -57,6 +126,32 @@ fn reset_termination_request_if_pid(store: &mut Option<GameProcess>, pid: u32) {
     if let Some(process) = store.as_mut().filter(|process| process.pid == pid) {
         process.termination_requested = false;
     }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum KillAction {
+    /// 终止已拉起的游戏进程
+    Terminate { pid: u32, started: bool },
+    /// 游戏进程尚未拉起，只取消准备中的启动
+    CancelPreparation,
+}
+
+/// 决定终止命令要做什么。准备中的启动（含排队等待的）一律取消，
+/// 避免用户点了终止后游戏仍在准备结束时被拉起。
+fn claim_kill_action(state: &mut LaunchState) -> Result<KillAction, String> {
+    let has_preparing_launch = state.preparing > 0;
+    if state.process.is_some() {
+        let (pid, started) = claim_termination_request(&mut state.process)?;
+        if has_preparing_launch {
+            state.cancel_generation += 1;
+        }
+        return Ok(KillAction::Terminate { pid, started });
+    }
+    if has_preparing_launch {
+        state.cancel_generation += 1;
+        return Ok(KillAction::CancelPreparation);
+    }
+    Err("当前没有运行中的游戏进程".to_string())
 }
 
 /// 检测游戏是否完全启动（JVM 启动、加载完资源、主窗口就绪）
@@ -179,6 +274,7 @@ pub fn run_command(
     javaPath: PathBuf,
     MCPath: PathBuf,
     app_handle: tauri::AppHandle,
+    launch_generation: u64,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // 检查 Java 路径是否存在
     if !javaPath.exists() {
@@ -225,11 +321,15 @@ pub fn run_command(
     command.stdout(Stdio::piped());
     command.stderr(Stdio::piped());
 
-    // 持有同一个锁完成“检查 + 启动 + 登记”。这样两个并发请求不能覆盖彼此。
+    // 持有同一个锁完成“检查 + 启动 + 登记”。这样两个并发请求不能覆盖彼此，
+    // 终止命令也只能落在“取消启动”或“终止已登记进程”之一，不会漏杀。
     let mut store = game_process_store()
         .lock()
         .map_err(|e| format!("无法读取游戏进程状态: {}", e))?;
-    if let Some(current) = store.as_ref() {
+    if is_launch_cancelled(&store, launch_generation) {
+        return Err(LAUNCH_CANCELLED_MESSAGE.into());
+    }
+    if let Some(current) = store.process.as_ref() {
         return Err(format!("已有游戏进程正在运行 (PID {})", current.pid).into());
     }
 
@@ -244,7 +344,7 @@ pub fn run_command(
 
             // 存储到全局进程表（启动中，尚未完成初始化）。
             insert_process_if_empty(
-                &mut store,
+                &mut store.process,
                 GameProcess {
                     pid,
                     fully_started: false,
@@ -277,7 +377,9 @@ pub fn run_command(
                             if is_game_fully_started(&line) && claim_startup_transition(&flag) {
                                 let is_current_process = {
                                     let mut store = game_process_store().lock().unwrap();
-                                    if let Some(gp) = store.as_mut().filter(|gp| gp.pid == pid) {
+                                    if let Some(gp) =
+                                        store.process.as_mut().filter(|gp| gp.pid == pid)
+                                    {
                                         gp.fully_started = true;
                                         true
                                     } else {
@@ -314,7 +416,9 @@ pub fn run_command(
                             if is_game_fully_started(&line) && claim_startup_transition(&flag) {
                                 let is_current_process = {
                                     let mut store = game_process_store().lock().unwrap();
-                                    if let Some(gp) = store.as_mut().filter(|gp| gp.pid == pid) {
+                                    if let Some(gp) =
+                                        store.process.as_mut().filter(|gp| gp.pid == pid)
+                                    {
                                         gp.fully_started = true;
                                         true
                                     } else {
@@ -345,7 +449,7 @@ pub fn run_command(
                 // 仅清除此等待线程对应的进程。旧线程不能清除或上报新进程。
                 let should_emit = game_process_store()
                     .lock()
-                    .map(|mut store| clear_process_if_pid(&mut store, pid))
+                    .map(|mut store| clear_process_if_pid(&mut store.process, pid))
                     .unwrap_or(false);
                 if should_emit {
                     let _ = app_handle.emit("game-exited", exit_code);
@@ -393,18 +497,26 @@ fn terminate_process(pid: u32) -> Result<(), String> {
     }
 }
 
-/// 终止当前游戏进程（在游戏未完全启动前可调用）
+/// 终止当前游戏进程（在游戏未完全启动前可调用）。
+/// 游戏进程尚未拉起（仍在检测/下载 Java、构建参数）时，取消这次启动。
 #[tauri::command]
 pub fn kill_game_process() -> Result<String, String> {
     // 先在锁内登记终止请求，再释放锁运行外部命令。
-    let (pid, started) = {
+    let action = {
         let mut store = game_process_store().lock().map_err(|e| e.to_string())?;
-        claim_termination_request(&mut store)?
+        claim_kill_action(&mut store)?
+    };
+    let (pid, started) = match action {
+        KillAction::CancelPreparation => {
+            info!("游戏进程尚未拉起，已取消准备中的启动");
+            return Ok("已取消正在准备的游戏启动".to_string());
+        }
+        KillAction::Terminate { pid, started } => (pid, started),
     };
 
     if let Err(error) = terminate_process(pid) {
         if let Ok(mut store) = game_process_store().lock() {
-            reset_termination_request_if_pid(&mut store, pid);
+            reset_termination_request_if_pid(&mut store.process, pid);
         }
         return Err(error);
     }
@@ -419,10 +531,78 @@ pub fn kill_game_process() -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        claim_startup_transition, claim_termination_request, clear_process_if_pid,
-        insert_process_if_empty, parse_log_level, reset_termination_request_if_pid, GameProcess,
+        claim_kill_action, claim_startup_transition, claim_termination_request,
+        clear_process_if_pid, finish_preparation, insert_process_if_empty, is_launch_cancelled,
+        parse_log_level, register_preparation, reset_termination_request_if_pid, GameProcess,
+        KillAction, LaunchState,
     };
     use std::sync::atomic::{AtomicBool, Ordering};
+
+    #[test]
+    fn cancels_a_launch_that_is_still_preparing() {
+        let mut state = LaunchState::default();
+        let generation = register_preparation(&mut state);
+        assert!(!is_launch_cancelled(&state, generation));
+
+        assert_eq!(
+            claim_kill_action(&mut state),
+            Ok(KillAction::CancelPreparation)
+        );
+        assert!(is_launch_cancelled(&state, generation));
+
+        // 取消之后登记的新启动不受之前的终止命令影响。
+        finish_preparation(&mut state);
+        let next = register_preparation(&mut state);
+        assert!(!is_launch_cancelled(&state, next));
+    }
+
+    #[test]
+    fn reports_nothing_to_kill_when_no_launch_is_active() {
+        let mut state = LaunchState::default();
+
+        assert!(claim_kill_action(&mut state).is_err());
+        assert_eq!(state.cancel_generation, 0);
+
+        // 准备阶段结束后计数归零，不会因重复注销下溢。
+        let _ = register_preparation(&mut state);
+        finish_preparation(&mut state);
+        finish_preparation(&mut state);
+        assert_eq!(state.preparing, 0);
+        assert!(claim_kill_action(&mut state).is_err());
+    }
+
+    #[test]
+    fn terminating_a_game_also_cancels_queued_launches() {
+        let mut state = LaunchState {
+            process: Some(GameProcess {
+                pid: 100,
+                fully_started: true,
+                termination_requested: false,
+            }),
+            ..LaunchState::default()
+        };
+        let untouched = state.cancel_generation;
+        assert_eq!(
+            claim_kill_action(&mut state),
+            Ok(KillAction::Terminate {
+                pid: 100,
+                started: true
+            })
+        );
+        // 没有排队中的启动时不改变取消代数。
+        assert_eq!(state.cancel_generation, untouched);
+
+        reset_termination_request_if_pid(&mut state.process, 100);
+        let queued = register_preparation(&mut state);
+        assert_eq!(
+            claim_kill_action(&mut state),
+            Ok(KillAction::Terminate {
+                pid: 100,
+                started: true
+            })
+        );
+        assert!(is_launch_cancelled(&state, queued));
+    }
 
     #[test]
     fn reads_the_level_from_the_thread_tag_after_a_timestamp() {
