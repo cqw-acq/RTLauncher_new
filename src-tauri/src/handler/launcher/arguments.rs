@@ -297,19 +297,26 @@ pub(super) fn merge_loader_game_args(game_args: &mut Vec<String>, extra_after_cp
 
 /// 将Maven库名称转换为文件系统路径
 /// 例如: "net.minecraft:launchwrapper:1.12" -> "net/minecraft/launchwrapper/1.12/launchwrapper-1.12.jar"
+/// 支持 classifier 与扩展名：
+/// "net.neoforged:mergetool:2.0.0:api" -> "net/neoforged/mergetool/2.0.0/mergetool-2.0.0-api.jar"
+/// "de.oceanlabs.mcp:mcp_config:1.20.1@zip" -> ".../mcp_config/1.20.1/mcp_config-1.20.1.zip"
 fn library_name_to_path(name: &str) -> Option<String> {
-    let parts: Vec<&str> = name.split(':').collect();
-    if parts.len() >= 3 {
-        let group = parts[0].replace('.', "/");
-        let artifact = parts[1];
-        let version = parts[2];
-        Some(format!(
-            "{}/{}/{}/{}-{}.jar",
-            group, artifact, version, artifact, version
-        ))
-    } else {
-        None
+    let (coords, extension) = match name.split_once('@') {
+        Some((coords, ext)) if !ext.is_empty() => (coords, ext),
+        _ => (name, "jar"),
+    };
+    let parts: Vec<&str> = coords.split(':').collect();
+    if parts.len() < 3 || parts[..3].iter().any(|p| p.is_empty()) {
+        return None;
     }
+    let group = parts[0].replace('.', "/");
+    let artifact = parts[1];
+    let version = parts[2];
+    let file_name = match parts.get(3).filter(|c| !c.is_empty()) {
+        Some(classifier) => format!("{}-{}-{}.{}", artifact, version, classifier, extension),
+        None => format!("{}-{}.{}", artifact, version, extension),
+    };
+    Some(format!("{}/{}/{}/{}", group, artifact, version, file_name))
 }
 
 /// 从库路径中提取库的标识信息（group, artifact, version）
@@ -363,6 +370,213 @@ fn compare_versions(version1: &str, version2: &str) -> bool {
     }
 
     false
+}
+
+/// version.json 中 JVM 参数占位符的取值
+struct JvmPlaceholderValues<'a> {
+    classpath_separator: &'a str,
+    library_directory: &'a str,
+    natives_directory: &'a str,
+    version_name: &'a str,
+    /// `${classpath}` 的值；为 None 时按未知占位符处理（替换为 `{}`）
+    classpath: Option<&'a str>,
+}
+
+fn unknown_placeholder_regex() -> &'static Regex {
+    static RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"\$\{[^}]+\}").unwrap())
+}
+
+/// 按启动参数规范替换 JVM 参数中的占位符。
+///
+/// 只做占位符的字面替换，不根据参数内容猜测“这像个文件名”去整体替换：
+/// NeoForge/Forge 的 `-DignoreList=client-extra,${version_name}.jar` 中，
+/// `${version_name}` 只能被替换成版本名，整个参数必须原样保留。以前这里
+/// 会把含 `neoforge`/`forge` 与 `.jar` 的参数整体换成某个 jar 的路径，实例名
+/// 带 `neoforge` 时 `-DignoreList=...` 变成孤立路径，JVM 把它当主类而启动失败。
+/// 剩余未知占位符替换为 `{}`，由 merge_version_jvm_args 丢弃 `-Dxxx={}` 垃圾值。
+fn replace_jvm_placeholders(arg: &str, values: &JvmPlaceholderValues) -> String {
+    let mut result = arg
+        .replace("${classpath_separator}", values.classpath_separator)
+        .replace("${library_directory}", values.library_directory)
+        .replace("${natives_directory}", values.natives_directory)
+        .replace("${version_name}", values.version_name)
+        .replace("${launcher_name}", "RTLauncher")
+        .replace("${launcher_version}", env!("CARGO_PKG_VERSION"));
+    if let Some(classpath) = values.classpath {
+        result = result.replace("${classpath}", classpath);
+    }
+    unknown_placeholder_regex()
+        .replace_all(&result, "{}")
+        .trim()
+        .to_string()
+}
+
+fn push_jvm_arg(out: &mut Vec<String>, raw: &str, values: &JvmPlaceholderValues) {
+    let replaced = replace_jvm_placeholders(raw, values);
+    if !replaced.is_empty() {
+        out.push(replaced);
+    }
+}
+
+/// 展开 version.json 的 arguments.jvm（字符串与带 rules 的对象），并替换占位符
+fn collect_version_jvm_args(
+    jvm_args: &[JvmArgument],
+    values: &JvmPlaceholderValues,
+    rules_allow: impl Fn(&[Rule]) -> bool,
+) -> Vec<String> {
+    let mut out = Vec::new();
+    for arg in jvm_args {
+        match arg {
+            JvmArgument::String(s) => push_jvm_arg(&mut out, s, values),
+            JvmArgument::Object { rules, value } => {
+                if !rules_allow(rules) {
+                    continue;
+                }
+                match value {
+                    serde_json::Value::String(s) => push_jvm_arg(&mut out, s, values),
+                    serde_json::Value::Array(arr) => {
+                        for s in arr.iter().filter_map(|item| item.as_str()) {
+                            push_jvm_arg(&mut out, s, values);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    out
+}
+
+/// 加载器 JSON 中 jvm 参数对象的 rules 判断（只比较 os.name）
+fn loader_jvm_rules_allow(obj: &serde_json::Map<String, serde_json::Value>) -> bool {
+    let Some(rules) = obj.get("rules").and_then(|r| r.as_array()) else {
+        return true;
+    };
+    let mut allowed = false;
+    for rule in rules {
+        let Some(action) = rule.get("action").and_then(|a| a.as_str()) else {
+            continue;
+        };
+        let os_match = match rule
+            .get("os")
+            .and_then(|o| o.as_object())
+            .and_then(|os| os.get("name"))
+            .and_then(|n| n.as_str())
+        {
+            Some("windows") => cfg!(windows),
+            Some("osx") => cfg!(target_os = "macos"),
+            Some("linux") => cfg!(target_os = "linux"),
+            _ => true,
+        };
+        if action == "allow" && os_match {
+            allowed = true;
+        } else if action == "disallow" && os_match {
+            allowed = false;
+        }
+    }
+    allowed
+}
+
+/// 展开独立加载器 JSON（versions/<loadName>/*.json）的 arguments.jvm，并替换占位符
+fn collect_loader_jvm_args(
+    jvm_arr: &[serde_json::Value],
+    values: &JvmPlaceholderValues,
+) -> Vec<String> {
+    let mut out = Vec::new();
+    for el in jvm_arr {
+        if let Some(s) = el.as_str() {
+            push_jvm_arg(&mut out, s, values);
+        } else if let Some(obj) = el.as_object() {
+            if !loader_jvm_rules_allow(obj) {
+                continue;
+            }
+            match obj.get("value") {
+                Some(serde_json::Value::String(s)) => push_jvm_arg(&mut out, s, values),
+                Some(serde_json::Value::Array(arr)) => {
+                    for s in arr.iter().filter_map(|item| item.as_str()) {
+                        push_jvm_arg(&mut out, s, values);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    out
+}
+
+/// 收集游戏参数模板（未替换占位符）。
+///
+/// 标准 json 只会有 `minecraftArguments`（旧格式）或 `arguments.game`（新格式）之一；
+/// 但 LiteLoader、HMCL 等给旧版本叠加加载器时会在保留 `minecraftArguments` 的同时
+/// 把 `--tweakClass ...` 写进 `arguments.game`。以前这里只取 `arguments.game`，
+/// `--username`/`--gameDir`/`--uuid` 等全部丢失（随后又被 merge_loader_game_args 以
+/// 未替换的 `${...}` 原样补回）。现在两者都使用：旧格式在前，新格式中旧格式已有的
+/// `--key` 跳过（重复的单值参数会让 jopt-simple 直接报错退出）；`--tweakClass`
+/// 允许多次出现，只跳过完全相同的一对。
+fn game_argument_templates(
+    arguments: Option<&Arguments>,
+    minecraft_arguments: Option<&str>,
+) -> Vec<String> {
+    let modern_raw = arguments.and_then(|a| a.game.as_ref());
+    let mut modern: Vec<String> = Vec::new();
+    for arg in modern_raw.into_iter().flatten() {
+        match arg {
+            serde_json::Value::String(s) => modern.push(s.clone()),
+            serde_json::Value::Array(arr) => {
+                modern.extend(arr.iter().filter_map(|i| i.as_str()).map(str::to_string))
+            }
+            _ => {}
+        }
+    }
+
+    let legacy: Vec<String> = minecraft_arguments
+        .map(|s| s.split_whitespace().map(str::to_string).collect())
+        .unwrap_or_default();
+
+    if legacy.is_empty() {
+        return modern;
+    }
+    if modern_raw.is_none() {
+        return legacy;
+    }
+
+    const MULTI_VALUE_KEYS: [&str; 1] = ["--tweakClass"];
+    let legacy_keys: HashSet<String> = legacy
+        .iter()
+        .filter(|t| t.starts_with("--"))
+        .cloned()
+        .collect();
+    let legacy_pairs: HashSet<(String, String)> = legacy
+        .windows(2)
+        .filter(|pair| pair[0].starts_with("--") && !pair[1].starts_with("--"))
+        .map(|pair| (pair[0].clone(), pair[1].clone()))
+        .collect();
+
+    let mut combined = legacy;
+    let mut i = 0;
+    while i < modern.len() {
+        let key = modern[i].clone();
+        if !key.starts_with("--") {
+            combined.push(key);
+            i += 1;
+            continue;
+        }
+        let value = modern.get(i + 1).filter(|v| !v.starts_with("--")).cloned();
+        let duplicate = if MULTI_VALUE_KEYS.contains(&key.as_str()) {
+            value
+                .as_ref()
+                .map_or(false, |v| legacy_pairs.contains(&(key.clone(), v.clone())))
+        } else {
+            legacy_keys.contains(&key)
+        };
+        if !duplicate {
+            combined.push(key);
+            combined.extend(value.clone());
+        }
+        i += if value.is_some() { 2 } else { 1 };
+    }
+    combined
 }
 
 #[derive(Debug, Deserialize)]
@@ -457,12 +671,34 @@ struct LibraryDownloads {
     classifiers: HashMap<String, Artifact>,
 }
 
-#[derive(Debug, Deserialize)]
+/// downloads.artifact / downloads.classifiers 中的条目。
+///
+/// 启动只需要 path；sha1、size、url 都是可选字段：LiteLoader 安装器以及
+/// 不少第三方启动器生成的 json 会省略它们，必填会让整个 version json
+/// 解析失败（"Failed to parse version json"）。启动阶段不校验 sha1/size，
+/// path 缺失时按 maven 坐标推导。
+#[derive(Debug, Deserialize, Default)]
 struct Artifact {
-    path: String,
-    url: String,
-    sha1: String,
-    size: u64,
+    #[serde(default)]
+    path: Option<String>,
+    #[serde(default)]
+    url: Option<String>,
+    #[serde(default)]
+    sha1: Option<String>,
+    #[serde(default)]
+    size: Option<u64>,
+}
+
+impl Library {
+    /// 主 artifact 相对 libraries 目录的路径：优先 downloads.artifact.path，否则按 maven 坐标推导
+    fn artifact_relative_path(&self) -> Option<String> {
+        self.downloads
+            .artifact
+            .as_ref()
+            .and_then(|a| a.path.clone())
+            .filter(|p| !p.trim().is_empty())
+            .or_else(|| library_name_to_path(&self.name))
+    }
 }
 
 #[tauri::command]
@@ -729,139 +965,16 @@ pub(super) fn build_jvm_arguments_inner(
                                         .join(format!("{}-natives", version_name))
                                         .to_string_lossy()
                                         .replace('\\', "/");
-                                    for el in jvm_arr {
-                                        fn apply_placeholder(
-                                            s: &str,
-                                            classpath_sep: &str,
-                                            library_dir_str: &str,
-                                            version_name: &str,
-                                            natives_dir: &str,
-                                        ) -> String {
-                                            let mut replaced = s.to_string();
-                                            replaced = replaced
-                                                .replace("${classpath_separator}", classpath_sep);
-                                            replaced = replaced
-                                                .replace("${library_directory}", library_dir_str);
-                                            replaced =
-                                                replaced.replace("${version_name}", version_name);
-                                            replaced = replaced
-                                                .replace("${natives_directory}", natives_dir);
-                                            replaced =
-                                                replaced.replace("${launcher_name}", "RTLauncher");
-                                            replaced = replaced.replace(
-                                                "${launcher_version}",
-                                                env!("CARGO_PKG_VERSION"),
-                                            );
-                                            // 剩余的${}格式参数转换为{}格式（与游戏参数保持一致）
-                                            let re = Regex::new(r"\$\{[^}]+\}").unwrap();
-                                            replaced = re.replace_all(&replaced, "{}").to_string();
-                                            replaced.trim().to_string()
-                                        }
-
-                                        let collect_str = |s: &str,
-                                                           out: &mut Vec<String>,
-                                                           classpath_sep: &str,
-                                                           library_dir_str: &str,
-                                                           version_name: &str,
-                                                           natives_dir: &str| {
-                                            let replaced = apply_placeholder(
-                                                s,
-                                                classpath_sep,
-                                                library_dir_str,
-                                                version_name,
-                                                natives_dir,
-                                            );
-                                            if !replaced.is_empty() {
-                                                out.push(replaced);
-                                            }
-                                        };
-
-                                        fn check_rules(
-                                            obj: &serde_json::Map<String, serde_json::Value>,
-                                        ) -> bool {
-                                            match obj.get("rules").and_then(|r| r.as_array()) {
-                                                Some(rules) => {
-                                                    let mut allowed = false;
-                                                    for rule in rules {
-                                                        if let Some(action) = rule
-                                                            .get("action")
-                                                            .and_then(|a| a.as_str())
-                                                        {
-                                                            let os_match = match rule
-                                                                .get("os")
-                                                                .and_then(|o| o.as_object())
-                                                            {
-                                                                Some(os) => match os
-                                                                    .get("name")
-                                                                    .and_then(|n| n.as_str())
-                                                                {
-                                                                    Some("windows") => {
-                                                                        cfg!(windows)
-                                                                    }
-                                                                    Some("osx") => {
-                                                                        cfg!(target_os = "macos")
-                                                                    }
-                                                                    Some("linux") => {
-                                                                        cfg!(target_os = "linux")
-                                                                    }
-                                                                    _ => true,
-                                                                },
-                                                                None => true,
-                                                            };
-                                                            if action == "allow" && os_match {
-                                                                allowed = true;
-                                                            } else if action == "disallow"
-                                                                && os_match
-                                                            {
-                                                                allowed = false;
-                                                            }
-                                                        }
-                                                    }
-                                                    allowed
-                                                }
-                                                None => true,
-                                            }
-                                        }
-
-                                        if let Some(s) = el.as_str() {
-                                            collect_str(
-                                                s,
-                                                &mut load_jvm_params,
-                                                classpath_sep,
-                                                &library_dir_str,
-                                                &version_name,
-                                                &natives_dir,
-                                            );
-                                        } else if let Some(obj) = el.as_object() {
-                                            if check_rules(obj) {
-                                                if let Some(val) = obj.get("value") {
-                                                    if let Some(s) = val.as_str() {
-                                                        collect_str(
-                                                            s,
-                                                            &mut load_jvm_params,
-                                                            classpath_sep,
-                                                            &library_dir_str,
-                                                            &version_name,
-                                                            &natives_dir,
-                                                        );
-                                                    } else if let Some(arr) = val.as_array() {
-                                                        for item in arr {
-                                                            if let Some(s) = item.as_str() {
-                                                                collect_str(
-                                                                    s,
-                                                                    &mut load_jvm_params,
-                                                                    classpath_sep,
-                                                                    &library_dir_str,
-                                                                    &version_name,
-                                                                    &natives_dir,
-                                                                );
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
+                                    load_jvm_params.extend(collect_loader_jvm_args(
+                                        jvm_arr,
+                                        &JvmPlaceholderValues {
+                                            classpath_separator: classpath_sep,
+                                            library_directory: &library_dir_str,
+                                            natives_directory: &natives_dir,
+                                            version_name,
+                                            classpath: None,
+                                        },
+                                    ));
                                 }
                             } else {
                                 debug!("未找到arguments字段");
@@ -1486,20 +1599,13 @@ pub(super) fn build_jvm_arguments_inner(
                 lib.downloads
                     .classifiers
                     .get(classifier?)
-                    .map(|a| minecraft_path_buf.join("libraries").join(&a.path))
-            } else if lib.downloads.artifact.is_some() {
-                lib.downloads
-                    .artifact
-                    .as_ref()
-                    .map(|a| minecraft_path_buf.join("libraries").join(&a.path))
+                    .and_then(|a| a.path.as_ref())
+                    .map(|p| minecraft_path_buf.join("libraries").join(p))
             } else {
-                // 没有 downloads 信息：根据 name 构建路径
-                // 兼容低版本 Forge / 旧格式 JSON，它们的库没有 downloads 字段
-                if let Some(path) = library_name_to_path(&lib.name) {
-                    Some(minecraft_path_buf.join("libraries").join(path))
-                } else {
-                    None
-                }
+                // 优先 downloads.artifact.path；没有 downloads 或 artifact 缺少 path 时
+                // 根据 name 构建路径（兼容低版本 Forge / 旧格式 JSON / 第三方启动器 JSON）
+                lib.artifact_relative_path()
+                    .map(|p| minecraft_path_buf.join("libraries").join(p))
             };
 
             // 对于 -SNAPSHOT 版本，实际 jar 文件名可能带 timestamp/buildNumber
@@ -1742,93 +1848,14 @@ pub(super) fn build_jvm_arguments_inner(
         format!("-Xmx{effective_max_memory_mb}m"),
     ];
 
-    // ===== 参照 HMCL：修正 load_jvm_params 中的 neoforge/forge jar 路径 =====
-    // Forge JSON 中的 -p 参数可能包含 "neoforge-${version_name}.jar" 这样的引用，
-    // 这些需要被替换为完整的 jar 文件路径，否则 module-path 不正确
-    let mut neoforge_jar = String::new();
-    let mut forge_jar = String::new();
-    if !loadName.is_empty() && loadType != "0" {
-        let library_dir = minecraft_path_buf.join("libraries");
-        // 尝试从 libraries 目录找到 neoforge/forge 的 jar
-        // 典型路径: libraries/net/neoforged/neoforge/{version}/neoforge-{version}.jar
-        // 典型路径: libraries/net/minecraftforge/forge/{version}/forge-{version}.jar
-        for lib in &version_json.libraries {
-            if lib.name.contains("neoforge") || lib.name.contains(":forge:") {
-                let parts: Vec<&str> = lib.name.split(':').collect();
-                if parts.len() >= 3 {
-                    let group = parts[0].replace('.', "/");
-                    let artifact = parts[1];
-                    let version = parts[2];
-                    let jar_name = format!("{}-{}.jar", artifact, version);
-                    let jar_path = library_dir
-                        .join(&group)
-                        .join(artifact)
-                        .join(version)
-                        .join(&jar_name);
-                    let jar_path_str = format_path(jar_path);
-                    if lib.name.contains("neoforge") && neoforge_jar.is_empty() {
-                        neoforge_jar = jar_path_str.clone();
-                    }
-                    if lib.name.contains(":forge:") && forge_jar.is_empty() {
-                        forge_jar = jar_path_str.clone();
-                    }
-                }
-            }
-        }
-        // 如果 libraries 里找不到，尝试在 versions/{loadName} 目录查找
-        if neoforge_jar.is_empty() && forge_jar.is_empty() {
-            let load_dir = minecraft_path_buf.join("versions").join(&loadName);
-            if let Ok(entries) = std::fs::read_dir(&load_dir) {
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    if path.extension().and_then(|e| e.to_str()) == Some("jar") {
-                        let fname = path.file_name().and_then(|f| f.to_str()).unwrap_or("");
-                        if fname.contains("neoforge") {
-                            neoforge_jar = format_path(path);
-                        } else if fname.contains("forge") && forge_jar.is_empty() {
-                            forge_jar = format_path(path);
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // 对 load_jvm_params 中的每个参数进行 neoforge/forge jar 路径修正
-    let mut load_jvm_params_fixed: Vec<String> = Vec::new();
-    for p in &load_jvm_params {
-        let mut fixed = p.clone();
-        // 替换 neoforge-${version_name}.jar 样式的引用
-        if !neoforge_jar.is_empty() {
-            // 例如: ".../neoforge-${version_name}.jar" 或 "neoforge-${version_name}"
-            fixed = fixed.replace("neoforge-${version_name}.jar", &neoforge_jar);
-            fixed = fixed.replace("neoforge-${version_name}", &neoforge_jar);
-            // 其他可能的形式
-            if fixed.contains("neoforge")
-                && fixed.contains(".jar")
-                && !std::path::Path::new(&fixed).exists()
-            {
-                // 如果参数看起来是 jar 路径但不存在，尝试替换为 neoforge jar
-                if fixed.contains(&version_name) {
-                    fixed = neoforge_jar.clone();
-                }
-            }
-        }
-        if !forge_jar.is_empty() {
-            fixed = fixed.replace("forge-${version_name}.jar", &forge_jar);
-            fixed = fixed.replace("forge-${version_name}", &forge_jar);
-        }
-        load_jvm_params_fixed.push(fixed);
-    }
-
-    let extra_before_cp: Vec<String> = if !load_jvm_params_fixed.is_empty() {
-        load_jvm_params_fixed
-            .iter()
-            .map(|p| clean_param_spaces(p))
-            .collect()
-    } else {
-        Vec::new()
-    };
+    // 加载器 JSON 的 jvm 参数已在读取时按规范替换过占位符，这里只做空格清理。
+    // 注意：不要再根据 "neoforge"/"forge" + ".jar" 之类的特征去整体替换参数——
+    // 实例名本身就可能含 neoforge（界面默认名如 1.21.1-neoforge-21.1.x），
+    // 以前这样会把 -DignoreList=... 整个换成某个 jar 路径，导致“找不到主类”。
+    let extra_before_cp: Vec<String> = load_jvm_params
+        .iter()
+        .map(|p| clean_param_spaces(p))
+        .collect();
 
     let extra_after_cp: Vec<String> = load_game_params;
 
@@ -1841,171 +1868,24 @@ pub(super) fn build_jvm_arguments_inner(
         if let Some(jvm_args) = &arguments.jvm {
             let library_dir = format_path(minecraft_path_buf.join("libraries"));
             let classpath_sep = if is_windows { ";" } else { ":" };
-
-            // 构建 neoforge/forge loader jar 的正确路径
-            // 典型的 neoforge jar 路径: libraries/net/neoforged/neoforge/{version}/neoforge-{version}.jar
-            // 典型的 forge jar 路径: libraries/net/minecraftforge/forge/{version}/forge-{version}.jar
-            let mut neoforge_jar_path = String::new();
-            let mut forge_jar_path = String::new();
-            // 在 libraries 列表中查找 neoforge/forge 的 artifact 路径（不论 loadType/loadName）
-            for lib in &version_json.libraries {
-                if lib.name.contains("neoforge") || lib.name.contains(":forge:") {
-                    if let Some(artifact) = &lib.downloads.artifact {
-                        let jar_path =
-                            format_path(minecraft_path_buf.join("libraries").join(&artifact.path));
-                        if lib.name.contains("neoforge") && neoforge_jar_path.is_empty() {
-                            neoforge_jar_path = jar_path.clone();
-                        }
-                        if lib.name.contains(":forge:") && forge_jar_path.is_empty() {
-                            forge_jar_path = jar_path.clone();
-                        }
-                    } else {
-                        // 没有 downloads.artifact，根据 name 构建路径
-                        let parts: Vec<&str> = lib.name.split(':').collect();
-                        if parts.len() >= 3 {
-                            let group_path = parts[0].replace('.', "/");
-                            let artifact_name = parts[1];
-                            let artifact_version = parts[2];
-                            let jar_name = format!("{}-{}.jar", artifact_name, artifact_version);
-                            let rel_path = format!(
-                                "{}/{}/{}/{}",
-                                group_path, artifact_name, artifact_version, jar_name
-                            );
-                            let jar_path =
-                                format_path(minecraft_path_buf.join("libraries").join(&rel_path));
-                            if lib.name.contains("neoforge") && neoforge_jar_path.is_empty() {
-                                neoforge_jar_path = jar_path.clone();
-                            }
-                            if lib.name.contains(":forge:") && forge_jar_path.is_empty() {
-                                forge_jar_path = jar_path.clone();
-                            }
-                        }
-                    }
-                }
-            }
-            // 如果 libraries 里找不到，还可以在 versions/{loadName}/libraries 里找（NeoForge 安装器布局）
-            if (neoforge_jar_path.is_empty() && forge_jar_path.is_empty()) && !loadName.is_empty() {
-                let load_lib_dir = minecraft_path_buf
-                    .join("versions")
-                    .join(&loadName)
-                    .join("libraries");
-                if let Ok(entries) = std::fs::read_dir(&load_lib_dir) {
-                    for entry in entries.flatten() {
-                        if let Some(fname) = entry.path().file_name().and_then(|f| f.to_str()) {
-                            if fname.contains("neoforge")
-                                && fname.ends_with(".jar")
-                                && neoforge_jar_path.is_empty()
-                            {
-                                neoforge_jar_path = format_path(entry.path());
-                            } else if fname.contains("forge")
-                                && fname.ends_with(".jar")
-                                && forge_jar_path.is_empty()
-                            {
-                                forge_jar_path = format_path(entry.path());
-                            }
-                        }
-                    }
-                }
-            }
-
-            // 占位符替换函数（参照 HMCL）
             let jvm_natives_dir = format_path(
                 minecraft_path_buf
                     .join("versions")
                     .join(&version_name)
                     .join(format!("{}-natives", &version_name)),
             );
-            let replace_placeholders = |s: &str| -> String {
-                let mut result = s.to_string();
-                result = result.replace("${classpath_separator}", classpath_sep);
-                result = result.replace("${library_directory}", &library_dir);
-                result = result.replace("${natives_directory}", &jvm_natives_dir);
-                result = result.replace("${version_name}", &version_name);
-                result = result.replace("${launcher_name}", "RTLauncher");
-                result = result.replace("${launcher_version}", env!("CARGO_PKG_VERSION"));
-
-                // ===== 关键修复：替换 ${classpath} 占位符 =====
-                // Forge/NeoForge 在 -cp 参数的 value 里用 ${classpath} 来引用整个 classpath
-                // 必须替换成我们构建的 class_path（即所有 libraries 的路径拼接）
-                result = result.replace("${classpath}", &class_path);
-
-                // 处理 neoforge/forge jar 的特殊替换
-                // Forge JSON 中可能包含类似 "neoforge-${version_name}.jar" 的引用
-                // 需要替换为完整路径
-                if !neoforge_jar_path.is_empty() {
-                    // 查找类似 ".../neoforge-${version_name}.jar" 的模式并替换
-                    if result.contains("neoforge-${version_name}.jar") {
-                        result = result.replace("neoforge-${version_name}.jar", &neoforge_jar_path);
-                    } else if result.contains("neoforge-${version_name}") {
-                        result = result.replace("neoforge-${version_name}", &neoforge_jar_path);
-                    }
-                    // 也可能是 neoforge-X.Y.Z.jar 这种相对路径形式
-                    if result.contains("neoforge")
-                        && result.contains(".jar")
-                        && !result.contains(&library_dir)
-                        && !result.contains('/')
-                        && !result.contains('\\')
-                    {
-                        // 看起来像个简单文件名，把它替换为完整路径
-                        result = neoforge_jar_path.clone();
-                    }
-                }
-                if !forge_jar_path.is_empty() {
-                    if result.contains("forge-${version_name}.jar") {
-                        result = result.replace("forge-${version_name}.jar", &forge_jar_path);
-                    } else if result.contains("forge-${version_name}") {
-                        result = result.replace("forge-${version_name}", &forge_jar_path);
-                    }
-                    if result.contains("forge")
-                        && result.contains(".jar")
-                        && !result.contains(&library_dir)
-                        && !result.contains('/')
-                        && !result.contains('\\')
-                    {
-                        // 简单文件名 -> 完整路径
-                        result = forge_jar_path.clone();
-                    }
-                }
-
-                // 将剩余的${}格式参数转换为{}格式（与 game 参数替换保持一致）
-                let re = Regex::new(r"\$\{[^}]+\}").unwrap();
-                re.replace_all(&result, "{}").to_string()
-            };
-
-            for arg in jvm_args {
-                match arg {
-                    JvmArgument::String(s) => {
-                        let replaced = replace_placeholders(s);
-                        if !replaced.trim().is_empty() {
-                            jvm_args_from_version.push(replaced.trim().to_string());
-                        }
-                    }
-                    JvmArgument::Object { rules, value } => {
-                        if check_rules(rules, &os_info) {
-                            match value {
-                                serde_json::Value::String(s) => {
-                                    let replaced = replace_placeholders(s);
-                                    if !replaced.trim().is_empty() {
-                                        jvm_args_from_version.push(replaced.trim().to_string());
-                                    }
-                                }
-                                serde_json::Value::Array(arr) => {
-                                    for item in arr {
-                                        if let Some(s) = item.as_str() {
-                                            let replaced = replace_placeholders(s);
-                                            if !replaced.trim().is_empty() {
-                                                jvm_args_from_version
-                                                    .push(replaced.trim().to_string());
-                                            }
-                                        }
-                                    }
-                                }
-                                _ => {}
-                            }
-                        }
-                    }
-                }
-            }
+            // 占位符按规范逐个替换；${classpath} 替换成上面构建的 class_path
+            jvm_args_from_version = collect_version_jvm_args(
+                jvm_args,
+                &JvmPlaceholderValues {
+                    classpath_separator: classpath_sep,
+                    library_directory: &library_dir,
+                    natives_directory: &jvm_natives_dir,
+                    version_name,
+                    classpath: Some(&class_path),
+                },
+                |rules| check_rules(rules, &os_info),
+            );
         }
     }
 
@@ -2313,39 +2193,15 @@ pub(super) fn build_jvm_arguments_inner(
 
     let mut game_args_vec: Vec<String> = Vec::new();
 
-    // 处理原版游戏参数
-    if let Some(game_args) = version_json
-        .arguments
-        .as_ref()
-        .and_then(|a| a.game.as_ref())
-    {
-        for arg in game_args {
-            match arg {
-                serde_json::Value::String(s) => {
-                    let replaced = replace_placeholders(s);
-                    if !replaced.trim().is_empty() {
-                        game_args_vec.push(replaced.trim().to_string());
-                    }
-                }
-                serde_json::Value::Array(arr) => {
-                    for item in arr {
-                        if let Some(s) = item.as_str() {
-                            let replaced = replace_placeholders(s);
-                            if !replaced.trim().is_empty() {
-                                game_args_vec.push(replaced.trim().to_string());
-                            }
-                        }
-                    }
-                }
-                _ => {}
-            }
-        }
-    } else if let Some(minecraft_args) = &version_json.minecraft_arguments {
-        for arg in minecraft_args.split_whitespace() {
-            let replaced = replace_placeholders(arg);
-            if !replaced.trim().is_empty() {
-                game_args_vec.push(replaced.trim().to_string());
-            }
+    // 处理原版游戏参数（minecraftArguments 与 arguments.game 同时存在时两者都用，
+    // 见 game_argument_templates）
+    for template in game_argument_templates(
+        version_json.arguments.as_ref(),
+        version_json.minecraft_arguments.as_deref(),
+    ) {
+        let replaced = replace_placeholders(&template);
+        if !replaced.trim().is_empty() {
+            game_args_vec.push(replaced.trim().to_string());
         }
     }
 
@@ -2554,4 +2410,454 @@ pub(super) fn launcher_rules_allow(rules: Option<&serde_json::Value>) -> bool {
     }
 
     allowed
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 本地 E2E 用界面默认风格实例名装出的 NeoForge 21.1.267 合并实例 json（节选）。
+    /// 实例名带 neoforge 时，旧逻辑把 `-DignoreList=client-extra,<实例名>.jar` 整个
+    /// 换成了 earlydisplay-4.0.45.jar 的路径，java 报“找不到或无法加载主类”。
+    const NEOFORGE_1_21_1_JSON: &str = r#"{
+        "id": "e2e-neoforge-1.21.1",
+        "mainClass": "cpw.mods.bootstraplauncher.BootstrapLauncher",
+        "arguments": {
+            "game": ["--fml.neoForgeVersion", "21.1.267", "--launchTarget", "forgeclient",
+                     "--username", "${auth_player_name}", "--version", "${version_name}"],
+            "jvm": [
+                "-Djava.net.preferIPv6Addresses=system",
+                "-DignoreList=client-extra,${version_name}.jar",
+                "-DlibraryDirectory=${library_directory}",
+                "-p",
+                "${library_directory}/cpw/mods/bootstraplauncher/2.0.2/bootstraplauncher-2.0.2.jar${classpath_separator}${library_directory}/cpw/mods/securejarhandler/3.0.8/securejarhandler-3.0.8.jar${classpath_separator}${library_directory}/net/neoforged/JarJarFileSystems/0.4.1/JarJarFileSystems-0.4.1.jar",
+                "--add-modules", "ALL-MODULE-PATH",
+                "--add-opens", "java.base/java.util.jar=cpw.mods.securejarhandler",
+                "--add-opens", "java.base/java.lang.invoke=cpw.mods.securejarhandler",
+                "--add-exports", "java.base/sun.security.util=cpw.mods.securejarhandler",
+                "--add-exports", "jdk.naming.dns/com.sun.jndi.dns=java.naming",
+                {"rules": [{"action": "allow", "os": {"name": "osx"}}], "value": ["-XstartOnFirstThread"]},
+                {"rules": [{"action": "allow", "os": {"name": "windows"}}], "value": "-XX:HeapDumpPath=MojangTricksIntelDriversForPerformance_javaw.exe_minecraft.exe.heapdump"},
+                {"rules": [{"action": "allow", "os": {"arch": "x86"}}], "value": ["-Xss1M", "-XX:+UnlockDiagnosticVMOptions", "-XX:-UseBASE64Intrinsics"]},
+                "-Djava.library.path=${natives_directory}",
+                "-Djna.tmpdir=${natives_directory}",
+                "-Dminecraft.launcher.brand=${launcher_name}",
+                "-Dminecraft.launcher.version=${launcher_version}",
+                "-cp",
+                "${classpath}"
+            ]
+        },
+        "libraries": [
+            {"downloads": {"artifact": {"path": "net/neoforged/fancymodloader/earlydisplay/4.0.45/earlydisplay-4.0.45.jar", "sha1": "dc7a8b1370054dd0e2d70c1db4ddf4092793c115", "size": 261719, "url": "https://maven.neoforged.net/releases/net/neoforged/fancymodloader/earlydisplay/4.0.45/earlydisplay-4.0.45.jar"}}, "name": "net.neoforged.fancymodloader:earlydisplay:4.0.45"},
+            {"downloads": {"artifact": {"path": "net/neoforged/fancymodloader/loader/4.0.45/loader-4.0.45.jar", "sha1": "4a0968c2ec6234d58e0a9ed97acafc08cc8f33b5", "size": 505696, "url": "https://maven.neoforged.net/releases/net/neoforged/fancymodloader/loader/4.0.45/loader-4.0.45.jar"}}, "name": "net.neoforged.fancymodloader:loader:4.0.45"},
+            {"downloads": {"artifact": {"path": "cpw/mods/bootstraplauncher/2.0.2/bootstraplauncher-2.0.2.jar", "sha1": "1a2d076cbc33b0520cbacd591224427b2a20047d", "size": 11116, "url": "https://maven.neoforged.net/releases/cpw/mods/bootstraplauncher/2.0.2/bootstraplauncher-2.0.2.jar"}}, "name": "cpw.mods:bootstraplauncher:2.0.2"}
+        ]
+    }"#;
+
+    /// Forge 1.20.1-47.4.29 合并实例 json（节选）。ignoreList 里本身就有 `forge-`，
+    /// 旧逻辑只要找到 `:forge:` 坐标的库就会把整个参数换成 jar 路径。真实 json 没有
+    /// 这条库（所以 E2E 侥幸能启动），这里补一条 net.minecraftforge:forge 坐标，
+    /// 覆盖第三方/旧版 json 会带它的情况。
+    const FORGE_1_20_1_JSON: &str = r#"{
+        "id": "1.20.1-forge-47.4.29",
+        "mainClass": "cpw.mods.bootstraplauncher.BootstrapLauncher",
+        "arguments": {
+            "jvm": [
+                "-Djava.net.preferIPv6Addresses=system",
+                "-DignoreList=bootstraplauncher,securejarhandler,asm-commons,asm-util,asm-analysis,asm-tree,asm,JarJarFileSystems,client-extra,fmlcore,javafmllanguage,lowcodelanguage,mclanguage,forge-,${version_name}.jar",
+                "-DmergeModules=jna-5.10.0.jar,jna-platform-5.10.0.jar",
+                "-DlibraryDirectory=${library_directory}",
+                "-p",
+                "${library_directory}/cpw/mods/bootstraplauncher/1.1.2/bootstraplauncher-1.1.2.jar${classpath_separator}${library_directory}/cpw/mods/securejarhandler/2.1.10/securejarhandler-2.1.10.jar",
+                "--add-modules", "ALL-MODULE-PATH",
+                "-cp",
+                "${classpath}"
+            ]
+        },
+        "libraries": [
+            {"downloads": {"artifact": {"path": "net/minecraftforge/fmlloader/1.20.1-47.4.29/fmlloader-1.20.1-47.4.29.jar", "sha1": "f5e1a5315fd58dac53a85327f29eb1dafbe326cd", "size": 270957, "url": "https://maven.minecraftforge.net/net/minecraftforge/fmlloader/1.20.1-47.4.29/fmlloader-1.20.1-47.4.29.jar"}}, "name": "net.minecraftforge:fmlloader:1.20.1-47.4.29"},
+            {"downloads": {"artifact": {"path": "net/minecraftforge/forge/1.20.1-47.4.29/forge-1.20.1-47.4.29-universal.jar", "sha1": "0000000000000000000000000000000000000000", "size": 1, "url": ""}}, "name": "net.minecraftforge:forge:1.20.1-47.4.29:universal"}
+        ]
+    }"#;
+
+    /// 本地 E2E 装出的 LiteLoader 1.12.2 合并实例 json（节选）：前 4 个库是 LiteLoader
+    /// 安装器写入的，没有 sha1/size，url 还少了一个斜杠；后面是原版库。
+    const LITELOADER_1_12_2_JSON: &str = r#"{
+        "arguments": {"game": ["--tweakClass", "com.mumfrey.liteloader.launch.LiteLoaderTweaker"]},
+        "assetIndex": {"id": "1.12", "sha1": "a21e1ded1a24ea1548dd8db0cf30b6acb02655a9", "size": 143136, "totalSize": 129843781, "url": "https://piston-meta.mojang.com/v1/packages/a21e1ded1a24ea1548dd8db0cf30b6acb02655a9/1.12.json"},
+        "assets": "1.12",
+        "id": "e2e-liteloader-1.12.2",
+        "javaVersion": {"component": "jre-legacy", "majorVersion": 8},
+        "logging": {"client": {"argument": "-Dlog4j.configurationFile=${path}", "file": {"id": "client-1.12.xml", "sha1": "bd65e7d2e3c237be76cfbef4c2405033d7f91521", "size": 888, "url": "https://piston-data.mojang.com/v1/objects/bd65e7d2e3c237be76cfbef4c2405033d7f91521/client-1.12.xml"}, "type": "log4j2-xml"}},
+        "mainClass": "net.minecraft.launchwrapper.Launch",
+        "minecraftArguments": "--username ${auth_player_name} --version ${version_name} --gameDir ${game_directory} --assetsDir ${assets_root} --assetIndex ${assets_index_name} --uuid ${auth_uuid} --accessToken ${auth_access_token} --userType ${user_type} --versionType ${version_type}",
+        "type": "release",
+        "libraries": [
+            {"downloads": {"artifact": {"path": "net/minecraft/launchwrapper/1.12/launchwrapper-1.12.jar", "url": "https://libraries.minecraft.netnet/minecraft/launchwrapper/1.12/launchwrapper-1.12.jar"}}, "name": "net.minecraft:launchwrapper:1.12", "url": "https://libraries.minecraft.net/"},
+            {"downloads": {"artifact": {"path": "org/spongepowered/mixin/0.7.4-SNAPSHOT/mixin-0.7.4-20171010.121826-8.jar", "url": "https://repo.spongepowered.org/mavenorg/spongepowered/mixin/0.7.4-SNAPSHOT/mixin-0.7.4-20171010.121826-8.jar"}}, "name": "org.spongepowered:mixin:0.7.4-SNAPSHOT", "url": "https://repo.spongepowered.org/maven/"},
+            {"downloads": {"artifact": {"path": "org/ow2/asm/asm-all/5.2/asm-all-5.2.jar", "url": "https://maven.aliyun.com/repository/publicorg/ow2/asm/asm-all/5.2/asm-all-5.2.jar"}}, "name": "org.ow2.asm:asm-all:5.2", "url": "https://maven.aliyun.com/repository/public/"},
+            {"downloads": {"artifact": {"path": "com/mumfrey/liteloader/1.12.2-SNAPSHOT/liteloader-1.12.2-SNAPSHOT.jar", "url": "https://jenkins.liteloader.com/job/LiteLoader%201.12.2/lastSuccessfulBuild/artifact/build/libsliteloader-1.12.2-SNAPSHOT.jar"}}, "name": "com.mumfrey:liteloader:1.12.2-SNAPSHOT", "url": "https://jenkins.liteloader.com/job/LiteLoader%201.12.2/lastSuccessfulBuild/artifact/build/libs/"},
+            {"downloads": {"artifact": {"path": "com/mojang/patchy/1.3.9/patchy-1.3.9.jar", "sha1": "eb8bb7b66fa0e2152b1b40b3856e82f7619439ee", "size": 23581, "url": "https://libraries.minecraft.net/com/mojang/patchy/1.3.9/patchy-1.3.9.jar"}}, "name": "com.mojang:patchy:1.3.9"},
+            {"downloads": {"artifact": {"path": "org/lwjgl/lwjgl/lwjgl-platform/2.9.4-nightly-20150209/lwjgl-platform-2.9.4-nightly-20150209.jar", "sha1": "b04f3ee8f5e43fa3b162981b50bb72fe1acabb33", "size": 22, "url": "https://libraries.minecraft.net/org/lwjgl/lwjgl/lwjgl-platform/2.9.4-nightly-20150209/lwjgl-platform-2.9.4-nightly-20150209.jar"}, "classifiers": {"natives-osx": {"path": "org/lwjgl/lwjgl/lwjgl-platform/2.9.4-nightly-20150209/lwjgl-platform-2.9.4-nightly-20150209-natives-osx.jar", "sha1": "bcab850f8f487c3f4c4dbabde778bb82bd1a40ed", "size": 426822, "url": "https://libraries.minecraft.net/org/lwjgl/lwjgl/lwjgl-platform/2.9.4-nightly-20150209/lwjgl-platform-2.9.4-nightly-20150209-natives-osx.jar"}}}, "extract": {"exclude": ["META-INF/"]}, "name": "org.lwjgl.lwjgl:lwjgl-platform:2.9.4-nightly-20150209", "natives": {"linux": "natives-linux", "osx": "natives-osx", "windows": "natives-windows"}, "rules": [{"action": "allow"}, {"action": "disallow", "os": {"name": "osx"}}]},
+            {"downloads": {"classifiers": {"natives-osx": {"path": "net/java/jinput/jinput-platform/2.0.5/jinput-platform-2.0.5-natives-osx.jar", "sha1": "53f9c919f34d2ca9de8c51fc4e1e8282029a9232", "size": 12186, "url": "https://libraries.minecraft.net/net/java/jinput/jinput-platform/2.0.5/jinput-platform-2.0.5-natives-osx.jar"}}}, "name": "net.java.jinput:jinput-platform:2.0.5", "natives": {"osx": "natives-osx"}}
+        ]
+    }"#;
+
+    const LIBRARY_DIR: &str = "/mc/libraries";
+    const CLASSPATH: &str = "/mc/libraries/a/a.jar:/mc/versions/x/x.jar";
+
+    fn natives_dir(version_name: &str) -> String {
+        format!("/mc/versions/{0}/{0}-natives", version_name)
+    }
+
+    /// 模拟 macOS：只有 os.name == osx 的规则对象生效
+    fn osx_rules(rules: &[Rule]) -> bool {
+        rules.iter().all(|r| {
+            r.os.as_ref()
+                .map_or(true, |os| os.name.as_deref() == Some("osx"))
+        })
+    }
+
+    /// 走 version.json 路径（jvm_args_from_version）展开 jvm 参数
+    fn version_jvm_args(json: &str, version_name: &str) -> Vec<String> {
+        let version_json: VersionJson = serde_json::from_str(json).unwrap();
+        let natives = natives_dir(version_name);
+        let jvm = version_json.arguments.unwrap().jvm.unwrap();
+        collect_version_jvm_args(
+            &jvm,
+            &JvmPlaceholderValues {
+                classpath_separator: ":",
+                library_directory: LIBRARY_DIR,
+                natives_directory: &natives,
+                version_name,
+                classpath: Some(CLASSPATH),
+            },
+            osx_rules,
+        )
+    }
+
+    /// 走加载器 json 路径（load_jvm_params -> extra_before_cp）展开 jvm 参数
+    fn loader_jvm_args(json: &str, version_name: &str) -> Vec<String> {
+        let raw: serde_json::Value = serde_json::from_str(json).unwrap();
+        let natives = natives_dir(version_name);
+        collect_loader_jvm_args(
+            raw["arguments"]["jvm"].as_array().unwrap(),
+            &JvmPlaceholderValues {
+                classpath_separator: ":",
+                library_directory: LIBRARY_DIR,
+                natives_directory: &natives,
+                version_name,
+                classpath: None,
+            },
+        )
+        .iter()
+        .map(|p| clean_param_spaces(p))
+        .collect()
+    }
+
+    /// 每个不以 `-` 开头的参数都必须是前一个“带值选项”的值；
+    /// 旧 bug 里被替换出来的孤立 jar 路径会被 java 当成主类。
+    fn assert_no_orphan_values(args: &[String]) {
+        const VALUE_OPTIONS: [&str; 8] = [
+            "-p",
+            "--module-path",
+            "-cp",
+            "--class-path",
+            "--add-modules",
+            "--add-opens",
+            "--add-exports",
+            "--add-reads",
+        ];
+        for (i, arg) in args.iter().enumerate() {
+            if arg.starts_with('-') {
+                continue;
+            }
+            let prev = if i == 0 { "" } else { args[i - 1].as_str() };
+            assert!(
+                VALUE_OPTIONS.contains(&prev),
+                "孤立参数 {:?}（前一个参数 {:?}），完整参数: {:#?}",
+                arg,
+                prev,
+                args
+            );
+        }
+    }
+
+    #[test]
+    fn neoforge_jvm_args_follow_the_spec_for_a_default_style_instance_name() {
+        let name = "1.21.1-neoforge-21.1.267";
+        let n = natives_dir(name);
+        assert_eq!(
+            version_jvm_args(NEOFORGE_1_21_1_JSON, name),
+            vec![
+                "-Djava.net.preferIPv6Addresses=system".to_string(),
+                "-DignoreList=client-extra,1.21.1-neoforge-21.1.267.jar".to_string(),
+                "-DlibraryDirectory=/mc/libraries".to_string(),
+                "-p".to_string(),
+                "/mc/libraries/cpw/mods/bootstraplauncher/2.0.2/bootstraplauncher-2.0.2.jar:/mc/libraries/cpw/mods/securejarhandler/3.0.8/securejarhandler-3.0.8.jar:/mc/libraries/net/neoforged/JarJarFileSystems/0.4.1/JarJarFileSystems-0.4.1.jar".to_string(),
+                "--add-modules".to_string(),
+                "ALL-MODULE-PATH".to_string(),
+                "--add-opens".to_string(),
+                "java.base/java.util.jar=cpw.mods.securejarhandler".to_string(),
+                "--add-opens".to_string(),
+                "java.base/java.lang.invoke=cpw.mods.securejarhandler".to_string(),
+                "--add-exports".to_string(),
+                "java.base/sun.security.util=cpw.mods.securejarhandler".to_string(),
+                "--add-exports".to_string(),
+                "jdk.naming.dns/com.sun.jndi.dns=java.naming".to_string(),
+                "-XstartOnFirstThread".to_string(),
+                format!("-Djava.library.path={n}"),
+                format!("-Djna.tmpdir={n}"),
+                "-Dminecraft.launcher.brand=RTLauncher".to_string(),
+                format!("-Dminecraft.launcher.version={}", env!("CARGO_PKG_VERSION")),
+                "-cp".to_string(),
+                CLASSPATH.to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn neoforge_ignore_list_is_independent_of_the_instance_name() {
+        let names = [
+            "1.21.1-neoforge-21.1.267",
+            "e2e-neoforge-1.21.1",
+            "e2e-nf-1.21.1",
+        ];
+        let mut normalized: Vec<Vec<String>> = Vec::new();
+        for name in names {
+            let args = version_jvm_args(NEOFORGE_1_21_1_JSON, name);
+            assert!(
+                args.contains(&format!("-DignoreList=client-extra,{name}.jar")),
+                "{name}: {args:#?}"
+            );
+            assert!(
+                !args.iter().any(|a| a.contains("earlydisplay")),
+                "{name}: {args:#?}"
+            );
+            assert_no_orphan_values(&args);
+            normalized.push(args.iter().map(|a| a.replace(name, "<NAME>")).collect());
+        }
+        assert!(normalized.windows(2).all(|w| w[0] == w[1]));
+    }
+
+    #[test]
+    fn neoforge_final_jvm_args_keep_one_complete_ignore_list() {
+        // 模拟 build_jvm_arguments_inner 的合并流程：version json 与加载器 json
+        // 都是同一个实例 json（loadType=1 且 version_name == loadName）
+        for name in ["1.21.1-neoforge-21.1.267", "e2e-neoforge-1.21.1"] {
+            let version_args = version_jvm_args(NEOFORGE_1_21_1_JSON, name);
+            let loader_args = loader_jvm_args(NEOFORGE_1_21_1_JSON, name);
+            let mut args = Vec::new();
+            merge_version_jvm_args(&mut args, &version_args, &loader_args);
+            append_loader_jvm_args(&mut args, &loader_args);
+
+            let ignore_lists: Vec<&String> = args
+                .iter()
+                .filter(|a| a.starts_with("-DignoreList="))
+                .collect();
+            assert_eq!(
+                ignore_lists,
+                vec![&format!("-DignoreList=client-extra,{name}.jar")],
+                "{args:#?}"
+            );
+            assert!(
+                !args.iter().any(|a| a.contains("earlydisplay")),
+                "{args:#?}"
+            );
+            assert_no_orphan_values(&args);
+            let cp = args.iter().position(|a| a == "-cp").unwrap();
+            assert_eq!(args[cp + 1], CLASSPATH);
+        }
+    }
+
+    #[test]
+    fn forge_ignore_list_survives_a_forge_coordinate_in_libraries() {
+        for name in ["1.20.1-forge-47.4.29", "e2e-forge-1.20.1"] {
+            for args in [
+                version_jvm_args(FORGE_1_20_1_JSON, name),
+                loader_jvm_args(FORGE_1_20_1_JSON, name),
+            ] {
+                assert!(
+                    args.contains(&format!(
+                        "-DignoreList=bootstraplauncher,securejarhandler,asm-commons,asm-util,asm-analysis,asm-tree,asm,JarJarFileSystems,client-extra,fmlcore,javafmllanguage,lowcodelanguage,mclanguage,forge-,{name}.jar"
+                    )),
+                    "{name}: {args:#?}"
+                );
+                assert!(args.contains(
+                    &"-DmergeModules=jna-5.10.0.jar,jna-platform-5.10.0.jar".to_string()
+                ));
+                assert!(!args.iter().any(|a| a.contains("universal")), "{args:#?}");
+                assert_no_orphan_values(&args);
+            }
+        }
+    }
+
+    #[test]
+    fn parses_liteloader_json_whose_libraries_lack_sha1_and_size() {
+        let version_json: VersionJson =
+            serde_json::from_str(LITELOADER_1_12_2_JSON).expect("LiteLoader 实例 json 应能解析");
+        let lite = &version_json.libraries[0];
+        let artifact = lite.downloads.artifact.as_ref().unwrap();
+        assert_eq!(artifact.sha1, None);
+        assert_eq!(artifact.size, None);
+        assert_eq!(
+            lite.artifact_relative_path().as_deref(),
+            Some("net/minecraft/launchwrapper/1.12/launchwrapper-1.12.jar")
+        );
+        assert_eq!(
+            version_json.libraries[1]
+                .artifact_relative_path()
+                .as_deref(),
+            Some("org/spongepowered/mixin/0.7.4-SNAPSHOT/mixin-0.7.4-20171010.121826-8.jar")
+        );
+
+        let patchy = version_json.libraries[4]
+            .downloads
+            .artifact
+            .as_ref()
+            .unwrap();
+        assert_eq!(
+            patchy.sha1.as_deref(),
+            Some("eb8bb7b66fa0e2152b1b40b3856e82f7619439ee")
+        );
+        assert_eq!(patchy.size, Some(23581));
+
+        let natives = &version_json.libraries[6].downloads.classifiers["natives-osx"];
+        assert_eq!(
+            natives.path.as_deref(),
+            Some("net/java/jinput/jinput-platform/2.0.5/jinput-platform-2.0.5-natives-osx.jar")
+        );
+        assert_eq!(version_json.java_version.map(|j| j.major_version), Some(8));
+    }
+
+    #[test]
+    fn artifact_without_path_falls_back_to_maven_coordinates() {
+        let version_json: VersionJson = serde_json::from_str(
+            r#"{
+                "mainClass": "net.minecraft.launchwrapper.Launch",
+                "libraries": [
+                    {"name": "com.example:only-url:1.0", "downloads": {"artifact": {"url": "https://repo.example/only-url-1.0.jar"}}},
+                    {"name": "com.example:empty:1.0", "downloads": {}},
+                    {"name": "net.neoforged:mergetool:2.0.0:api"}
+                ]
+            }"#,
+        )
+        .unwrap();
+        let paths: Vec<Option<String>> = version_json
+            .libraries
+            .iter()
+            .map(|lib| lib.artifact_relative_path())
+            .collect();
+        assert_eq!(
+            paths,
+            vec![
+                Some("com/example/only-url/1.0/only-url-1.0.jar".to_string()),
+                Some("com/example/empty/1.0/empty-1.0.jar".to_string()),
+                Some("net/neoforged/mergetool/2.0.0/mergetool-2.0.0-api.jar".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn library_name_to_path_handles_classifier_and_extension() {
+        assert_eq!(
+            library_name_to_path("net.minecraft:launchwrapper:1.12").as_deref(),
+            Some("net/minecraft/launchwrapper/1.12/launchwrapper-1.12.jar")
+        );
+        assert_eq!(
+            library_name_to_path("net.neoforged:mergetool:2.0.0:api").as_deref(),
+            Some("net/neoforged/mergetool/2.0.0/mergetool-2.0.0-api.jar")
+        );
+        assert_eq!(
+            library_name_to_path("de.oceanlabs.mcp:mcp_config:1.20.1@zip").as_deref(),
+            Some("de/oceanlabs/mcp/mcp_config/1.20.1/mcp_config-1.20.1.zip")
+        );
+        assert_eq!(library_name_to_path("broken:name"), None);
+    }
+
+    #[test]
+    fn liteloader_game_args_combine_legacy_arguments_and_tweak_class() {
+        let version_json: VersionJson = serde_json::from_str(LITELOADER_1_12_2_JSON).unwrap();
+        let templates = game_argument_templates(
+            version_json.arguments.as_ref(),
+            version_json.minecraft_arguments.as_deref(),
+        );
+        let mut expected: Vec<String> = version_json
+            .minecraft_arguments
+            .as_deref()
+            .unwrap()
+            .split_whitespace()
+            .map(str::to_string)
+            .collect();
+        expected.push("--tweakClass".to_string());
+        expected.push("com.mumfrey.liteloader.launch.LiteLoaderTweaker".to_string());
+        assert_eq!(templates, expected);
+    }
+
+    #[test]
+    fn game_args_skip_duplicate_keys_but_keep_extra_tweak_classes() {
+        let arguments: Arguments = serde_json::from_value(serde_json::json!({
+            "game": [
+                "--username", "${auth_player_name}",
+                "--versionType", "release",
+                "--tweakClass", "net.minecraftforge.fml.common.launcher.FMLTweaker",
+                "--tweakClass", "com.mumfrey.liteloader.launch.LiteLoaderTweaker",
+                {"rules": [{"action": "allow", "features": {"is_demo_user": true}}], "value": "--demo"}
+            ]
+        }))
+        .unwrap();
+        let legacy = "--username ${auth_player_name} --versionType ${version_type} --tweakClass net.minecraftforge.fml.common.launcher.FMLTweaker";
+        assert_eq!(
+            game_argument_templates(Some(&arguments), Some(legacy)),
+            vec![
+                "--username",
+                "${auth_player_name}",
+                "--versionType",
+                "${version_type}",
+                "--tweakClass",
+                "net.minecraftforge.fml.common.launcher.FMLTweaker",
+                "--tweakClass",
+                "com.mumfrey.liteloader.launch.LiteLoaderTweaker",
+            ]
+        );
+    }
+
+    #[test]
+    fn game_args_use_whichever_format_exists_alone() {
+        let modern: Arguments = serde_json::from_value(serde_json::json!({
+            "game": ["--username", "${auth_player_name}", ["--width", "1"]]
+        }))
+        .unwrap();
+        assert_eq!(
+            game_argument_templates(Some(&modern), None),
+            vec!["--username", "${auth_player_name}", "--width", "1"]
+        );
+        assert_eq!(
+            game_argument_templates(None, Some("--username ${auth_player_name}")),
+            vec!["--username", "${auth_player_name}"]
+        );
+        assert!(game_argument_templates(None, None).is_empty());
+    }
+
+    #[test]
+    fn unknown_jvm_placeholders_become_braces() {
+        let values = JvmPlaceholderValues {
+            classpath_separator: ";",
+            library_directory: "C:/mc/libraries",
+            natives_directory: "C:/mc/natives",
+            version_name: "v",
+            classpath: None,
+        };
+        assert_eq!(
+            replace_jvm_placeholders(
+                "  ${library_directory}/a.jar${classpath_separator}${classpath} ",
+                &values
+            ),
+            "C:/mc/libraries/a.jar;{}"
+        );
+        assert_eq!(
+            replace_jvm_placeholders("-Dfoo=${unknown}", &values),
+            "-Dfoo={}"
+        );
+    }
 }
