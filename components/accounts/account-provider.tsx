@@ -644,11 +644,11 @@ export function AccountProvider({ children }: { children: React.ReactNode }) {
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
       // 用户主动取消不算作错误
-      if (msg.includes("已取消")) {
+      if (msg.startsWith("[CANCELLED]")) {
         setLoginState("idle");
         return false;          // 告知调用方用户取消
       }
-      setLoginError(msg);
+      setLoginError(msg.replace(/^\[CANCELLED\]\s*/, ""));
       setLoginState("error");
       throw e;
     }
