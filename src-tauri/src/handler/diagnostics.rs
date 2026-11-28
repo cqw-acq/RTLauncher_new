@@ -1,7 +1,9 @@
+use crate::handler::mod_links::{self, InstalledModIndex, ModCandidateIdentity};
 use crate::handler::mod_parser::ModInfo;
 use crate::handler::mod_parser::parse_mods_in_dir;
 use crate::http_client::{get_with_retry, modrinth_client, curseforge_client, global_semaphore, shared_client, RetryConfig};
 use serde::{Deserialize, Serialize};
+use std::collections::{HashSet, VecDeque};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -376,6 +378,12 @@ pub struct ModSearchResult {
     pub mc_versions: Vec<String>,
     pub loaders: Vec<String>,
     pub version_number: Option<String>,
+    /// Modrinth project id or CurseForge mod id of the selected file.
+    #[serde(default)]
+    pub project_id: Option<String>,
+    /// SHA-1 of the selected file, used to recognise an identical installed jar.
+    #[serde(default)]
+    pub file_sha1: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -387,152 +395,146 @@ pub struct DependencyDownloadResult {
     pub file_path: Option<String>,
 }
 
-async fn search_modrinth(query: &str, mc_version: &str, loader: &str) -> Option<ModSearchResult> {
-    let client = modrinth_client().await;
-    let encoded_query = urlencoding::encode(query);
-    let facets = format!(
-        "[[\"categories:{}\"],[\"versions:{}\"],[\"project_type:mod\"]]",
-        loader.to_lowercase(),
-        mc_version
-    );
-    let url = format!(
-        "https://api.modrinth.com/v2/search?query={}&facets={}&limit=5",
-        encoded_query,
-        urlencoding::encode(&facets)
-    );
+/// Search hit for `query`: an exact slug or title match beats relevance order.
+fn pick_search_hit<'a>(
+    hits: &'a [serde_json::Value],
+    query: &str,
+    slug_key: &str,
+    title_key: &str,
+) -> Option<&'a serde_json::Value> {
+    let wanted = mod_links::normalize_mod_key(query);
+    hits.iter()
+        .find(|hit| {
+            [slug_key, title_key].iter().any(|key| {
+                hit.get(*key)
+                    .and_then(|value| value.as_str())
+                    .map(|value| !wanted.is_empty() && mod_links::normalize_mod_key(value) == wanted)
+                    .unwrap_or(false)
+            })
+        })
+        .or_else(|| hits.first())
+}
 
+fn json_strings(value: &serde_json::Value, key: &str) -> Vec<String> {
+    value
+        .get(key)
+        .and_then(|values| values.as_array())
+        .map(|values| values.iter().filter_map(|v| v.as_str().map(str::to_owned)).collect())
+        .unwrap_or_default()
+}
+
+fn modrinth_search_url(query: &str, mc_version: &str, loader: &str) -> String {
+    let mut facets = Vec::new();
+    if let Some(loader) = mod_links::canonical_mod_loader(loader) {
+        facets.push(serde_json::json!([format!("categories:{}", loader)]));
+    }
+    facets.push(serde_json::json!([format!("versions:{}", mc_version)]));
+    facets.push(serde_json::json!(["project_type:mod"]));
+    format!(
+        "https://api.modrinth.com/v2/search?query={}&facets={}&limit=5",
+        urlencoding::encode(query),
+        urlencoding::encode(&serde_json::Value::Array(facets).to_string())
+    )
+}
+
+/// The Modrinth project best matching `query`, as (slug, title).
+async fn search_modrinth_project(query: &str, mc_version: &str, loader: &str) -> Option<(String, String)> {
+    let client = modrinth_client().await;
     let response = get_with_retry(
         &client,
-        &url,
+        &modrinth_search_url(query, mc_version, loader),
         Some(RetryConfig {
             max_retries: 2,
             initial_delay_ms: 500,
             max_delay_ms: 2000,
         }),
     ).await.ok()?;
-
     if !response.status().is_success() {
         return None;
     }
-
-    let text = response.text().await.ok()?;
-    let json: serde_json::Value = serde_json::from_str(&text).ok()?;
+    let json: serde_json::Value = response.json().await.ok()?;
     let hits = json.get("hits")?.as_array()?;
-
-    if hits.is_empty() {
-        return None;
-    }
-
-    let first_hit = &hits[0];
-    let slug = first_hit.get("slug")?.as_str()?.to_string();
-
-    let versions_url = format!("https://api.modrinth.com/v2/project/{}/version", slug);
-    let versions_response = get_with_retry(
-        &client,
-        &versions_url,
-        Some(RetryConfig {
-            max_retries: 2,
-            initial_delay_ms: 400,
-            max_delay_ms: 2000,
-        }),
-    ).await.ok()?;
-
-    if !versions_response.status().is_success() {
-        return None;
-    }
-
-    let versions_text = versions_response.text().await.ok()?;
-    let versions_json: serde_json::Value = serde_json::from_str(&versions_text).ok()?;
-    let versions = versions_json.as_array()?;
-
-    for version in versions {
-        let game_versions = version
-            .get("game_versions")
-            .and_then(|v| v.as_array())
-            .cloned()
-            .unwrap_or_default();
-        
-        let loaders = version
-            .get("loaders")
-            .and_then(|l| l.as_array())
-            .cloned()
-            .unwrap_or_default();
-
-        let mc_prefix = mc_version.split('.').take(2).collect::<Vec<_>>().join(".");
-        let matches_mc = game_versions.iter().any(|gv| {
-            gv.as_str().map(|s| s == mc_version || s.starts_with(&mc_prefix))
-                .unwrap_or(false)
-        });
-
-        let matches_loader = loaders.iter().any(|l| {
-            l.as_str().map(|s| s.to_lowercase() == loader.to_lowercase()).unwrap_or(false)
-        });
-
-        if matches_mc || matches_loader {
-            let files_field = version.get("files").and_then(|f| f.as_array());
-            let file_info = files_field.and_then(|files_list| {
-                files_list
-                    .iter()
-                    .find(|file| {
-                        file.get("primary")
-                            .and_then(|p| p.as_bool())
-                            .unwrap_or(false)
-                    })
-                    .or_else(|| files_list.first())
-            });
-
-            if let Some(file) = file_info {
-                let download_url = file.get("url").and_then(|u| u.as_str())?.to_string();
-                let file_name = file.get("filename").and_then(|f| f.as_str())?.to_string();
-                let version_number = version.get("version_number").and_then(|v| v.as_str())?.to_string();
-
-                let mc_list: Vec<String> = game_versions.iter()
-                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
-                    .collect();
-                let loader_list: Vec<String> = loaders.iter()
-                    .filter_map(|l| l.as_str().map(|s| s.to_string()))
-                    .collect();
-
-                return Some(ModSearchResult {
-                    source: "modrinth".to_string(),
-                    mod_id: query.to_string(),
-                    slug: slug.clone(),
-                    title: first_hit.get("title").and_then(|t| t.as_str()).unwrap_or(&slug).to_string(),
-                    download_url: Some(download_url),
-                    file_name: Some(file_name),
-                    mc_versions: mc_list,
-                    loaders: loader_list,
-                    version_number: Some(version_number),
-                });
-            }
-        }
-    }
-
-    None
+    let hit = pick_search_hit(hits, query, "slug", "title")?;
+    let slug = hit.get("slug")?.as_str()?.to_string();
+    let title = hit.get("title").and_then(|t| t.as_str()).unwrap_or(&slug).to_string();
+    Some((slug, title))
 }
 
-async fn search_curseforge(query: &str, mc_version: &str, loader: &str) -> Option<ModSearchResult> {
+/// The version of a Modrinth project (id or slug) to install on this instance:
+/// exact Minecraft version and loader, release before beta before alpha.
+async fn modrinth_candidate(
+    project: &str,
+    identity: Option<(String, String)>,
+    query: &str,
+    mc_version: &str,
+    loader: &str,
+) -> Option<(ModSearchResult, serde_json::Value)> {
+    let client = modrinth_client().await;
+    let versions = mod_links::fetch_modrinth_project_versions(&client, project, mc_version, loader).await.ok()?;
+    let version = mod_links::select_modrinth_version(&versions, mc_version, loader)?.clone();
+    let file = mod_links::primary_modrinth_file(&version)?;
+    let download_url = file.get("url")?.as_str()?.to_string();
+    let file_name = file.get("filename")?.as_str()?.to_string();
+    let project_id = version
+        .get("project_id")
+        .and_then(|id| id.as_str())
+        .unwrap_or(project)
+        .to_string();
+    let (slug, title) = match identity {
+        Some(identity) => identity,
+        None => mod_links::get_modrinth_project_identity(&client, &project_id).await,
+    };
+    let result = ModSearchResult {
+        source: "modrinth".to_string(),
+        mod_id: query.to_string(),
+        slug,
+        title,
+        download_url: Some(download_url),
+        file_name: Some(file_name),
+        mc_versions: json_strings(&version, "game_versions"),
+        loaders: json_strings(&version, "loaders"),
+        version_number: version.get("version_number").and_then(|v| v.as_str()).map(str::to_owned),
+        project_id: Some(project_id),
+        file_sha1: mod_links::modrinth_file_sha1s(&version),
+    };
+    Some((result, version))
+}
+
+async fn search_modrinth(query: &str, mc_version: &str, loader: &str) -> Option<ModSearchResult> {
+    let (slug, title) = search_modrinth_project(query, mc_version, loader).await?;
+    let project = slug.clone();
+    modrinth_candidate(&project, Some((slug, title)), query, mc_version, loader)
+        .await
+        .map(|(result, _)| result)
+}
+
+fn curseforge_loader_type(loader: &str) -> &'static str {
+    match mod_links::canonical_mod_loader(loader) {
+        Some("forge") => "1",
+        Some("liteloader") => "3",
+        Some("fabric") => "4",
+        Some("quilt") => "5",
+        Some("neoforge") => "6",
+        _ => "",
+    }
+}
+
+/// CurseForge projects for `query` as (id, slug, name): an exact slug or name
+/// match first, then the top search hits.
+async fn search_curseforge_projects(query: &str, mc_version: &str, loader: &str) -> Vec<(i64, String, String)> {
     let client = curseforge_client().await;
     let semaphore = global_semaphore().await;
-    let encoded_query = urlencoding::encode(query);
-    
-    let loader_filter = match loader.to_lowercase().as_str() {
-        "forge" => "1",
-        "fabric" => "4",
-        "quilt" => "5",
-        "neoforge" => "6",
-        _ => "",
-    };
-
     let url = format!(
         "https://api.curseforge.com/v1/mods/search?gameId=432&classId=6&searchFilter={}&gameVersion={}&modLoaderType={}&pageSize=5",
-        encoded_query,
-        mc_version,
-        loader_filter
+        urlencoding::encode(query),
+        urlencoding::encode(mc_version),
+        curseforge_loader_type(loader)
     );
 
-    let _permit = semaphore.acquire().await.ok()?;
-    let response = get_with_retry(
+    let Ok(_permit) = semaphore.acquire().await else {
+        return Vec::new();
+    };
+    let response = match get_with_retry(
         &client,
         &url,
         Some(RetryConfig {
@@ -540,73 +542,84 @@ async fn search_curseforge(query: &str, mc_version: &str, loader: &str) -> Optio
             initial_delay_ms: 600,
             max_delay_ms: 3000,
         }),
-    ).await.ok()?;
+    ).await {
+        Ok(response) if response.status().is_success() => response,
+        _ => return Vec::new(),
+    };
+    let Ok(json) = response.json::<serde_json::Value>().await else {
+        return Vec::new();
+    };
+    let data = json.get("data").and_then(|d| d.as_array()).cloned().unwrap_or_default();
 
-    if !response.status().is_success() {
-        return None;
-    }
-
-    let text = response.text().await.ok()?;
-    let json: serde_json::Value = serde_json::from_str(&text).ok()?;
-    let data = json.get("data")?.as_array()?;
-
-    if data.is_empty() {
-        return None;
-    }
-
-    for mod_item in data.iter().take(3) {
-        let mod_id = mod_item.get("id").and_then(|id| id.as_u64())?;
-        let title = mod_item.get("name").and_then(|n| n.as_str())?.to_string();
-        let slug = mod_item.get("slug").and_then(|s| s.as_str())?.to_string();
-
-        let files_url = format!(
-            "https://api.curseforge.com/v1/mods/{}/files?gameVersion={}&modLoaderType={}&pageSize=10",
-            mod_id, mc_version, loader_filter
-        );
-
-        let files_response = get_with_retry(
-            &client,
-            &files_url,
-            Some(RetryConfig {
-                max_retries: 2,
-                initial_delay_ms: 500,
-                max_delay_ms: 2000,
-            }),
-        ).await.ok()?;
-
-        if !files_response.status().is_success() {
-            continue;
-        }
-
-        let files_text = files_response.text().await.ok()?;
-        let files_json: serde_json::Value = serde_json::from_str(&files_text).ok()?;
-        let files_data = files_json.get("data").and_then(|d| d.as_array()).unwrap_or(&vec![]).clone();
-
-        if let Some(file) = files_data.first() {
-            if let Some(dl_url) = file.get("downloadUrl").and_then(|u| u.as_str()) {
-                let file_name = file.get("fileName").and_then(|f| f.as_str())?.to_string();
-                let version_number = file.get("displayName").and_then(|v| v.as_str())?.to_string();
-                
-                let game_versions_raw = file.get("gameVersions").and_then(|v| v.as_array()).cloned().unwrap_or_default();
-                let mc_list: Vec<String> = game_versions_raw.iter()
-                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
-                    .collect();
-
-                return Some(ModSearchResult {
-                    source: "curseforge".to_string(),
-                    mod_id: query.to_string(),
-                    slug,
-                    title,
-                    download_url: Some(dl_url.to_string()),
-                    file_name: Some(file_name),
-                    mc_versions: mc_list,
-                    loaders: vec![loader.to_string()],
-                    version_number: Some(version_number),
-                });
-            }
+    let mut ordered: Vec<&serde_json::Value> = pick_search_hit(&data, query, "slug", "name").into_iter().collect();
+    for item in data.iter().take(3) {
+        if !ordered.iter().any(|picked| std::ptr::eq(*picked, item)) {
+            ordered.push(item);
         }
     }
+    ordered
+        .into_iter()
+        .filter_map(|item| {
+            Some((
+                item.get("id")?.as_i64()?,
+                item.get("slug")?.as_str()?.to_string(),
+                item.get("name").and_then(|n| n.as_str()).unwrap_or("").to_string(),
+            ))
+        })
+        .collect()
+}
 
+/// The CurseForge file of `mod_id` to install on this instance: exact Minecraft
+/// version and loader, release before beta before alpha.
+async fn curseforge_candidate(
+    mod_id: i64,
+    identity: Option<(String, String)>,
+    query: &str,
+    mc_version: &str,
+    loader: &str,
+) -> Option<(ModSearchResult, serde_json::Value)> {
+    let client = curseforge_client().await;
+    let files = mod_links::get_curseforge_files(&client, mod_id, Some(mc_version)).await.ok()?;
+    // Only files the author lets third-party launchers download directly.
+    let distributable: Vec<serde_json::Value> = files
+        .into_iter()
+        .filter(|file| {
+            file.get("downloadUrl")
+                .and_then(|url| url.as_str())
+                .map(|url| !url.is_empty())
+                .unwrap_or(false)
+        })
+        .collect();
+    let file = mod_links::select_curseforge_compatible_file(&distributable, mc_version, loader)?;
+    let download_url = file.get("downloadUrl")?.as_str()?.to_string();
+    let file_name = file.get("fileName")?.as_str()?.to_string();
+    let (slug, title) = match identity {
+        Some(identity) => identity,
+        None => mod_links::get_curseforge_project_identity(&client, mod_id).await,
+    };
+    let result = ModSearchResult {
+        source: "curseforge".to_string(),
+        mod_id: query.to_string(),
+        slug,
+        title,
+        download_url: Some(download_url),
+        file_name: Some(file_name),
+        mc_versions: json_strings(&file, "gameVersions"),
+        loaders: vec![loader.to_string()],
+        version_number: file.get("displayName").and_then(|v| v.as_str()).map(str::to_owned),
+        project_id: Some(mod_id.to_string()),
+        file_sha1: mod_links::curseforge_file_sha1s(&file),
+    };
+    Some((result, file))
+}
+
+async fn search_curseforge(query: &str, mc_version: &str, loader: &str) -> Option<ModSearchResult> {
+    for (mod_id, slug, name) in search_curseforge_projects(query, mc_version, loader).await {
+        let title = if name.is_empty() { slug.clone() } else { name };
+        if let Some((result, _)) = curseforge_candidate(mod_id, Some((slug, title)), query, mc_version, loader).await {
+            return Some(result);
+        }
+    }
     None
 }
 
@@ -674,6 +687,96 @@ pub fn check_mod_installed(instance_dir: String, mod_id: String) -> Result<bool,
     Ok(mods.iter().any(|m| m.mod_id.to_ascii_lowercase() == target))
 }
 
+enum InstallOutcome {
+    Installed { path: String, file_name: String },
+    AlreadyInstalled(String),
+    Failed(String),
+}
+
+fn candidate_identity(result: &ModSearchResult) -> ModCandidateIdentity {
+    ModCandidateIdentity {
+        modrinth_project_id: if result.source == "modrinth" { result.project_id.clone() } else { None },
+        names: vec![result.slug.clone()],
+        sha1: result.file_sha1.clone(),
+        file_name: result.file_name.clone(),
+    }
+}
+
+fn already_installed_result(mod_id: &str, title: &str, reason: &str) -> DependencyDownloadResult {
+    DependencyDownloadResult {
+        mod_id: mod_id.to_string(),
+        source: "local".to_string(),
+        success: true,
+        message: format!("模组已存在，无需下载: {}（{}）", title, reason),
+        file_path: None,
+    }
+}
+
+/// Installs `result` into `mods_dir` unless the same mod is already there.
+///
+/// The jar is saved under a hidden temporary name first (not `*.jar`, so the
+/// game never loads it) and the mod ids it declares are compared with the
+/// installed ones. That also catches a mod that is installed under another
+/// slug or was downloaded from the other platform.
+async fn install_mod_candidate(
+    mods_dir: &Path,
+    index: &mut InstalledModIndex,
+    result: &ModSearchResult,
+) -> InstallOutcome {
+    let identity = candidate_identity(result);
+    if let Some(reason) = index.find(&identity) {
+        return InstallOutcome::AlreadyInstalled(reason);
+    }
+    let Some(url) = result.download_url.as_deref() else {
+        return InstallOutcome::Failed("缺少下载地址".to_string());
+    };
+    let Some(file_name) = result
+        .file_name
+        .as_deref()
+        .and_then(|name| Path::new(name).file_name())
+        .and_then(|name| name.to_str())
+        .map(str::to_owned)
+    else {
+        return InstallOutcome::Failed("缺少有效的文件名".to_string());
+    };
+    let final_path = mods_dir.join(&file_name);
+    let temp_path = mods_dir.join(format!(".{}.rtl-part", file_name));
+    if let Err(error) = download_file(url, &temp_path).await {
+        let _ = std::fs::remove_file(&temp_path);
+        return InstallOutcome::Failed(error);
+    }
+
+    let inspect_path = temp_path.clone();
+    let (mod_ids, sha1) = tokio::task::spawn_blocking(move || {
+        (mod_links::jar_mod_ids(&inspect_path), mod_links::file_sha1(&inspect_path))
+    })
+    .await
+    .unwrap_or_default();
+    let downloaded = ModCandidateIdentity {
+        sha1: sha1.iter().cloned().collect(),
+        ..Default::default()
+    };
+    let duplicate = index.find(&downloaded).or_else(|| {
+        index
+            .conflicting_mod_id(&mod_ids)
+            .map(|mod_id| format!("已安装 mod id 为 {} 的模组", mod_id))
+    });
+    if let Some(reason) = duplicate {
+        let _ = std::fs::remove_file(&temp_path);
+        return InstallOutcome::AlreadyInstalled(reason);
+    }
+    if let Err(error) = std::fs::rename(&temp_path, &final_path) {
+        let _ = std::fs::remove_file(&temp_path);
+        return InstallOutcome::Failed(format!("保存文件失败: {}", error));
+    }
+    index.record(&identity);
+    index.add_jar(&file_name, sha1.as_deref(), &mod_ids);
+    InstallOutcome::Installed {
+        path: final_path.to_string_lossy().to_string(),
+        file_name,
+    }
+}
+
 #[tauri::command]
 pub async fn auto_download_missing_dependency(
     instance_dir: String,
@@ -699,47 +802,40 @@ pub async fn auto_download_missing_dependency(
         }
     }
 
+    // 完整检查：provides / quilt.mod.json / 文件哈希 / Modrinth 项目
+    let mut index = mod_links::load_installed_mod_index(mods_dir.clone()).await;
+    let requested = ModCandidateIdentity {
+        names: vec![mod_id.clone()],
+        ..Default::default()
+    };
+    if let Some(reason) = index.find(&requested) {
+        return Ok(already_installed_result(&mod_id, &mod_id, &reason));
+    }
+
     let (modrinth_result, curseforge_result) = search_mod_both_sources(&mod_id, &mc_version, &loader).await;
+    let found_any = modrinth_result.is_some() || curseforge_result.is_some();
 
-    let sources: Vec<(&str, Option<ModSearchResult>)> = vec![
-        ("modrinth", modrinth_result.clone()),
-        ("curseforge", curseforge_result.clone()),
-    ];
-
-    for (source_name, result) in &sources {
-        if let Some(search_result) = result {
-            if let (Some(url), Some(filename)) = (&search_result.download_url, &search_result.file_name) {
-                let dest_path = mods_dir.join(filename);
-                if dest_path.exists() {
-                    return Ok(DependencyDownloadResult {
-                        mod_id: mod_id.clone(),
-                        source: "local".to_string(),
-                        success: true,
-                        message: format!("文件已存在，跳过: {}", filename),
-                        file_path: Some(dest_path.to_string_lossy().to_string()),
-                    });
-                }
-                
-                match download_file(url, &dest_path).await {
-                    Ok(_) => {
-                        return Ok(DependencyDownloadResult {
-                            mod_id: mod_id.clone(),
-                            source: source_name.to_string(),
-                            success: true,
-                            message: format!("成功从 {} 下载: {}", source_name, filename),
-                            file_path: Some(dest_path.to_string_lossy().to_string()),
-                        });
-                    }
-                    Err(e) => {
-                        eprintln!("从 {} 下载 {} 失败: {}", source_name, mod_id, e);
-                        continue;
-                    }
-                }
+    for search_result in [modrinth_result, curseforge_result].into_iter().flatten() {
+        match install_mod_candidate(&mods_dir, &mut index, &search_result).await {
+            InstallOutcome::Installed { path, file_name } => {
+                return Ok(DependencyDownloadResult {
+                    mod_id: mod_id.clone(),
+                    source: search_result.source.clone(),
+                    success: true,
+                    message: format!("成功从 {} 下载: {}", search_result.source, file_name),
+                    file_path: Some(path),
+                });
+            }
+            InstallOutcome::AlreadyInstalled(reason) => {
+                return Ok(already_installed_result(&mod_id, &search_result.title, &reason));
+            }
+            InstallOutcome::Failed(error) => {
+                eprintln!("从 {} 下载 {} 失败: {}", search_result.source, mod_id, error);
             }
         }
     }
 
-    if modrinth_result.is_none() && curseforge_result.is_none() {
+    if !found_any {
         return Ok(DependencyDownloadResult {
             mod_id: mod_id.clone(),
             source: "none".to_string(),
@@ -824,6 +920,10 @@ pub struct ApiDependency {
     pub slug: Option<String>,
     pub dependency_type: String,
     pub version_range: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub modrinth_project_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub curseforge_mod_id: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -832,308 +932,289 @@ pub struct ModWithDeps {
     pub dependencies: Vec<ApiDependency>,
 }
 
-async fn fetch_modrinth_version_dependencies(_project_id: &str, version_id: &str) -> Option<Vec<ApiDependency>> {
-    let client = modrinth_client().await;
-
-    let deps_url = format!("https://api.modrinth.com/v2/version/{}", version_id);
+async fn modrinth_version_project(client: &reqwest::Client, version_id: &str) -> Option<String> {
+    let url = format!("https://api.modrinth.com/v2/version/{}", urlencoding::encode(version_id));
     let response = get_with_retry(
-        &client,
-        &deps_url,
-        Some(RetryConfig { max_retries: 2, initial_delay_ms: 400, max_delay_ms: 2000 }),
+        client,
+        &url,
+        Some(RetryConfig { max_retries: 1, initial_delay_ms: 300, max_delay_ms: 1000 }),
     ).await.ok()?;
-
     if !response.status().is_success() {
         return None;
     }
-
-    let text = response.text().await.ok()?;
-    let json: serde_json::Value = serde_json::from_str(&text).ok()?;
-    let mut deps = Vec::new();
-
-    if let Some(dep_arr) = json.get("dependencies").and_then(|d| d.as_array()) {
-        for dep in dep_arr {
-            let dep_type = dep.get("dependency_type")
-                .and_then(|t| t.as_str())
-                .unwrap_or("required")
-                .to_string();
-
-            if dep_type != "required" && dep_type != "optional" && dep_type != "incompatible" {
-                continue;
-            }
-
-            let version_range = dep.get("version_range").and_then(|v| v.as_str()).map(|s| s.to_string());
-
-            if let Some(project_id_val) = dep.get("project_id").and_then(|p| p.as_str()) {
-                let proj_url = format!("https://api.modrinth.com/v2/project/{}", project_id_val);
-                let proj_resp = get_with_retry(
-                    &client, &proj_url,
-                    Some(RetryConfig { max_retries: 1, initial_delay_ms: 300, max_delay_ms: 1000 }),
-                ).await.ok();
-                let proj_text = match proj_resp {
-                    Some(r) => r.text().await.ok(),
-                    None => None,
-                };
-                let slug: Option<String> = proj_text
-                    .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
-                    .and_then(|j| j.get("slug").and_then(|s| s.as_str()).map(|s| s.to_string()));
-
-                let mod_id = slug.clone().unwrap_or_else(|| project_id_val.to_string());
-
-                deps.push(ApiDependency {
-                    mod_id,
-                    slug,
-                    dependency_type: dep_type,
-                    version_range,
-                });
-            } else if let Some(version_id_dep) = dep.get("version_id").and_then(|v| v.as_str()) {
-                deps.push(ApiDependency {
-                    mod_id: version_id_dep.to_string(),
-                    slug: None,
-                    dependency_type: dep_type,
-                    version_range,
-                });
-            }
-        }
-    }
-
-    Some(deps)
+    let json: serde_json::Value = response.json().await.ok()?;
+    json.get("project_id")?.as_str().map(str::to_owned)
 }
 
-async fn fetch_curseforge_mod_dependencies(mod_id: i64, file_id: i64) -> Option<Vec<ApiDependency>> {
-    let client = curseforge_client().await;
-    let semaphore = global_semaphore().await;
-    let _permit = semaphore.acquire().await.ok()?;
-
-    let file_url = format!("https://api.curseforge.com/v1/mods/{}/files/{}", mod_id, file_id);
-    let response = get_with_retry(
-        &client,
-        &file_url,
-        Some(RetryConfig { max_retries: 2, initial_delay_ms: 500, max_delay_ms: 2000 }),
-    ).await.ok()?;
-
-    if !response.status().is_success() {
-        return None;
+async fn modrinth_project_slugs(
+    client: &reqwest::Client,
+    project_ids: &[String],
+) -> std::collections::HashMap<String, String> {
+    let mut slugs = std::collections::HashMap::new();
+    if project_ids.is_empty() {
+        return slugs;
     }
-
-    let text = response.text().await.ok()?;
-    let json: serde_json::Value = serde_json::from_str(&text).ok()?;
-    let mut deps = Vec::new();
-
-    if let Some(dep_arr) = json.get("data")
-        .and_then(|d| d.get("dependencies"))
-        .and_then(|d| d.as_array()) {
-        
-        for dep in dep_arr {
-            let relation_type = dep.get("relationType").and_then(|r| r.as_u64()).unwrap_or(0);
-            let dep_mod_id = dep.get("modId").and_then(|m| m.as_u64());
-
-            let dep_type = match relation_type {
-                1 => "required",
-                2 => "optional",
-                3 => "incompatible",
-                _ => continue,
-            }.to_string();
-
-            if let Some(dmid) = dep_mod_id {
-                let mod_info_url = format!("https://api.curseforge.com/v1/mods/{}", dmid);
-                let info_resp = get_with_retry(
-                    &client, &mod_info_url,
-                    Some(RetryConfig { max_retries: 1, initial_delay_ms: 300, max_delay_ms: 1000 }),
-                ).await.ok();
-                let info_text = match info_resp {
-                    Some(r) => r.text().await.ok(),
-                    None => None,
-                };
-                let (slug_opt, name_opt) = info_text
-                    .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
-                    .map(|j| {
-                        let s = j.get("data").and_then(|d| d.get("slug")).and_then(|s| s.as_str()).map(|s| s.to_string());
-                        let n = j.get("data").and_then(|d| d.get("name")).and_then(|s| s.as_str()).map(|s| s.to_string());
-                        (s, n)
-                    })
-                    .unwrap_or((None, None));
-
-                let mod_id = slug_opt.clone()
-                    .or(name_opt.clone())
-                    .unwrap_or_else(|| format!("curseforge_{}", dmid));
-
-                deps.push(ApiDependency {
-                    mod_id,
-                    slug: slug_opt,
-                    dependency_type: dep_type,
-                    version_range: None,
-                });
+    let url = format!(
+        "https://api.modrinth.com/v2/projects?ids={}",
+        urlencoding::encode(&serde_json::json!(project_ids).to_string())
+    );
+    let Ok(response) = get_with_retry(
+        client,
+        &url,
+        Some(RetryConfig { max_retries: 1, initial_delay_ms: 300, max_delay_ms: 1000 }),
+    ).await else {
+        return slugs;
+    };
+    if let Ok(projects) = response.json::<serde_json::Value>().await {
+        for project in projects.as_array().into_iter().flatten() {
+            if let (Some(id), Some(slug)) = (
+                project.get("id").and_then(|v| v.as_str()),
+                project.get("slug").and_then(|v| v.as_str()),
+            ) {
+                slugs.insert(id.to_string(), slug.to_string());
             }
         }
     }
+    slugs
+}
 
-    Some(deps)
+/// Dependencies declared by a Modrinth version, with their project ids.
+async fn fetch_modrinth_version_dependencies(version: &serde_json::Value) -> Vec<ApiDependency> {
+    let client = modrinth_client().await;
+    let mut pending: Vec<(String, String, Option<String>)> = Vec::new();
+
+    for dep in version.get("dependencies").and_then(|d| d.as_array()).into_iter().flatten() {
+        let dep_type = dep.get("dependency_type")
+            .and_then(|t| t.as_str())
+            .unwrap_or("required")
+            .to_string();
+        if dep_type != "required" && dep_type != "optional" && dep_type != "incompatible" {
+            continue;
+        }
+        let version_range = dep.get("version_range").and_then(|v| v.as_str()).map(|s| s.to_string());
+        let project_id = match dep.get("project_id").and_then(|p| p.as_str()) {
+            Some(project_id) => Some(project_id.to_string()),
+            // Version-only references: find the project the version belongs to.
+            None => match dep.get("version_id").and_then(|v| v.as_str()) {
+                Some(version_id) => modrinth_version_project(&client, version_id).await,
+                None => None,
+            },
+        };
+        match project_id {
+            Some(project_id) => pending.push((project_id, dep_type, version_range)),
+            None => eprintln!("[ModDeps] 无法确定 Modrinth 依赖所属项目: {}", dep),
+        }
+    }
+
+    let project_ids: Vec<String> = pending.iter().map(|(id, _, _)| id.clone()).collect();
+    let slugs = modrinth_project_slugs(&client, &project_ids).await;
+    pending
+        .into_iter()
+        .map(|(project_id, dependency_type, version_range)| {
+            let slug = slugs.get(&project_id).cloned();
+            ApiDependency {
+                mod_id: slug.clone().unwrap_or_else(|| project_id.clone()),
+                slug,
+                dependency_type,
+                version_range,
+                modrinth_project_id: Some(project_id),
+                curseforge_mod_id: None,
+            }
+        })
+        .collect()
+}
+
+/// CurseForge `FileRelationType`: 1 embedded library, 2 optional, 3 required,
+/// 4 tool, 5 incompatible, 6 include.
+fn curseforge_relation_kind(relation_type: u64) -> Option<&'static str> {
+    match relation_type {
+        3 => Some("required"),
+        2 => Some("optional"),
+        5 => Some("incompatible"),
+        _ => None,
+    }
+}
+
+/// Dependencies declared by a CurseForge file, with their mod ids.
+async fn fetch_curseforge_mod_dependencies(file: &serde_json::Value) -> Vec<ApiDependency> {
+    let client = curseforge_client().await;
+    let mut deps = Vec::new();
+
+    for dep in file.get("dependencies").and_then(|d| d.as_array()).into_iter().flatten() {
+        let Some(dep_type) = dep
+            .get("relationType")
+            .and_then(|r| r.as_u64())
+            .and_then(curseforge_relation_kind)
+        else {
+            continue;
+        };
+        let Some(dep_mod_id) = dep.get("modId").and_then(|m| m.as_i64()) else {
+            continue;
+        };
+        let fallback = dep_mod_id.to_string();
+        let (slug, name) = mod_links::get_curseforge_project_identity(&client, dep_mod_id).await;
+        let slug = (slug != fallback).then_some(slug);
+        let name = (name != fallback).then_some(name);
+        deps.push(ApiDependency {
+            mod_id: slug.clone().or(name).unwrap_or_else(|| format!("curseforge_{}", dep_mod_id)),
+            slug,
+            dependency_type: dep_type.to_string(),
+            version_range: None,
+            modrinth_project_id: None,
+            curseforge_mod_id: Some(dep_mod_id),
+        });
+    }
+
+    deps
+}
+
+async fn modrinth_with_deps(
+    project: &str,
+    identity: Option<(String, String)>,
+    query: &str,
+    mc_version: &str,
+    loader: &str,
+) -> Option<ModWithDeps> {
+    let (search_result, version) = modrinth_candidate(project, identity, query, mc_version, loader).await?;
+    let dependencies = fetch_modrinth_version_dependencies(&version).await;
+    Some(ModWithDeps { search_result, dependencies })
 }
 
 async fn search_modrinth_with_deps(query: &str, mc_version: &str, loader: &str) -> Option<ModWithDeps> {
-    let client = modrinth_client().await;
-    let encoded_query = urlencoding::encode(query);
-    let facets = format!(
-        "[[\"categories:{}\"],[\"versions:{}\"],[\"project_type:mod\"]]",
-        loader.to_lowercase(), mc_version
-    );
-    let url = format!(
-        "https://api.modrinth.com/v2/search?query={}&facets={}&limit=5",
-        encoded_query, urlencoding::encode(&facets)
-    );
+    let (slug, title) = search_modrinth_project(query, mc_version, loader).await?;
+    let project = slug.clone();
+    modrinth_with_deps(&project, Some((slug, title)), query, mc_version, loader).await
+}
 
-    let response = get_with_retry(
-        &client, &url,
-        Some(RetryConfig { max_retries: 2, initial_delay_ms: 500, max_delay_ms: 2000 }),
-    ).await.ok()?;
-    if !response.status().is_success() { return None; }
+async fn curseforge_with_deps(
+    mod_id: i64,
+    identity: Option<(String, String)>,
+    query: &str,
+    mc_version: &str,
+    loader: &str,
+) -> Option<ModWithDeps> {
+    let (search_result, file) = curseforge_candidate(mod_id, identity, query, mc_version, loader).await?;
+    let dependencies = fetch_curseforge_mod_dependencies(&file).await;
+    Some(ModWithDeps { search_result, dependencies })
+}
 
-    let text = response.text().await.ok()?;
-    let json: serde_json::Value = serde_json::from_str(&text).ok()?;
-    let hits = json.get("hits")?.as_array()?;
-    if hits.is_empty() { return None; }
-
-    let first_hit = &hits[0];
-    let slug = first_hit.get("slug")?.as_str()?.to_string();
-
-    let versions_url = format!("https://api.modrinth.com/v2/project/{}/version", slug);
-    let versions_response = get_with_retry(
-        &client, &versions_url,
-        Some(RetryConfig { max_retries: 2, initial_delay_ms: 400, max_delay_ms: 2000 }),
-    ).await.ok()?;
-    if !versions_response.status().is_success() { return None; }
-
-    let versions_text = versions_response.text().await.ok()?;
-    let versions_json: serde_json::Value = serde_json::from_str(&versions_text).ok()?;
-    let versions = versions_json.as_array()?;
-
-    let mc_prefix = mc_version.split('.').take(2).collect::<Vec<_>>().join(".");
-
-    for version in versions {
-        let game_versions = version.get("game_versions").and_then(|v| v.as_array()).cloned().unwrap_or_default();
-        let loaders = version.get("loaders").and_then(|l| l.as_array()).cloned().unwrap_or_default();
-
-        let matches_mc = game_versions.iter().any(|gv| {
-            gv.as_str().map(|s| s == mc_version || s.starts_with(&mc_prefix)).unwrap_or(false)
-        });
-        let matches_loader = loaders.iter().any(|l| {
-            l.as_str().map(|s| s.to_lowercase() == loader.to_lowercase()).unwrap_or(false)
-        });
-
-        if matches_mc || matches_loader {
-            let files_field = version.get("files").and_then(|f| f.as_array());
-            let file_info = files_field.and_then(|files_list| {
-                files_list.iter().find(|file| {
-                    file.get("primary").and_then(|p| p.as_bool()).unwrap_or(false)
-                }).or_else(|| files_list.first())
-            });
-
-            if let (Some(file), Some(version_id)) = (file_info, version.get("id").and_then(|v| v.as_str())) {
-                let download_url = file.get("url").and_then(|u| u.as_str())?.to_string();
-                let file_name = file.get("filename").and_then(|f| f.as_str())?.to_string();
-                let version_number = version.get("version_number").and_then(|v| v.as_str())?.to_string();
-
-                let mc_list: Vec<String> = game_versions.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect();
-                let loader_list: Vec<String> = loaders.iter().filter_map(|l| l.as_str().map(|s| s.to_string())).collect();
-
-                let dependencies = fetch_modrinth_version_dependencies(&slug, version_id).await.unwrap_or_default();
-
-                return Some(ModWithDeps {
-                    search_result: ModSearchResult {
-                        source: "modrinth".to_string(),
-                        mod_id: query.to_string(),
-                        slug: slug.clone(),
-                        title: first_hit.get("title").and_then(|t| t.as_str()).unwrap_or(&slug).to_string(),
-                        download_url: Some(download_url),
-                        file_name: Some(file_name),
-                        mc_versions: mc_list,
-                        loaders: loader_list,
-                        version_number: Some(version_number),
-                    },
-                    dependencies,
-                });
-            }
+async fn search_curseforge_with_deps(query: &str, mc_version: &str, loader: &str) -> Option<ModWithDeps> {
+    for (mod_id, slug, name) in search_curseforge_projects(query, mc_version, loader).await {
+        let title = if name.is_empty() { slug.clone() } else { name };
+        if let Some(found) = curseforge_with_deps(mod_id, Some((slug, title)), query, mc_version, loader).await {
+            return Some(found);
         }
     }
     None
 }
 
-async fn search_curseforge_with_deps(query: &str, mc_version: &str, loader: &str) -> Option<ModWithDeps> {
-    let client = curseforge_client().await;
-    let semaphore = global_semaphore().await;
-    let encoded_query = urlencoding::encode(query);
+/// A mod to install while completing dependencies.
+#[derive(Debug, Clone)]
+struct DependencyTarget {
+    /// Mod id or project slug: shown in results and used for name search.
+    query: String,
+    modrinth_project_id: Option<String>,
+    curseforge_mod_id: Option<i64>,
+    depth: usize,
+}
 
-    let loader_filter = match loader.to_lowercase().as_str() {
-        "forge" => "1", "fabric" => "4", "quilt" => "5", "neoforge" => "6", _ => "",
-    };
+impl DependencyTarget {
+    fn root(query: String) -> Self {
+        Self { query, modrinth_project_id: None, curseforge_mod_id: None, depth: 0 }
+    }
 
-    let url = format!(
-        "https://api.curseforge.com/v1/mods/search?gameId=432&classId=6&searchFilter={}&gameVersion={}&modLoaderType={}&pageSize=5",
-        encoded_query, mc_version, loader_filter
-    );
-
-    let _permit = semaphore.acquire().await.ok()?;
-    let response = get_with_retry(
-        &client, &url,
-        Some(RetryConfig { max_retries: 2, initial_delay_ms: 600, max_delay_ms: 3000 }),
-    ).await.ok()?;
-    if !response.status().is_success() { return None; }
-
-    let text = response.text().await.ok()?;
-    let json: serde_json::Value = serde_json::from_str(&text).ok()?;
-    let data = json.get("data")?.as_array()?;
-    if data.is_empty() { return None; }
-
-    for mod_item in data.iter().take(3) {
-        let cur_mod_id = mod_item.get("id").and_then(|id| id.as_i64())?;
-        let title = mod_item.get("name").and_then(|n| n.as_str())?.to_string();
-        let slug = mod_item.get("slug").and_then(|s| s.as_str())?.to_string();
-
-        let files_url = format!(
-            "https://api.curseforge.com/v1/mods/{}/files?gameVersion={}&modLoaderType={}&pageSize=10",
-            cur_mod_id, mc_version, loader_filter
-        );
-
-        let files_response = get_with_retry(
-            &client, &files_url,
-            Some(RetryConfig { max_retries: 2, initial_delay_ms: 500, max_delay_ms: 2000 }),
-        ).await.ok()?;
-        if !files_response.status().is_success() { continue; }
-
-        let files_text = files_response.text().await.ok()?;
-        let files_json: serde_json::Value = serde_json::from_str(&files_text).ok()?;
-        let files_data = files_json.get("data").and_then(|d| d.as_array()).unwrap_or(&vec![]).clone();
-
-        if let Some(file) = files_data.first() {
-            if let (Some(dl_url), Some(file_id)) = (
-                file.get("downloadUrl").and_then(|u| u.as_str()),
-                file.get("id").and_then(|i| i.as_i64())
-            ) {
-                let file_name = file.get("fileName").and_then(|f| f.as_str())?.to_string();
-                let version_number = file.get("displayName").and_then(|v| v.as_str())?.to_string();
-                let game_versions_raw = file.get("gameVersions").and_then(|v| v.as_array()).cloned().unwrap_or_default();
-                let mc_list: Vec<String> = game_versions_raw.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect();
-
-                let dependencies = fetch_curseforge_mod_dependencies(cur_mod_id, file_id).await.unwrap_or_default();
-
-                return Some(ModWithDeps {
-                    search_result: ModSearchResult {
-                        source: "curseforge".to_string(),
-                        mod_id: query.to_string(),
-                        slug: slug.clone(),
-                        title,
-                        download_url: Some(dl_url.to_string()),
-                        file_name: Some(file_name),
-                        mc_versions: mc_list,
-                        loaders: vec![loader.to_string()],
-                        version_number: Some(version_number),
-                    },
-                    dependencies,
-                });
-            }
+    fn required_by(dependency: &ApiDependency, depth: usize) -> Self {
+        Self {
+            query: dependency.slug.clone().unwrap_or_else(|| dependency.mod_id.clone()),
+            modrinth_project_id: dependency.modrinth_project_id.clone(),
+            curseforge_mod_id: dependency.curseforge_mod_id,
+            depth,
         }
     }
-    None
+
+    /// Visit keys known before the target is resolved.
+    fn keys(&self) -> Vec<String> {
+        let mut keys = Vec::new();
+        if let Some(project_id) = &self.modrinth_project_id {
+            keys.push(format!("modrinth:{}", project_id));
+        }
+        if let Some(mod_id) = self.curseforge_mod_id {
+            keys.push(format!("curseforge:{}", mod_id));
+        }
+        if keys.is_empty() {
+            keys.push(format!("name:{}", mod_links::normalize_mod_key(&self.query)));
+        }
+        keys
+    }
+
+    fn identity(&self) -> ModCandidateIdentity {
+        ModCandidateIdentity {
+            modrinth_project_id: self.modrinth_project_id.clone(),
+            names: vec![self.query.clone()],
+            ..Default::default()
+        }
+    }
+
+    /// Whether the query is only an id, i.e. the project slug is unknown.
+    fn query_is_id(&self) -> bool {
+        self.modrinth_project_id.as_deref() == Some(self.query.as_str())
+            || self.curseforge_mod_id.map(|id| id.to_string()).as_deref() == Some(self.query.as_str())
+    }
+}
+
+/// Visit keys of a resolved candidate: its project on its platform and its
+/// slug, so a mod reached through another platform or reference is handled once.
+fn candidate_keys(result: &ModSearchResult) -> Vec<String> {
+    let mut keys = Vec::new();
+    if let Some(project_id) = &result.project_id {
+        keys.push(format!("{}:{}", result.source, project_id));
+    }
+    let slug_key = mod_links::normalize_mod_key(&result.slug);
+    if !slug_key.is_empty() {
+        keys.push(format!("name:{}", slug_key));
+    }
+    keys
+}
+
+/// Marks `keys` as visited. Returns false, without marking anything, when one
+/// of them other than those in `own` was visited before.
+fn mark_visited(visited: &mut HashSet<String>, keys: &[String], own: &[String]) -> bool {
+    if keys.iter().any(|key| !own.contains(key) && visited.contains(key)) {
+        return false;
+    }
+    visited.extend(keys.iter().cloned());
+    true
+}
+
+/// Candidates for a target, best first. Dependencies with a known project are
+/// fetched directly from their platform; a name search on both platforms is the
+/// fallback, and for dependencies it only accepts an exact slug match.
+async fn resolve_dependency_candidates(target: &DependencyTarget, mc_version: &str, loader: &str) -> Vec<ModWithDeps> {
+    let direct = if let Some(project_id) = &target.modrinth_project_id {
+        modrinth_with_deps(project_id, None, &target.query, mc_version, loader).await
+    } else if let Some(mod_id) = target.curseforge_mod_id {
+        curseforge_with_deps(mod_id, None, &target.query, mc_version, loader).await
+    } else {
+        None
+    };
+    if let Some(candidate) = direct {
+        return vec![candidate];
+    }
+    let has_project = target.modrinth_project_id.is_some() || target.curseforge_mod_id.is_some();
+    if has_project && target.query_is_id() {
+        return Vec::new();
+    }
+
+    let (modrinth, curseforge) = tokio::join!(
+        search_modrinth_with_deps(&target.query, mc_version, loader),
+        search_curseforge_with_deps(&target.query, mc_version, loader)
+    );
+    let wanted = mod_links::normalize_mod_key(&target.query);
+    modrinth
+        .into_iter()
+        .chain(curseforge)
+        .filter(|candidate| !has_project || mod_links::normalize_mod_key(&candidate.search_result.slug) == wanted)
+        .collect()
 }
 
 #[tauri::command]
@@ -1143,90 +1224,87 @@ pub async fn auto_download_with_dependencies(
     mc_version: String,
     loader: String,
 ) -> Result<Vec<DependencyDownloadResult>, String> {
+    const MAX_DEPTH: usize = 5;
+    const MAX_TARGETS: usize = 32;
+
     let mods_dir = Path::new(&instance_dir).join("mods");
     std::fs::create_dir_all(&mods_dir).map_err(|e| format!("创建mods目录失败: {}", e))?;
 
+    // Everything already in mods/ (hash, mod id, Modrinth project) is treated as
+    // installed: a second copy of a mod crashes Forge / NeoForge on startup.
+    let mut index = mod_links::load_installed_mod_index(mods_dir.clone()).await;
     let mut results = Vec::new();
-    let mut visited = std::collections::HashSet::new();
-    let mut queue: Vec<(String, usize)> = vec![(mod_id, 0)];
-    let max_depth = 5;
+    let mut visited: HashSet<String> = HashSet::new();
+    let mut queue: VecDeque<DependencyTarget> = VecDeque::from([DependencyTarget::root(mod_id)]);
+    let mut processed = 0;
 
-    while let Some((current_id, depth)) = queue.pop() {
-        if depth > max_depth || visited.contains(&current_id) {
+    while let Some(target) = queue.pop_front() {
+        if target.depth > MAX_DEPTH {
             continue;
         }
-        visited.insert(current_id.clone());
+        if processed >= MAX_TARGETS {
+            break;
+        }
+        let target_keys = target.keys();
+        if !mark_visited(&mut visited, &target_keys, &[]) {
+            continue;
+        }
+        processed += 1;
 
-        let mods_dir_copy = mods_dir.clone();
-        let mc_ver = mc_version.clone();
-        let loader_copy = loader.clone();
-        let id_copy = current_id.clone();
+        if let Some(reason) = index.find(&target.identity()) {
+            results.push(already_installed_result(&target.query, &target.query, &reason));
+            continue;
+        }
 
-        let (mr_opt, cf_opt) = tokio::join!(
-            search_modrinth_with_deps(&id_copy, &mc_ver, &loader_copy),
-            search_curseforge_with_deps(&id_copy, &mc_ver, &loader_copy)
-        );
-
-        let sources: Vec<(String, Option<ModWithDeps>)> = vec![
-            ("modrinth".to_string(), mr_opt),
-            ("curseforge".to_string(), cf_opt),
-        ];
-
-        let mut downloaded = false;
-        for (source_name, mod_with_deps_opt) in &sources {
-            if let Some(mwd) = mod_with_deps_opt {
-                if let (Some(url), Some(filename)) = (&mwd.search_result.download_url, &mwd.search_result.file_name) {
-                    let dest_path = mods_dir_copy.join(filename);
-                    if !dest_path.exists() {
-                        match download_file(url, &dest_path).await {
-                            Ok(_) => {
-                                results.push(DependencyDownloadResult {
-                                    mod_id: current_id.clone(),
-                                    source: source_name.clone(),
-                                    success: true,
-                                    message: format!("从 {} 下载成功: {}", source_name, filename),
-                                    file_path: Some(dest_path.to_string_lossy().to_string()),
-                                });
-
-                                for dep in &mwd.dependencies {
-                                    if dep.dependency_type == "required" && !is_platform_dep(&dep.mod_id) {
-                                        queue.push((dep.mod_id.clone(), depth + 1));
-                                    }
-                                }
-                                downloaded = true;
-                                break;
-                            }
-                            Err(e) => {
-                                eprintln!("从 {} 下载 {} 失败: {}", source_name, current_id, e);
-                            }
+        let mut handled = false;
+        let mut last_error: Option<String> = None;
+        for candidate in resolve_dependency_candidates(&target, &mc_version, &loader).await {
+            // The same project reached through another reference or platform.
+            if !mark_visited(&mut visited, &candidate_keys(&candidate.search_result), &target_keys) {
+                handled = true;
+                break;
+            }
+            let source_name = candidate.search_result.source.clone();
+            match install_mod_candidate(&mods_dir, &mut index, &candidate.search_result).await {
+                InstallOutcome::Installed { path, file_name } => {
+                    results.push(DependencyDownloadResult {
+                        mod_id: target.query.clone(),
+                        source: source_name.clone(),
+                        success: true,
+                        message: format!("从 {} 下载成功: {}", source_name, file_name),
+                        file_path: Some(path),
+                    });
+                    for dep in &candidate.dependencies {
+                        if dep.dependency_type == "required" && !is_platform_dep(&dep.mod_id) {
+                            queue.push_back(DependencyTarget::required_by(dep, target.depth + 1));
                         }
-                    } else {
-                        results.push(DependencyDownloadResult {
-                            mod_id: current_id.clone(),
-                            source: source_name.clone(),
-                            success: true,
-                            message: format!("已存在，跳过: {}", filename),
-                            file_path: Some(dest_path.to_string_lossy().to_string()),
-                        });
-
-                        for dep in &mwd.dependencies {
-                            if dep.dependency_type == "required" && !is_platform_dep(&dep.mod_id) {
-                                queue.push((dep.mod_id.clone(), depth + 1));
-                            }
-                        }
-                        downloaded = true;
-                        break;
                     }
+                    handled = true;
+                    break;
+                }
+                InstallOutcome::AlreadyInstalled(reason) => {
+                    results.push(already_installed_result(
+                        &target.query,
+                        &candidate.search_result.title,
+                        &reason,
+                    ));
+                    handled = true;
+                    break;
+                }
+                InstallOutcome::Failed(error) => {
+                    eprintln!("从 {} 下载 {} 失败: {}", source_name, target.query, error);
+                    last_error = Some(error);
                 }
             }
         }
 
-        if !downloaded {
+        if !handled {
+            let detail = last_error.map(|error| format!("：{}", error)).unwrap_or_default();
             results.push(DependencyDownloadResult {
-                mod_id: current_id.clone(),
+                mod_id: target.query.clone(),
                 source: "not_found".to_string(),
                 success: false,
-                message: format!("模组 '{}' 在双平台均未找到或下载失败", current_id),
+                message: format!("模组 '{}' 在双平台均未找到或下载失败{}", target.query, detail),
                 file_path: None,
             });
         }
@@ -1726,3 +1804,224 @@ pub async fn export_launch_report(
     Ok(zip_path.to_string_lossy().to_string())
 }
 
+#[cfg(test)]
+mod dependency_install_tests {
+    use super::*;
+    use serde_json::json;
+    use std::io::Read;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    fn jar_bytes(fabric_mod_json: &str) -> Vec<u8> {
+        let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        let options = FileOptions::default().compression_method(CompressionMethod::Stored);
+        writer.start_file("fabric.mod.json", options).unwrap();
+        writer.write_all(fabric_mod_json.as_bytes()).unwrap();
+        writer.finish().unwrap().into_inner()
+    }
+
+    /// Minimal HTTP server on 127.0.0.1 serving `files` by path.
+    fn serve(files: Vec<(&'static str, Vec<u8>)>) -> (String, Arc<AtomicUsize>) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let hits = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&hits);
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { continue };
+                let mut request = Vec::new();
+                let mut buffer = [0u8; 1024];
+                while !request.windows(4).any(|w| w == b"\r\n\r\n") {
+                    match stream.read(&mut buffer) {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => request.extend_from_slice(&buffer[..n]),
+                    }
+                }
+                counter.fetch_add(1, Ordering::SeqCst);
+                let request = String::from_utf8_lossy(&request);
+                let path = request.split_whitespace().nth(1).unwrap_or("/").to_string();
+                let body = files.iter().find(|(p, _)| *p == path).map(|(_, b)| b.clone());
+                let (status, body) = match body {
+                    Some(body) => ("200 OK", body),
+                    None => ("404 Not Found", Vec::new()),
+                };
+                let head = format!(
+                    "HTTP/1.1 {}\r\nContent-Length: {}\r\nContent-Type: application/java-archive\r\nConnection: close\r\n\r\n",
+                    status,
+                    body.len()
+                );
+                let _ = stream.write_all(head.as_bytes());
+                let _ = stream.write_all(&body);
+            }
+        });
+        (base, hits)
+    }
+
+    fn temp_mods_dir(name: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("rtl-dep-install-{}-{}-{}", name, std::process::id(), nanos));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn search_result(slug: &str, url: String, file_name: &str) -> ModSearchResult {
+        ModSearchResult {
+            source: "modrinth".to_string(),
+            mod_id: slug.to_string(),
+            slug: slug.to_string(),
+            title: slug.to_string(),
+            download_url: Some(url),
+            file_name: Some(file_name.to_string()),
+            mc_versions: vec!["1.21.1".to_string()],
+            loaders: vec!["fabric".to_string()],
+            version_number: None,
+            project_id: Some(format!("project-{}", slug)),
+            file_sha1: Vec::new(),
+        }
+    }
+
+    fn jar_names(dir: &Path) -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(dir)
+            .unwrap()
+            .flatten()
+            .map(|entry| entry.file_name().to_string_lossy().to_string())
+            .collect();
+        names.sort();
+        names
+    }
+
+    #[tokio::test]
+    async fn installs_missing_mod_and_never_adds_a_second_copy() {
+        let sodium_json = r#"{"schemaVersion":1,"id":"sodium","version":"0.8.13+mc1.21.1"}"#;
+        let (base, hits) = serve(vec![
+            ("/sodium-beta.jar", jar_bytes(r#"{"schemaVersion":1,"id":"sodium","version":"0.8.14-beta.2"}"#)),
+            ("/sodium-extra.jar", jar_bytes(r#"{"schemaVersion":1,"id":"sodium-extra","version":"0.9.5"}"#)),
+        ]);
+        let mods_dir = temp_mods_dir("install");
+        std::fs::write(mods_dir.join("sodium-fabric-0.8.13+mc1.21.1.jar"), jar_bytes(sodium_json)).unwrap();
+        let mut index = InstalledModIndex::scan(&mods_dir);
+
+        // Same project slug: recognised before anything is downloaded.
+        let sodium = search_result("sodium", format!("{}/sodium-beta.jar", base), "sodium-fabric-0.8.14-beta.2+mc1.21.1.jar");
+        assert!(matches!(
+            install_mod_candidate(&mods_dir, &mut index, &sodium).await,
+            InstallOutcome::AlreadyInstalled(_)
+        ));
+        assert_eq!(hits.load(Ordering::SeqCst), 0);
+
+        // Unknown slug, but the downloaded jar declares the installed mod id:
+        // the temporary file is discarded instead of becoming a duplicate.
+        let mirror = search_result("sodium-mirror", format!("{}/sodium-beta.jar", base), "sodium-mirror.jar");
+        match install_mod_candidate(&mods_dir, &mut index, &mirror).await {
+            InstallOutcome::AlreadyInstalled(reason) => assert!(reason.contains("sodium"), "{}", reason),
+            InstallOutcome::Installed { .. } => panic!("duplicate sodium was installed"),
+            InstallOutcome::Failed(error) => panic!("unexpected failure: {}", error),
+        }
+        assert_eq!(hits.load(Ordering::SeqCst), 1);
+        assert_eq!(jar_names(&mods_dir), vec!["sodium-fabric-0.8.13+mc1.21.1.jar"]);
+
+        // A missing mod is installed, then recognised on the next attempt.
+        let extra = search_result("sodium-extra", format!("{}/sodium-extra.jar", base), "sodium-extra-fabric-0.9.5+mc1.21.1.jar");
+        assert!(matches!(
+            install_mod_candidate(&mods_dir, &mut index, &extra).await,
+            InstallOutcome::Installed { .. }
+        ));
+        assert_eq!(
+            jar_names(&mods_dir),
+            vec!["sodium-extra-fabric-0.9.5+mc1.21.1.jar", "sodium-fabric-0.8.13+mc1.21.1.jar"]
+        );
+        assert!(matches!(
+            install_mod_candidate(&mods_dir, &mut index, &extra).await,
+            InstallOutcome::AlreadyInstalled(_)
+        ));
+        assert_eq!(hits.load(Ordering::SeqCst), 2);
+
+        let _ = std::fs::remove_dir_all(&mods_dir);
+    }
+
+    #[test]
+    fn search_prefers_exact_slug_or_title() {
+        let hits = vec![
+            json!({"slug": "sodium-extra", "title": "Sodium Extra"}),
+            json!({"slug": "sodium", "title": "Sodium"}),
+        ];
+        assert_eq!(pick_search_hit(&hits, "sodium", "slug", "title").unwrap()["slug"], "sodium");
+        assert_eq!(pick_search_hit(&hits, "Sodium Extra", "slug", "title").unwrap()["slug"], "sodium-extra");
+        // Without an exact match the relevance order is kept.
+        assert_eq!(pick_search_hit(&hits, "rubidium", "slug", "title").unwrap()["slug"], "sodium-extra");
+    }
+
+    #[test]
+    fn curseforge_relation_types_follow_the_api() {
+        assert_eq!(curseforge_relation_kind(3), Some("required"));
+        assert_eq!(curseforge_relation_kind(2), Some("optional"));
+        assert_eq!(curseforge_relation_kind(5), Some("incompatible"));
+        // Embedded libraries, tools and includes are not dependencies to install.
+        assert_eq!(curseforge_relation_kind(1), None);
+        assert_eq!(curseforge_relation_kind(4), None);
+        assert_eq!(curseforge_relation_kind(6), None);
+    }
+
+    #[test]
+    fn visited_keys_stop_cycles_and_cross_platform_repeats() {
+        let mut visited = HashSet::new();
+        let root = DependencyTarget::root("sodium-extra".to_string());
+        assert!(mark_visited(&mut visited, &root.keys(), &[]));
+        let mut root_result = search_result("sodium-extra", String::new(), "a.jar");
+        root_result.project_id = Some("PtjYWJkn".to_string());
+        assert!(mark_visited(&mut visited, &candidate_keys(&root_result), &root.keys()));
+
+        let sodium = DependencyTarget::required_by(
+            &ApiDependency {
+                mod_id: "sodium".to_string(),
+                slug: Some("sodium".to_string()),
+                dependency_type: "required".to_string(),
+                version_range: None,
+                modrinth_project_id: Some("AANobbMI".to_string()),
+                curseforge_mod_id: None,
+            },
+            1,
+        );
+        assert_eq!(sodium.keys(), vec!["modrinth:AANobbMI".to_string()]);
+        assert!(mark_visited(&mut visited, &sodium.keys(), &[]));
+        let mut sodium_result = search_result("sodium", String::new(), "b.jar");
+        sodium_result.project_id = Some("AANobbMI".to_string());
+        assert!(mark_visited(&mut visited, &candidate_keys(&sodium_result), &sodium.keys()));
+
+        // A cycle back to the root project is not processed again.
+        let back_to_root = DependencyTarget {
+            query: "sodium-extra".to_string(),
+            modrinth_project_id: Some("PtjYWJkn".to_string()),
+            curseforge_mod_id: None,
+            depth: 2,
+        };
+        assert!(!mark_visited(&mut visited, &back_to_root.keys(), &[]));
+
+        // The same mod found on CurseForge is recognised through its slug.
+        let cf_sodium = DependencyTarget {
+            query: "sodium".to_string(),
+            modrinth_project_id: None,
+            curseforge_mod_id: Some(394468),
+            depth: 2,
+        };
+        assert!(mark_visited(&mut visited, &cf_sodium.keys(), &[]));
+        let mut cf_result = search_result("sodium", String::new(), "c.jar");
+        cf_result.source = "curseforge".to_string();
+        cf_result.project_id = Some("394468".to_string());
+        assert!(!mark_visited(&mut visited, &candidate_keys(&cf_result), &cf_sodium.keys()));
+    }
+
+    #[test]
+    fn id_only_dependency_targets_are_not_name_searched() {
+        let target = DependencyTarget {
+            query: "AANobbMI".to_string(),
+            modrinth_project_id: Some("AANobbMI".to_string()),
+            curseforge_mod_id: None,
+            depth: 1,
+        };
+        assert!(target.query_is_id());
+        assert!(!DependencyTarget::root("sodium".to_string()).query_is_id());
+    }
+}

@@ -2166,7 +2166,6 @@ pub async fn search_curseforge_projects(
     serde_json::to_string(&response_data).map_err(|_e| "Failed to serialize JSON".to_string())
 }
 
-
 #[cfg(test)]
 mod dependency_resolution_tests {
     use super::*;
