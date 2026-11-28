@@ -141,10 +141,12 @@ enum KillAction {
 fn claim_kill_action(state: &mut LaunchState) -> Result<KillAction, String> {
     let has_preparing_launch = state.preparing > 0;
     if state.process.is_some() {
-        let (pid, started) = claim_termination_request(&mut state.process)?;
+        // 先取消准备中的启动，再认领终止请求：进程已在终止中时认领会失败，
+        // 但在第一次终止之后才登记的启动仍须被这次终止命令取消。
         if has_preparing_launch {
             state.cancel_generation += 1;
         }
+        let (pid, started) = claim_termination_request(&mut state.process)?;
         return Ok(KillAction::Terminate { pid, started });
     }
     if has_preparing_launch {
@@ -698,6 +700,44 @@ mod tests {
             })
         );
         assert!(is_launch_cancelled(&state, queued));
+    }
+
+    #[test]
+    fn repeated_termination_still_cancels_launches_queued_after_the_first() {
+        let mut state = LaunchState {
+            process: Some(GameProcess {
+                pid: 100,
+                fully_started: true,
+                termination_requested: false,
+            }),
+            ..LaunchState::default()
+        };
+        assert!(claim_kill_action(&mut state).is_ok());
+
+        // 第一次终止之后才登记的启动，持有当时的取消代数。
+        let queued = register_preparation(&mut state);
+        let before = state.cancel_generation;
+
+        // 进程仍在终止中：重复终止照旧报错，但必须已取消这个启动，
+        // 否则旧进程清理后它能通过 run_command 的检查把游戏拉起来。
+        assert!(claim_kill_action(&mut state).is_err());
+        assert_eq!(state.cancel_generation, before + 1);
+        assert!(is_launch_cancelled(&state, queued));
+    }
+
+    #[test]
+    fn repeated_termination_without_preparing_launch_keeps_generation() {
+        let mut state = LaunchState {
+            process: Some(GameProcess {
+                pid: 100,
+                fully_started: false,
+                termination_requested: true,
+            }),
+            ..LaunchState::default()
+        };
+
+        assert!(claim_kill_action(&mut state).is_err());
+        assert_eq!(state.cancel_generation, 0);
     }
 
     #[test]
