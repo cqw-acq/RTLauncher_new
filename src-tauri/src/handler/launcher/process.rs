@@ -154,25 +154,42 @@ fn claim_kill_action(state: &mut LaunchState) -> Result<KillAction, String> {
     Err("当前没有运行中的游戏进程".to_string())
 }
 
-/// 检测游戏是否完全启动（JVM 启动、加载完资源、主窗口就绪）
-/// 通过 Minecraft 日志中的标志性字符串判断
+/// 游戏客户端已经打开窗口、进入首次资源加载（随后显示主菜单）时才会输出的日志。
+/// 均来自本地 E2E 实测日志（1.20.1 Forge/Quilt、1.21.1 原版/Fabric/NeoForge），
+/// 大小写不敏感匹配。
+const CLIENT_READY_MARKERS: &[&str] = &[
+    // 1.12.2 起 SoundManager/SoundEngine 初始化完成
+    "sound engine started",
+    // 新版 LWJGL3 音频库：OpenAL initialized on device ...
+    "openal initialized",
+];
+
+/// 旧有标记：原版/加载器的启动完成文案，以及进入世界、连接服务器等更晚的阶段。
+const LEGACY_READY_MARKERS: &[&str] = &[
+    "minecraft client started",
+    "minecraft is ready to start",
+    "preparing spawn area",
+    "minecraft initialized",
+    "launching game",
+    "minecraft client has started",
+    "title screen",
+    "connecting to ",
+    "joined the game",
+];
+
+/// 检测游戏是否完全启动（JVM 启动、主窗口就绪、开始加载资源/显示主菜单）
+/// 通过 Minecraft 日志中的标志性字符串判断，大小写不敏感。
 fn is_game_fully_started(line: &str) -> bool {
-    // 原版 Minecraft: "Minecraft client started" / "Preparing spawn area" / "Minecraft initialized"
-    // 常见 Mod 加载器: "mod loading complete" / "Minecraft is ready to start" / "Launching game"
     let lower = line.to_lowercase();
-    lower.contains("minecraft client started")
-        || lower.contains("minecraft is ready to start")
-        || lower.contains("preparing spawn area")
-        || lower.contains("minecraft initialized")
-        || lower.contains("launching game")
-        || lower.contains("loading complete") && lower.contains("mod")
-        || lower.contains("minecraft client has started")
-        // 对于新版 Fabric/原版，未必输出上述固定文案；一旦已经进入世界、
-        // 显示主菜单或开始连接服务器，就说明客户端已经成功运行。
-        || lower.contains("title screen")
-        || lower.contains("connecting to ")
-        || lower.contains("joined the game")
-        || lower.contains("joined ") && lower.contains("server")
+    CLIENT_READY_MARKERS
+        .iter()
+        .chain(LEGACY_READY_MARKERS)
+        .any(|marker| lower.contains(marker))
+        // 纹理图集创建：1.12.2 为 "Created: 1024x512 textures-atlas"，
+        // 1.13+ 为 "Created: 1024x512x4 minecraft:textures/atlas/blocks.png-atlas"
+        || (lower.contains("created:") && lower.contains("atlas"))
+        || (lower.contains("loading complete") && lower.contains("mod"))
+        || (lower.contains("joined ") && lower.contains("server"))
 }
 
 /// 将进程结束状态转换为可展示的退出码。
@@ -532,11 +549,90 @@ pub fn kill_game_process() -> Result<String, String> {
 mod tests {
     use super::{
         claim_kill_action, claim_startup_transition, claim_termination_request,
-        clear_process_if_pid, finish_preparation, insert_process_if_empty, is_launch_cancelled,
-        parse_log_level, register_preparation, reset_termination_request_if_pid, GameProcess,
-        KillAction, LaunchState,
+        clear_process_if_pid, finish_preparation, insert_process_if_empty, is_game_fully_started,
+        is_launch_cancelled, parse_log_level, register_preparation,
+        reset_termination_request_if_pid, GameProcess, KillAction, LaunchState,
     };
     use std::sync::atomic::{AtomicBool, Ordering};
+
+    #[test]
+    fn detects_startup_from_real_1_21_1_logs() {
+        // 摘自本地 E2E：1.21.1 原版 / Fabric 0.20.1 / NeoForge 21.1.267 进入主菜单的日志
+        for line in [
+            "[16:37:28] [Render thread/INFO]: OpenAL initialized on device MacBook Pro扬声器",
+            "[16:37:28] [Render thread/INFO]: Sound engine started",
+            "[16:37:28] [Render thread/INFO]: Created: 1024x512x4 minecraft:textures/atlas/blocks.png-atlas",
+            "[16:38:01] [Render thread/INFO]: Created: 1024x512x0 minecraft:textures/atlas/gui.png-atlas",
+            "[16:55:02] [Render thread/INFO] [minecraft/SoundEngine]: Sound engine started",
+            "[16:55:02] [Render thread/INFO] [minecraft/TextureAtlas]: Created: 1024x512x4 minecraft:textures/atlas/blocks.png-atlas",
+        ] {
+            assert!(is_game_fully_started(line), "{line}");
+        }
+    }
+
+    #[test]
+    fn detects_startup_from_real_1_20_1_logs() {
+        // 摘自本地 E2E：1.20.1 Forge 47.4.29 / Quilt 0.30.2 进入主菜单的日志
+        for line in [
+            "[16:53:57] [Render thread/INFO] [mojang/Library]: OpenAL initialized on device CoreAudio Default",
+            "[16:53:57] [Render thread/INFO] [minecraft/SoundEngine]: Sound engine started",
+            "[16:53:57] [Render thread/INFO] [minecraft/TextureAtlas]: Created: 1024x512x4 minecraft:textures/atlas/blocks.png-atlas",
+            "[16:54:26] [Render thread/INFO]: OpenAL initialized on device CoreAudio Default",
+            "[16:54:26] [Render thread/INFO]: Created: 256x256x4 minecraft:textures/atlas/signs.png-atlas",
+        ] {
+            assert!(is_game_fully_started(line), "{line}");
+        }
+    }
+
+    #[test]
+    fn detects_startup_from_1_12_2_log_format() {
+        // 本次 E2E 的 1.12.2 在 arm64 上因 LWJGL2 原生库缺失未能进入主菜单，
+        // 这里是 1.12.2 原版 / Forge 主菜单前的标准日志格式样本。
+        for line in [
+            "[12:00:00] [Sound Library Loader/INFO]: Sound engine started",
+            "[12:00:00] [Client thread/INFO]: Created: 1024x512 textures-atlas",
+            "[12:00:00] [Sound Library Loader/INFO] [minecraft/SoundManager]: Sound engine started",
+            "[12:00:00] [Client thread/INFO] [minecraft/TextureMap]: Created: 512x512 textures-atlas",
+        ] {
+            assert!(is_game_fully_started(line), "{line}");
+        }
+    }
+
+    #[test]
+    fn matches_startup_markers_case_insensitively() {
+        assert!(is_game_fully_started(
+            "[Render thread/INFO]: SOUND ENGINE STARTED"
+        ));
+        assert!(is_game_fully_started(
+            "[Render thread/INFO]: openal Initialized."
+        ));
+    }
+
+    #[test]
+    fn does_not_detect_startup_from_early_log_lines() {
+        // 摘自同一批 E2E 日志中 JVM/加载器启动、早期窗口、模组加载阶段的行，
+        // 以及 1.12.2 启动失败时的行；这些都不能让启动页提前结束。
+        for line in [
+            "\u{1b}[32m[16:54:52.859] [main/INFO] [Launcher/MODLAUNCHER]: ModLauncher running: args [--fml.neoForgeVersion, 21.1.267, --fml.fmlVersion, 4.0.45, --fml.mcVersion, 1.21.1, --launchTarget, forgeclient]",
+            "\u{1b}[m\u{1b}[32m[16:54:53.712] [main/INFO] [EARLYDISPLAY/]: Requested GL version 4.1 got version 4.1 ",
+            "[16:53:50] [main/INFO] [cp.mo.mo.LaunchServiceHandler/MODLAUNCHER]: Launching target 'forgeclient' with arguments [--version, e2e-forge-1.20.1]",
+            "[16:53:53] [modloading-worker-0/INFO] [ne.mi.co.ForgeMod/FORGEMOD]: Forge mod loading, version 47.4.29, for MC 1.20.1 with MCP 20230612.114412",
+            "[16:54:59] [modloading-worker-0/INFO] [ne.ne.ne.co.NeoForgeMod/NEOFORGE-MOD]: NeoForge mod loading, version 21.1.267, for MC 1.21.1",
+            "[16:37:49] [main/INFO]: Loading Minecraft 1.21.1 with Fabric Loader 0.20.1",
+            "[16:37:49] [main/INFO]: Loading 57 mods:",
+            "[16:54:16] [main/INFO]: Loading Minecraft 1.20.1 with Quilt Loader 0.30.2",
+            "[16:37:20] [Datafixer Bootstrap/INFO]: 226 Datafixer optimizations took 99 milliseconds",
+            "[16:37:23] [Render thread/INFO]: Setting user: RTLTest",
+            "[16:37:23] [Render thread/INFO]: Backend library: LWJGL version 3.3.3+5",
+            "[16:53:55] [Render thread/INFO] [minecraft/ReloadableResourceManager]: Reloading ResourceManager: vanilla, mod_resources",
+            "[16:37:28] [Render thread/WARN]: Missing sound for event: minecraft:item.goat_horn.play",
+            "[16:38:52] [main/INFO] [FML]: Found valid fingerprint for Minecraft. Certificate fingerprint cd99959656f753dc28d863b46769f7f8fbaefcfc",
+            "[16:38:52] [main/INFO] [LaunchWrapper]: Launching wrapped minecraft {net.minecraft.client.main.Main}",
+            "Exception in thread \"main\" java.lang.UnsatisfiedLinkError: no lwjgl in java.library.path",
+        ] {
+            assert!(!is_game_fully_started(line), "{line}");
+        }
+    }
 
     #[test]
     fn cancels_a_launch_that_is_still_preparing() {
