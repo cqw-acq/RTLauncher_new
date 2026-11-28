@@ -27,8 +27,22 @@ const LAST_MILE_THRESHOLD: f64 = 0.5;
 const FINAL_SPRINT_THRESHOLD: f64 = 0.8;
 const STALL_BYTES_PER_SEC: u64 = 30 * 1024;
 const STALL_DETECTION_INTERVAL: Duration = Duration::from_secs(2);
-const MAX_RETRIES_PER_URL: u32 = 8;
-const MAX_RETRIES_PER_CHUNK: u32 = 5;
+/// 单个文件在所有下载源之间累计的最大尝试次数（外层按 URL 轮换）
+const MAX_DOWNLOAD_ATTEMPTS: u32 = 8;
+/// 同一个 URL 最多被完整尝试几次；有多个镜像时优先切换镜像，而不是反复打同一个源
+const MAX_ATTEMPTS_PER_URL: u32 = 3;
+/// 单个分块最多请求几次（含首次）；用完后该下载源判定失败，交给外层切换镜像或报错
+const MAX_ATTEMPTS_PER_CHUNK: u32 = 5;
+/// 失败重试的指数退避：第 n 次失败后等待 base * 2^(n-1)，且不超过上限
+#[cfg(not(test))]
+const RETRY_BACKOFF_BASE: Duration = Duration::from_millis(500);
+#[cfg(not(test))]
+const RETRY_BACKOFF_MAX: Duration = Duration::from_secs(8);
+// 单元测试里缩短退避，避免测试本身变慢；逻辑与正式值一致
+#[cfg(test)]
+const RETRY_BACKOFF_BASE: Duration = Duration::from_millis(10);
+#[cfg(test)]
+const RETRY_BACKOFF_MAX: Duration = Duration::from_millis(80);
 const CHUNK_TIMEOUT_BASE: Duration = Duration::from_secs(15);
 const OVERALL_TIMEOUT_SECONDS: u64 = 600;
 
@@ -45,6 +59,132 @@ fn chunk_size_for(size: u64) -> u64 {
         MEDIUM_CHUNK
     } else {
         LARGE_CHUNK
+    }
+}
+
+/// 带上限的指数退避：第 `failures` 次失败后应等待的时间。
+/// failures = 0 表示还没失败过，不需要等待。
+fn retry_backoff(failures: u32) -> Duration {
+    if failures == 0 {
+        return Duration::ZERO;
+    }
+    let shift = (failures - 1).min(16);
+    RETRY_BACKOFF_BASE
+        .saturating_mul(1u32 << shift)
+        .min(RETRY_BACKOFF_MAX)
+}
+
+/// 解析 `Retry-After` 响应头（仅支持秒数形式）
+fn parse_retry_after(headers: &reqwest::header::HeaderMap) -> Option<Duration> {
+    headers
+        .get(reqwest::header::RETRY_AFTER)?
+        .to_str()
+        .ok()?
+        .trim()
+        .parse::<u64>()
+        .ok()
+        .map(Duration::from_secs)
+}
+
+/// 分块请求收到了非成功的 HTTP 状态码（如 429 / 5xx）
+#[derive(Debug)]
+struct ChunkHttpStatusError {
+    status: reqwest::StatusCode,
+    retry_after: Option<Duration>,
+    range: Range,
+}
+
+impl std::fmt::Display for ChunkHttpStatusError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "HTTP {} (bytes {}-{})",
+            self.status, self.range.start, self.range.end
+        )
+    }
+}
+
+impl std::error::Error for ChunkHttpStatusError {}
+
+/// 某个下载源已经在内部按上限重试过（例如分块重试次数用完），
+/// 外层不应再对同一个 URL 整轮重试，只应切换到其他镜像或直接报错。
+#[derive(Debug)]
+struct SourceRetriesExhausted(String);
+
+impl std::fmt::Display for SourceRetriesExhausted {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for SourceRetriesExhausted {}
+
+/// 外层按下载源的重试计划：
+/// - 在多个 URL（镜像）之间轮换，换到一个还没试过的源时不等待；
+/// - 同一个 URL 最多尝试 `max_per_url` 次，再次尝试前按指数退避等待；
+/// - 被标记为“已耗尽”的 URL 不再尝试；
+/// - 所有 URL 累计最多尝试 `max_total` 次。
+struct UrlRetryPlan {
+    attempts: Vec<u32>,
+    exhausted: Vec<bool>,
+    cursor: usize,
+    total: u32,
+    max_per_url: u32,
+    max_total: u32,
+}
+
+impl UrlRetryPlan {
+    fn new(url_count: usize, max_per_url: u32, max_total: u32) -> Self {
+        Self {
+            attempts: vec![0; url_count],
+            exhausted: vec![false; url_count],
+            cursor: 0,
+            total: 0,
+            max_per_url,
+            max_total,
+        }
+    }
+
+    /// 返回下一次要尝试的 URL 下标，以及尝试前需要等待的退避时间；没有可尝试的源时返回 None。
+    fn next(&mut self) -> Option<(usize, Duration)> {
+        let n = self.attempts.len();
+        if n == 0 || self.total >= self.max_total {
+            return None;
+        }
+        for step in 0..n {
+            let i = (self.cursor + step) % n;
+            if self.exhausted[i] || self.attempts[i] >= self.max_per_url {
+                continue;
+            }
+            let delay = retry_backoff(self.attempts[i]);
+            self.attempts[i] += 1;
+            self.total += 1;
+            self.cursor = (i + 1) % n;
+            return Some((i, delay));
+        }
+        None
+    }
+
+    /// 该 URL 已在内部重试到上限，之后不再尝试
+    fn mark_exhausted(&mut self, index: usize) {
+        if let Some(flag) = self.exhausted.get_mut(index) {
+            *flag = true;
+        }
+    }
+}
+
+/// 可被取消的等待；返回 false 表示等待期间被取消
+async fn sleep_unless_cancelled(delay: Duration, cancel: &AtomicBool) -> bool {
+    let deadline = Instant::now() + delay;
+    loop {
+        if cancel.load(Ordering::SeqCst) {
+            return false;
+        }
+        let now = Instant::now();
+        if now >= deadline {
+            return true;
+        }
+        tokio::time::sleep((deadline - now).min(Duration::from_millis(100))).await;
     }
 }
 
@@ -99,8 +239,11 @@ struct ChunkTask {
     started_at: Option<Instant>,
     last_progress_at: Option<Instant>,
     downloaded_in_chunk: Arc<AtomicU64>,
+    /// 该分块已经失败过的次数；重试时沿用并递增，不会被清零
     attempts: u32,
     is_rescue: bool,
+    /// 处于重试队列时，最早可以重新分配的时间（指数退避）
+    retry_at: Option<Instant>,
 }
 
 impl Clone for ChunkTask {
@@ -114,8 +257,18 @@ impl Clone for ChunkTask {
             )),
             attempts: self.attempts,
             is_rescue: self.is_rescue,
+            retry_at: self.retry_at,
         }
     }
+}
+
+/// 分块失败后调度器给出的处理结果
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ChunkRetryDecision {
+    /// 已放入重试队列，`delay` 之后才会被重新分配
+    Retry { attempts: u32, delay: Duration },
+    /// 已达到 `MAX_ATTEMPTS_PER_CHUNK`，该下载源应当判定失败
+    Exhausted { attempts: u32 },
 }
 
 struct SharedDownloadState {
@@ -123,6 +276,8 @@ struct SharedDownloadState {
     total_downloaded: Arc<AtomicU64>,
     last_mile_enabled: AtomicBool,
     failed: AtomicBool,
+    /// 失败原因是分块重试次数用完（而不是取消 / 超时等）
+    retries_exhausted: AtomicBool,
     error_msg: StdMutex<Option<String>>,
     cancel: Arc<AtomicBool>,
 }
@@ -132,6 +287,8 @@ struct DynamicScheduler {
     total_size: u64,
     base_chunk: u64,
     in_flight: VecDeque<ChunkTask>,
+    /// 失败后等待重试的分块（保留 attempts，按 retry_at 退避）
+    retry_queue: VecDeque<ChunkTask>,
     completed_offsets: VecDeque<(u64, u64)>,
     total_downloaded: Arc<AtomicU64>,
     last_mile_enabled: bool,
@@ -147,6 +304,7 @@ impl DynamicScheduler {
             total_size,
             base_chunk,
             in_flight: VecDeque::new(),
+            retry_queue: VecDeque::new(),
             completed_offsets: VecDeque::new(),
             total_downloaded,
             last_mile_enabled: false,
@@ -195,8 +353,25 @@ impl DynamicScheduler {
     }
 
     fn alloc_next(&mut self) -> Option<ChunkTask> {
-        if self.is_dead() {
-            return None;
+        // 失败的分块优先重试：沿用原来的 attempts（不清零），并且要等退避时间到了才重新分配
+        if !self.retry_queue.is_empty() {
+            let now = Instant::now();
+            let ready = self
+                .retry_queue
+                .iter()
+                .position(|c| c.retry_at.map_or(true, |t| t <= now));
+            return match ready.and_then(|pos| self.retry_queue.remove(pos)) {
+                Some(mut task) => {
+                    task.started_at = Some(now);
+                    task.last_progress_at = Some(now);
+                    task.downloaded_in_chunk = Arc::new(AtomicU64::new(0));
+                    task.retry_at = None;
+                    self.in_flight.push_back(task.clone());
+                    Some(task)
+                }
+                // 还有分块在退避中：暂停分配新分块，避免源站出错时换个分块继续高频请求
+                None => None,
+            };
         }
         if self.alloc_cursor < self.total_size {
             let remaining = self.total_size - self.alloc_cursor;
@@ -224,6 +399,7 @@ impl DynamicScheduler {
                 downloaded_in_chunk: Arc::new(AtomicU64::new(0)),
                 attempts: 0,
                 is_rescue: false,
+                retry_at: None,
             };
             self.in_flight.push_back(task.clone());
             return Some(task);
@@ -269,6 +445,7 @@ impl DynamicScheduler {
         if let Some(idx) = best_idx {
             let c = &self.in_flight[idx];
             let orig_range = c.range;
+            let orig_attempts = c.attempts;
             let current_downloaded = c.downloaded_in_chunk.load(Ordering::Relaxed);
             let new_start = orig_range
                 .start
@@ -284,8 +461,10 @@ impl DynamicScheduler {
                 started_at: Some(Instant::now()),
                 last_progress_at: Some(Instant::now()),
                 downloaded_in_chunk: Arc::new(AtomicU64::new(0)),
-                attempts: 0,
+                // 拆出来的救援分块继承原分块的失败次数，避免借拆分把重试计数清零
+                attempts: orig_attempts,
                 is_rescue: true,
+                retry_at: None,
             };
             self.in_flight[idx].range = Range {
                 start: orig_range.start,
@@ -311,46 +490,60 @@ impl DynamicScheduler {
         }
     }
 
-    fn mark_chunk_failed(&mut self, start: u64, end: u64) {
-        if let Some(pos) = self
+    /// 记录一次分块失败。
+    ///
+    /// 失败次数沿用该分块已有的 attempts 再 +1（旧实现会回退 alloc_cursor，
+    /// 导致同一范围被当作 attempts = 0 的新分块重新分配，重试上限永远触发不了）。
+    /// 未达上限：放入重试队列，按指数退避（参考 Retry-After，但不超过上限）后再分配；
+    /// 达到上限：返回 Exhausted，由调用方让整个下载源失败。
+    fn mark_chunk_failed(
+        &mut self,
+        chunk: &ChunkTask,
+        retry_after: Option<Duration>,
+    ) -> ChunkRetryDecision {
+        let range = chunk.range;
+        let tracked_attempts = self
             .in_flight
             .iter()
-            .position(|c| c.range.start == start && c.range.end == end)
-        {
-            if let Some(c) = self.in_flight.remove(pos) {
-                let new_cursor = self.alloc_cursor.min(start);
-                self.alloc_cursor = new_cursor;
-                let mut back = c;
-                back.attempts += 1;
-                back.started_at = None;
-                back.last_progress_at = None;
-                back.downloaded_in_chunk = Arc::new(AtomicU64::new(0));
-                back.is_rescue = false;
-                if back.attempts <= MAX_RETRIES_PER_CHUNK {
-                    self.in_flight.push_front(back);
-                } else {
-                    drop(back);
-                }
-            }
-        } else {
-            let new_cursor = self.alloc_cursor.min(start);
-            self.alloc_cursor = new_cursor;
+            .position(|c| c.range.start == range.start && c.range.end == range.end)
+            .and_then(|pos| self.in_flight.remove(pos))
+            .map(|c| c.attempts)
+            .unwrap_or(0);
+        let attempts = tracked_attempts.max(chunk.attempts).saturating_add(1);
+        if attempts >= MAX_ATTEMPTS_PER_CHUNK {
+            return ChunkRetryDecision::Exhausted { attempts };
         }
+        let delay = retry_backoff(attempts)
+            .max(retry_after.unwrap_or(Duration::ZERO))
+            .min(RETRY_BACKOFF_MAX);
+        self.retry_queue.push_back(ChunkTask {
+            range,
+            started_at: None,
+            last_progress_at: None,
+            downloaded_in_chunk: Arc::new(AtomicU64::new(0)),
+            attempts,
+            is_rescue: false,
+            retry_at: Some(Instant::now() + delay),
+        });
+        ChunkRetryDecision::Retry { attempts, delay }
     }
 
-    fn total_failures(&self) -> u32 {
-        self.in_flight.iter().map(|c| c.attempts).sum::<u32>()
+    /// 距离最早一个待重试分块可以重新分配还要等多久；没有待重试分块时返回 None
+    fn next_retry_wait(&self) -> Option<Duration> {
+        let now = Instant::now();
+        self.retry_queue
+            .iter()
+            .map(|c| {
+                c.retry_at
+                    .map_or(Duration::ZERO, |t| t.saturating_duration_since(now))
+            })
+            .min()
     }
 
     fn is_done(&self) -> bool {
-        self.alloc_cursor >= self.total_size && self.in_flight.is_empty()
-    }
-
-    fn is_dead(&self) -> bool {
-        if self.in_flight.is_empty() {
-            return false;
-        }
-        self.in_flight.iter().all(|c| c.attempts >= 2)
+        self.alloc_cursor >= self.total_size
+            && self.in_flight.is_empty()
+            && self.retry_queue.is_empty()
     }
 
     fn remaining_ratio(&self) -> f64 {
@@ -655,25 +848,38 @@ async fn download_file_internal(
     
     let mut last_err: Option<String> = None;
     let mut urls_tried: Vec<String> = Vec::new();
-    let mut url_idx = 0usize;
-    
-    for attempt in 0..MAX_RETRIES_PER_URL.max(1) {
-        if url_pool.is_empty() {
+    // 在多个下载源之间轮换；同一 URL 有次数上限且重试前指数退避，
+    // 内部已重试到上限的 URL（分块重试用完）直接跳过，只切换镜像
+    let mut plan = UrlRetryPlan::new(url_pool.len(), MAX_ATTEMPTS_PER_URL, MAX_DOWNLOAD_ATTEMPTS);
+    let mut attempt: u32 = 0;
+
+    while let Some((url_index, backoff)) = plan.next() {
+        attempt += 1;
+        let url = url_pool[url_index].clone();
+
+        if !backoff.is_zero() {
+            println!(
+                "[Download] 等待 {}ms 后再次尝试同一下载源: {}",
+                backoff.as_millis(),
+                url
+            );
+        }
+        if !sleep_unless_cancelled(backoff, &cancel_arc).await {
+            println!("[Download] ✗ 已取消: {}", resolved_file_name);
+            last_err = Some("已取消".to_string());
             break;
         }
-        
-        let url = url_pool[url_idx % url_pool.len()].clone();
+
         urls_tried.push(url.clone());
-        
+
         println!(
             "[Download] [{}] 尝试URL[{}]: {} | 文件: {}",
-            attempt + 1,
-            url_idx % url_pool.len(),
+            attempt,
+            url_index,
             url,
             resolved_file_name
         );
-        url_idx += 1;
-        
+
         match try_download_to_temp(
             &url,
             &temp_path,
@@ -715,6 +921,13 @@ async fn download_file_internal(
             Err(e) => {
                 last_err = Some(e.to_string());
                 println!("[Download] ✗ 失败: {} | 错误: {}", resolved_file_name, e);
+                if e.downcast_ref::<SourceRetriesExhausted>().is_some() {
+                    plan.mark_exhausted(url_index);
+                    println!(
+                        "[Download] ! 该下载源已重试到上限, 不再重复尝试: {}",
+                        url
+                    );
+                }
                 let _ = fs::remove_file(&temp_path);
                 let part_path = target.with_extension(format!(
                     "{}.part",
@@ -1094,6 +1307,7 @@ async fn try_download_to_temp(
         total_downloaded: total_downloaded.clone(),
         last_mile_enabled: AtomicBool::new(false),
         failed: AtomicBool::new(false),
+        retries_exhausted: AtomicBool::new(false),
         error_msg: StdMutex::new(None),
         cancel: cancel.clone(),
     });
@@ -1297,6 +1511,10 @@ async fn try_download_to_temp(
             .ok()
             .and_then(|guard| guard.as_ref().cloned())
             .unwrap_or_else(|| "下载失败".to_string());
+        if state.retries_exhausted.load(Ordering::SeqCst) {
+            // 分块已在内部按上限重试过，告诉外层不要再对同一 URL 整轮重试
+            return Err(anyhow::Error::new(SourceRetriesExhausted(msg)));
+        }
         return Err(anyhow!(msg));
     }
     
@@ -1346,44 +1564,29 @@ async fn worker_loop(
         
         let maybe_chunk = {
             let mut s = scheduler.lock().await;
-            if s.is_dead() {
-                state.failed.store(true, Ordering::SeqCst);
-                let mut em = state.error_msg.lock().unwrap();
-                *em = Some(format!(
-                    "chunk 全部重试超限 ({} 个未完成)",
-                    s.in_flight_count()
-                ));
-                return;
-            }
             s.alloc_next()
         };
-        
+
         let chunk = match maybe_chunk {
             Some(c) => c,
             None => {
-                let done = {
+                let (done, retry_wait) = {
                     let s = scheduler.lock().await;
-                    s.is_done()
+                    (s.is_done(), s.next_retry_wait())
                 };
                 if done {
                     return;
                 }
-                tokio::time::sleep(Duration::from_millis(200)).await;
+                // 有分块在退避中时睡到可以重试为止；每轮最多 200ms，期间仍能及时响应取消 / 失败
+                let wait = retry_wait
+                    .unwrap_or(Duration::from_millis(200))
+                    .clamp(Duration::from_millis(1), Duration::from_millis(200));
+                tokio::time::sleep(wait).await;
                 continue;
             }
         };
-        
+
         let range = chunk.range;
-        if chunk.attempts >= MAX_RETRIES_PER_CHUNK {
-            state.failed.store(true, Ordering::SeqCst);
-            let mut em = state.error_msg.lock().unwrap();
-            *em = Some(format!(
-                "chunk 重试次数超限 (bytes {}-{})",
-                range.start, range.end
-            ));
-            return;
-        }
-        
         let chunk_start = Instant::now();
         let attempt = chunk.attempts;
         tick_counter += 1;
@@ -1413,17 +1616,61 @@ async fn worker_loop(
                 );
             }
             Err(e) => {
+                // 该分块已计入 total_downloaded 的字节并没有写盘，扣回去，避免重试后进度虚高
+                let counted = chunk.downloaded_in_chunk.swap(0, Ordering::Relaxed);
+                if counted > 0 {
+                    let _ = state.total_downloaded.fetch_update(
+                        Ordering::Relaxed,
+                        Ordering::Relaxed,
+                        |v| Some(v.saturating_sub(counted)),
+                    );
+                }
+                if state.cancel.load(Ordering::SeqCst) || state.failed.load(Ordering::SeqCst) {
+                    // 已取消或其他 worker 已判定失败，不再记入重试
+                    return;
+                }
                 let elapsed = chunk_start.elapsed().as_secs_f64();
-                println!(
-                    "[Download]     ✗ chunk {}-{} 失败 (尝试 {}次, {:.1}s, 错误: {})",
-                    range.start,
-                    range.end,
-                    attempt + 1,
-                    elapsed,
-                    e
-                );
-                let mut s = scheduler.lock().await;
-                s.mark_chunk_failed(range.start, range.end);
+                let retry_after = e
+                    .downcast_ref::<ChunkHttpStatusError>()
+                    .and_then(|h| h.retry_after);
+                let decision = {
+                    let mut s = scheduler.lock().await;
+                    s.mark_chunk_failed(&chunk, retry_after)
+                };
+                match decision {
+                    ChunkRetryDecision::Retry { attempts, delay } => {
+                        println!(
+                            "[Download]     ✗ chunk {}-{} 失败 (第 {}/{} 次, {:.1}s, 错误: {:#}), {}ms 后重试",
+                            range.start,
+                            range.end,
+                            attempts,
+                            MAX_ATTEMPTS_PER_CHUNK,
+                            elapsed,
+                            e,
+                            delay.as_millis()
+                        );
+                    }
+                    ChunkRetryDecision::Exhausted { attempts } => {
+                        println!(
+                            "[Download]     ✗ chunk {}-{} 失败 (第 {}/{} 次, {:.1}s, 错误: {:#}), 已达重试上限, 放弃该下载源",
+                            range.start,
+                            range.end,
+                            attempts,
+                            MAX_ATTEMPTS_PER_CHUNK,
+                            elapsed,
+                            e
+                        );
+                        if let Ok(mut em) = state.error_msg.lock() {
+                            *em = Some(format!(
+                                "分块 bytes {}-{} 连续失败 {} 次, 已达重试上限: {:#}",
+                                range.start, range.end, attempts, e
+                            ));
+                        }
+                        state.retries_exhausted.store(true, Ordering::SeqCst);
+                        state.failed.store(true, Ordering::SeqCst);
+                        return;
+                    }
+                }
             }
         }
     }
@@ -1451,12 +1698,11 @@ async fn download_chunk(
         .with_context(|| format!("请求 chunk {}-{} 失败", range.start, range.end))?;
     
     if !resp.status().is_success() && resp.status().as_u16() != 206 {
-        return Err(anyhow!(
-            "HTTP {} (bytes {}-{})",
-            resp.status(),
-            range.start,
-            range.end
-        ));
+        return Err(anyhow::Error::new(ChunkHttpStatusError {
+            status: resp.status(),
+            retry_after: parse_retry_after(resp.headers()),
+            range,
+        }));
     }
     
     use futures::stream::StreamExt;
@@ -2456,4 +2702,430 @@ async fn smart_batch_download(
     let success_count = successes_arc.load(Ordering::SeqCst) as usize;
     let fail_list = failures.lock().ok().map(|m| m.clone()).unwrap_or_default();
     (success_count, fail_list)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{Read as _, Write as _};
+    use std::net::{Shutdown, TcpListener, TcpStream};
+    use std::sync::atomic::AtomicUsize;
+
+    // ---------- 退避与外层重试计划 ----------
+
+    #[test]
+    fn retry_backoff_is_exponential_and_capped() {
+        assert_eq!(retry_backoff(0), Duration::ZERO);
+        assert_eq!(retry_backoff(1), RETRY_BACKOFF_BASE);
+        assert_eq!(retry_backoff(2), RETRY_BACKOFF_BASE * 2);
+        assert_eq!(retry_backoff(3), RETRY_BACKOFF_BASE * 4);
+        assert_eq!(retry_backoff(40), RETRY_BACKOFF_MAX);
+        assert_eq!(retry_backoff(u32::MAX), RETRY_BACKOFF_MAX);
+        for n in 1..64 {
+            assert!(retry_backoff(n) >= retry_backoff(n - 1));
+            assert!(retry_backoff(n) <= RETRY_BACKOFF_MAX);
+        }
+    }
+
+    #[test]
+    fn parse_retry_after_only_accepts_seconds() {
+        let mut headers = reqwest::header::HeaderMap::new();
+        assert_eq!(parse_retry_after(&headers), None);
+        headers.insert(reqwest::header::RETRY_AFTER, "3".parse().unwrap());
+        assert_eq!(parse_retry_after(&headers), Some(Duration::from_secs(3)));
+        headers.insert(
+            reqwest::header::RETRY_AFTER,
+            "Wed, 21 Oct 2015 07:28:00 GMT".parse().unwrap(),
+        );
+        assert_eq!(parse_retry_after(&headers), None);
+    }
+
+    #[test]
+    fn url_plan_single_url_is_bounded_and_backs_off() {
+        let mut plan = UrlRetryPlan::new(1, 3, 8);
+        assert_eq!(plan.next(), Some((0, Duration::ZERO)));
+        assert_eq!(plan.next(), Some((0, retry_backoff(1))));
+        assert_eq!(plan.next(), Some((0, retry_backoff(2))));
+        assert_eq!(plan.next(), None);
+    }
+
+    #[test]
+    fn url_plan_rotates_mirrors_before_retrying_same_url() {
+        let mut plan = UrlRetryPlan::new(3, 3, 8);
+        let seq: Vec<(usize, Duration)> = std::iter::from_fn(|| plan.next()).collect();
+        let z = Duration::ZERO;
+        let b1 = retry_backoff(1);
+        let b2 = retry_backoff(2);
+        assert_eq!(
+            seq,
+            vec![(0, z), (1, z), (2, z), (0, b1), (1, b1), (2, b1), (0, b2), (1, b2)],
+            "换镜像不等待，同一 URL 再试才退避，总次数受上限约束"
+        );
+    }
+
+    #[test]
+    fn url_plan_skips_exhausted_sources() {
+        let mut plan = UrlRetryPlan::new(2, 3, 8);
+        assert_eq!(plan.next(), Some((0, Duration::ZERO)));
+        plan.mark_exhausted(0);
+        assert_eq!(plan.next(), Some((1, Duration::ZERO)));
+        assert_eq!(plan.next(), Some((1, retry_backoff(1))));
+        assert_eq!(plan.next(), Some((1, retry_backoff(2))));
+        assert_eq!(plan.next(), None);
+
+        // 只有一个源且已耗尽：立即结束，不再整轮重试
+        let mut single = UrlRetryPlan::new(1, 3, 8);
+        assert!(single.next().is_some());
+        single.mark_exhausted(0);
+        assert_eq!(single.next(), None);
+
+        assert_eq!(UrlRetryPlan::new(0, 3, 8).next(), None);
+    }
+
+    // ---------- 分块调度器 ----------
+
+    fn scheduler(total: u64, chunk: u64) -> DynamicScheduler {
+        DynamicScheduler::new(total, Arc::new(AtomicU64::new(0)), chunk)
+    }
+
+    fn set_retry_at(s: &mut DynamicScheduler, at: Instant) {
+        for c in s.retry_queue.iter_mut() {
+            c.retry_at = Some(at);
+        }
+    }
+
+    #[test]
+    fn failed_chunk_keeps_attempts_and_gives_up_at_limit() {
+        let mut s = scheduler(1024 * 1024, 256 * 1024);
+        let mut chunk = s.alloc_next().expect("应分配第一个分块");
+        assert_eq!(chunk.attempts, 0);
+        let (start, end) = (chunk.range.start, chunk.range.end);
+
+        for expected in 1..MAX_ATTEMPTS_PER_CHUNK {
+            assert_eq!(
+                s.mark_chunk_failed(&chunk, None),
+                ChunkRetryDecision::Retry {
+                    attempts: expected,
+                    delay: retry_backoff(expected),
+                }
+            );
+
+            // 退避未结束：既不重发该分块，也不分配新分块（旧实现会立刻分配 attempts = 0 的同范围分块）
+            set_retry_at(&mut s, Instant::now() + Duration::from_secs(60));
+            assert!(s.alloc_next().is_none());
+            assert!(!s.is_done());
+            assert!(s.next_retry_wait().unwrap() > Duration::from_secs(50));
+
+            // 退避结束：拿回的是同一范围，attempts 延续
+            set_retry_at(&mut s, Instant::now());
+            chunk = s.alloc_next().expect("退避结束后应重新分配失败的分块");
+            assert_eq!((chunk.range.start, chunk.range.end), (start, end));
+            assert_eq!(chunk.attempts, expected, "重试时 attempts 不应被清零");
+        }
+
+        assert_eq!(
+            s.mark_chunk_failed(&chunk, None),
+            ChunkRetryDecision::Exhausted {
+                attempts: MAX_ATTEMPTS_PER_CHUNK
+            }
+        );
+        assert!(s.retry_queue.is_empty());
+        assert!(s.in_flight.is_empty());
+    }
+
+    #[test]
+    fn retry_after_extends_backoff_but_is_capped() {
+        let mut s = scheduler(1024 * 1024, 256 * 1024);
+        let c = s.alloc_next().unwrap();
+        let longer = retry_backoff(1) * 3;
+        assert!(longer < RETRY_BACKOFF_MAX);
+        assert_eq!(
+            s.mark_chunk_failed(&c, Some(longer)),
+            ChunkRetryDecision::Retry {
+                attempts: 1,
+                delay: longer,
+            }
+        );
+
+        set_retry_at(&mut s, Instant::now());
+        let c = s.alloc_next().unwrap();
+        assert_eq!(
+            s.mark_chunk_failed(&c, Some(Duration::from_secs(3600))),
+            ChunkRetryDecision::Retry {
+                attempts: 2,
+                delay: RETRY_BACKOFF_MAX,
+            }
+        );
+    }
+
+    #[test]
+    fn chunk_recovers_after_retry_and_scheduler_completes() {
+        let total = 1024 * 1024;
+        let mut s = scheduler(total, 256 * 1024);
+        let first = s.alloc_next().unwrap();
+        assert!(matches!(
+            s.mark_chunk_failed(&first, None),
+            ChunkRetryDecision::Retry { attempts: 1, .. }
+        ));
+        set_retry_at(&mut s, Instant::now());
+
+        let mut covered = 0u64;
+        while let Some(c) = s.alloc_next() {
+            covered += c.range.size();
+            s.mark_done(c.range.start, c.range.end);
+        }
+        assert_eq!(covered, total, "每个字节恰好下载一次");
+        assert!(s.is_done());
+    }
+
+    // ---------- 用本地 HTTP 服务模拟源站 ----------
+
+    const TEST_FILE_SIZE: usize = MEDIUM_CHUNK as usize + 300 * 1024;
+
+    #[derive(Clone, Copy)]
+    enum ChunkFailure {
+        /// 返回 429 + Retry-After
+        TooManyRequests,
+        /// 返回 206，但只给一半数据（分块不完整）
+        ShortBody,
+    }
+
+    struct TestServer {
+        url: String,
+        probe_requests: Arc<AtomicUsize>,
+        chunk_requests: Arc<AtomicUsize>,
+    }
+
+    fn test_body() -> Arc<Vec<u8>> {
+        Arc::new((0..TEST_FILE_SIZE).map(|i| (i % 251) as u8).collect())
+    }
+
+    /// 起一个只监听 127.0.0.1 的极简 HTTP 服务：支持 Range；
+    /// 起始偏移为 0 的请求视为探测请求，其余为分块请求，前 `failing_chunk_requests` 个分块请求按 `failure` 失败。
+    fn start_server(
+        body: Arc<Vec<u8>>,
+        failing_chunk_requests: usize,
+        failure: ChunkFailure,
+    ) -> TestServer {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("绑定本地端口失败");
+        let addr = listener.local_addr().unwrap();
+        let probe_requests = Arc::new(AtomicUsize::new(0));
+        let chunk_requests = Arc::new(AtomicUsize::new(0));
+        let (probe, chunks) = (probe_requests.clone(), chunk_requests.clone());
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(stream) = stream else { continue };
+                let (body, probe, chunks) = (body.clone(), probe.clone(), chunks.clone());
+                std::thread::spawn(move || {
+                    handle_connection(
+                        stream,
+                        &body,
+                        &probe,
+                        &chunks,
+                        failing_chunk_requests,
+                        failure,
+                    )
+                });
+            }
+        });
+        TestServer {
+            url: format!("http://{}/files/test.bin", addr),
+            probe_requests,
+            chunk_requests,
+        }
+    }
+
+    fn handle_connection(
+        mut stream: TcpStream,
+        body: &[u8],
+        probe: &AtomicUsize,
+        chunks: &AtomicUsize,
+        failing_chunk_requests: usize,
+        failure: ChunkFailure,
+    ) {
+        let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
+        let mut req = Vec::new();
+        let mut buf = [0u8; 4096];
+        while !req.windows(4).any(|w| w == b"\r\n\r\n") {
+            match stream.read(&mut buf) {
+                Ok(0) | Err(_) => return,
+                Ok(n) => req.extend_from_slice(&buf[..n]),
+            }
+        }
+        let req = String::from_utf8_lossy(&req).to_string();
+        let len = body.len();
+        let range = req.lines().find_map(|line| {
+            let lower = line.to_ascii_lowercase();
+            let spec = lower.strip_prefix("range:")?.trim().strip_prefix("bytes=")?;
+            let (a, b) = spec.split_once('-')?;
+            let start: usize = a.trim().parse().ok()?;
+            let end: usize = b.trim().parse::<usize>().ok()?.min(len - 1);
+            Some((start, end))
+        });
+
+        let partial = |start: usize, end: usize| -> Vec<u8> {
+            let mut out = format!(
+                "HTTP/1.1 206 Partial Content\r\nContent-Type: application/octet-stream\r\nContent-Range: bytes {}-{}/{}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                start,
+                end,
+                len,
+                end - start + 1
+            )
+            .into_bytes();
+            out.extend_from_slice(&body[start..=end]);
+            out
+        };
+
+        let response = match range {
+            None => {
+                let mut out = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    len
+                )
+                .into_bytes();
+                out.extend_from_slice(body);
+                out
+            }
+            Some((0, end)) => {
+                probe.fetch_add(1, Ordering::SeqCst);
+                partial(0, end)
+            }
+            Some((start, end)) => {
+                let n = chunks.fetch_add(1, Ordering::SeqCst);
+                if n < failing_chunk_requests {
+                    match failure {
+                        ChunkFailure::TooManyRequests => b"HTTP/1.1 429 Too Many Requests\r\nRetry-After: 1\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_vec(),
+                        ChunkFailure::ShortBody => {
+                            let half_end = start + (end - start + 1) / 2 - 1;
+                            partial(start, half_end)
+                        }
+                    }
+                } else {
+                    partial(start, end)
+                }
+            }
+        };
+        let _ = stream.write_all(&response);
+        let _ = stream.flush();
+        let _ = stream.shutdown(Shutdown::Write);
+    }
+
+    fn file_task(dir: &Path, name: &str, urls: Vec<String>, sha1: Option<String>) -> DownloadTask {
+        DownloadTask {
+            file_name: name.to_string(),
+            target_dir: dir.to_path_buf(),
+            urls,
+            sha1,
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn chunk_download_fails_fast_when_source_keeps_failing() {
+        let server = start_server(test_body(), usize::MAX, ChunkFailure::TooManyRequests);
+        let dir = tempfile::tempdir().unwrap();
+        let task = file_task(dir.path(), "always-429.bin", vec![server.url.clone()], None);
+
+        let started = Instant::now();
+        // 修复前：分块 attempts 每次都被清零，只能等 worker 120s 超时，再被外层对同一 URL 重试 8 轮
+        let result = tokio::time::timeout(Duration::from_secs(30), download_file(&task, None, None))
+            .await
+            .expect("应在分块重试上限内快速失败，而不是一直重试到总超时");
+        let elapsed = started.elapsed();
+
+        match result {
+            SingleDownloadResult::Failed { error, urls_tried } => {
+                assert!(error.contains("重试上限"), "错误信息应说明已达重试上限: {error}");
+                assert!(error.contains("429"), "错误信息应带上最后一次的失败原因: {error}");
+                assert_eq!(
+                    urls_tried,
+                    vec![server.url.clone()],
+                    "分块重试已用完的源不应再被外层整轮重试"
+                );
+            }
+            SingleDownloadResult::Success { .. } => panic!("源站一直返回 429，不应下载成功"),
+        }
+        assert_eq!(
+            server.chunk_requests.load(Ordering::SeqCst),
+            MAX_ATTEMPTS_PER_CHUNK as usize,
+            "同一分块的请求次数应等于重试上限"
+        );
+        assert_eq!(server.probe_requests.load(Ordering::SeqCst), 1);
+        assert!(elapsed < Duration::from_secs(10), "失败应及时返回, 实际耗时 {elapsed:?}");
+        let leftovers: Vec<_> = fs::read_dir(dir.path()).unwrap().collect();
+        assert!(leftovers.is_empty(), "失败后不应残留临时文件: {leftovers:?}");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn chunk_retry_recovers_with_correct_content_and_progress() {
+        let body = test_body();
+        let server = start_server(body.clone(), 2, ChunkFailure::ShortBody);
+        let dir = tempfile::tempdir().unwrap();
+        let expected_sha1 = hex::encode(Sha1::digest(body.as_slice()));
+        let task = file_task(
+            dir.path(),
+            "flaky.bin",
+            vec![server.url.clone()],
+            Some(expected_sha1),
+        );
+        let (tx, mut rx) = mpsc::channel(4096);
+
+        let result = tokio::time::timeout(
+            Duration::from_secs(30),
+            download_file(&task, Some(tx), None),
+        )
+        .await
+        .expect("偶发失败的分块应在重试后完成");
+
+        match result {
+            SingleDownloadResult::Success {
+                path,
+                used_url,
+                size,
+                ..
+            } => {
+                assert_eq!(used_url, server.url);
+                assert_eq!(size, TEST_FILE_SIZE as u64);
+                assert!(fs::read(&path).unwrap() == *body, "重试后文件内容应与源文件一致");
+            }
+            SingleDownloadResult::Failed { error, .. } => {
+                panic!("偶发失败的分块应在重试后成功: {error}")
+            }
+        }
+        assert!(server.chunk_requests.load(Ordering::SeqCst) >= 3);
+        assert_eq!(server.probe_requests.load(Ordering::SeqCst), 1);
+        while let Ok((done, total)) = rx.try_recv() {
+            if total > 0 {
+                assert!(done <= total, "失败分块的字节不应重复计入进度: {done}/{total}");
+            }
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn exhausted_source_switches_to_next_mirror() {
+        let body = test_body();
+        let bad = start_server(body.clone(), usize::MAX, ChunkFailure::TooManyRequests);
+        let good = start_server(body.clone(), 0, ChunkFailure::TooManyRequests);
+        let dir = tempfile::tempdir().unwrap();
+        let task = file_task(
+            dir.path(),
+            "mirror.bin",
+            vec![bad.url.clone(), good.url.clone()],
+            None,
+        );
+
+        let result = tokio::time::timeout(Duration::from_secs(30), download_file(&task, None, None))
+            .await
+            .expect("第一个源耗尽后应切换到镜像");
+
+        match result {
+            SingleDownloadResult::Success { path, used_url, .. } => {
+                assert_eq!(used_url, good.url);
+                assert!(fs::read(&path).unwrap() == *body);
+            }
+            SingleDownloadResult::Failed { error, .. } => panic!("镜像可用时不应失败: {error}"),
+        }
+        assert_eq!(bad.chunk_requests.load(Ordering::SeqCst), MAX_ATTEMPTS_PER_CHUNK as usize);
+        assert_eq!(bad.probe_requests.load(Ordering::SeqCst), 1);
+        assert_eq!(good.probe_requests.load(Ordering::SeqCst), 1);
+    }
 }
