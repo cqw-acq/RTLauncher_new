@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import Link from "next/link";
+import { NavLink } from "@/components/nav-link";
 import { invoke } from "@tauri-apps/api/core";
 import {
   Gamepad2,
@@ -208,7 +208,7 @@ export default function GameSettings() {
                     {SETTING_CARDS.slice(0, 3).map((card) => {
                       const Icon = card.icon;
                       return (
-                        <Link
+                        <NavLink
                           key={card.href}
                           href={card.href}
                           suppressHydrationWarning
@@ -221,7 +221,7 @@ export default function GameSettings() {
                           <p className="text-xs text-muted-foreground text-center leading-tight px-2">
                             {t(card.description)}
                           </p>
-                        </Link>
+                        </NavLink>
                       );
                     })}
                   </div>
@@ -231,7 +231,7 @@ export default function GameSettings() {
                     {SETTING_CARDS.slice(3, 7).map((card) => {
                       const Icon = card.icon;
                       return (
-                        <Link
+                        <NavLink
                           key={card.href}
                           href={card.href}
                           suppressHydrationWarning
@@ -244,7 +244,7 @@ export default function GameSettings() {
                           <p className="text-xs text-muted-foreground text-center leading-tight px-2">
                             {t(card.description)}
                           </p>
-                        </Link>
+                        </NavLink>
                       );
                     })}
                   </div>
@@ -255,7 +255,7 @@ export default function GameSettings() {
 
           {/* 底部：右下角 · 跳转到整合包管理的按钮（距离底部有高度） */}
           <div className="shrink-0 flex justify-end px-4 pt-4 pb-8">
-            <Link
+            <NavLink
               href="/game-settings/modpacks"
               suppressHydrationWarning
               className="flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl border border-border bg-card/30 hover:bg-accent/40 active:bg-accent/70 transition-all hover:border-foreground/50 focus:outline-none focus-visible:ring-2 focus-visible:ring-foreground/50 text-sm font-medium"
@@ -263,7 +263,7 @@ export default function GameSettings() {
               <Package className="size-4" />
               <span>{t("gameSettings.goToModpackManagement")}</span>
               <ChevronRight className="size-4" />
-            </Link>
+            </NavLink>
           </div>
         </div>
       </div>

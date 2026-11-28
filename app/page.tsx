@@ -1,6 +1,6 @@
 "use client";
 
-import Link from "next/link";
+import { NavLink } from "@/components/nav-link";
 import { useState } from "react";
 import { motion } from "framer-motion";
 import {
@@ -132,9 +132,9 @@ export default function Home() {
                 className="size-8"
                 title={t("checkUpdate.checkUpdateButton")}
               >
-                <Link href="/check-update">
+                <NavLink href="/check-update">
                   <Package className="size-4" />
-                </Link>
+                </NavLink>
               </Button>
               <LaunchStatusBadge status={status} className="mt-1" />
             </div>
@@ -205,10 +205,10 @@ export default function Home() {
                         className="w-full gap-2"
                         asChild
                       >
-                        <Link href="/check-update">
+                        <NavLink href="/check-update">
                           <Package className="size-3.5" />
                           {t("checkUpdate.checkUpdateButton")}
-                        </Link>
+                        </NavLink>
                       </Button>
                     </div>
                   </CardContent>
@@ -290,10 +290,10 @@ export default function Home() {
                             <VersionSelectorDialog compact />
                           </div>
                           <Button variant="outline" size="lg" asChild>
-                            <Link href="/launch" className="gap-2">
+                            <NavLink href="/launch" className="gap-2">
                               {t("home.viewLaunchDetails")}
                               <ArrowRight className="size-4" />
-                            </Link>
+                            </NavLink>
                           </Button>
                         </div>
                       </div>
@@ -325,7 +325,7 @@ export default function Home() {
                 <CardContent>
                   <div className="grid gap-2 sm:grid-cols-2">
                     {HOME_QUICK_ACTIONS.map(({ href, titleKey, descriptionKey, icon: Icon, iconClassName }) => (
-                      <Link
+                      <NavLink
                         key={href}
                         href={href}
                         className="group flex min-w-0 items-center gap-3 rounded-xl border border-transparent p-3 transition-colors hover:border-border hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -338,7 +338,7 @@ export default function Home() {
                           <span className="block truncate text-xs text-muted-foreground">{t(descriptionKey)}</span>
                         </span>
                         <ArrowRight className="size-3.5 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
-                      </Link>
+                      </NavLink>
                     ))}
                   </div>
 
@@ -346,7 +346,7 @@ export default function Home() {
 
                   <div className="grid gap-2 grid-cols-[repeat(auto-fill,minmax(min(200px,100%),1fr))]">
                     {HOME_GAME_QUICK_ACTIONS.map(({ href, titleKey, descriptionKey, icon: Icon, iconClassName }) => (
-                      <Link
+                      <NavLink
                         key={href}
                         href={href}
                         className="group flex min-w-0 items-center gap-3 rounded-xl border border-transparent p-3 transition-colors hover:border-border hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -359,7 +359,7 @@ export default function Home() {
                           <span className="block truncate text-xs text-muted-foreground">{t(descriptionKey)}</span>
                         </span>
                         <ArrowRight className="size-3.5 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
-                      </Link>
+                      </NavLink>
                     ))}
                   </div>
                 </CardContent>
@@ -428,10 +428,10 @@ export default function Home() {
                         className="w-full gap-2"
                         asChild
                       >
-                        <Link href="/check-update">
+                        <NavLink href="/check-update">
                           <Package className="size-3.5" />
                           {t("checkUpdate.checkUpdateButton")}
-                        </Link>
+                        </NavLink>
                       </Button>
                     </div>
                   </CardContent>
