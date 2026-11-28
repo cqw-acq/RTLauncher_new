@@ -201,7 +201,10 @@ struct LittleSkinClient {
 impl LittleSkinClient {
     pub fn new() -> Self {
         Self {
-            client: Client::new(),
+            client: Client::builder()
+                .timeout(Duration::from_secs(10))
+                .build()
+                .unwrap_or_else(|_| Client::new()),
             redirect_uri: "http://localhost:40323".to_string(),
             client_id: "1340".to_string(),
             client_secret: "vF9bybNWzp3AzSrICE6pZMrMzZgEKJtdf8HTz9Ep".to_string(),
@@ -278,35 +281,36 @@ impl LittleSkinClient {
                             let query_pairs: HashMap<_, _> =
                                 parsed_url.query_pairs().into_owned().collect();
 
-                            // 用户在浏览器里点了"拒绝"
-                            if let Some(err) = query_pairs.get("error") {
-                                let desc = query_pairs
-                                    .get("error_description")
-                                    .map(|s| s.as_str())
-                                    .unwrap_or("");
-                                let _ = code_tx.send(format!("__error__:{}:{}", err, desc));
-                                let body =
-                                    "<html><body><h1>已拒绝授权，请回到启动器重试</h1></body></html>";
-                                let response = format!(
-                                    "HTTP/1.1 400 Bad Request\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                                    body.len(),
-                                    body
-                                );
-                                let _ = stream.write_all(response.as_bytes());
-                                let _ = stream.flush();
-                                break;
-                            }
+                            let state_ok = query_pairs
+                                .get("state")
+                                .map(|s| s == &expected_state_for_thread)
+                                .unwrap_or(false);
 
-                            if let Some(code) = query_pairs.get("code") {
-                                let state_ok = query_pairs
-                                    .get("state")
-                                    .map(|s| s == &expected_state_for_thread)
-                                    .unwrap_or(false);
-                                if state_ok {
+                            if !state_ok {
+                                // 旧标签页 / 伪造回调：忽略，继续等
+                                eprintln!("[LittleSkin OAuth] 收到 state 不匹配的回调，已忽略");
+                            } else {
+                                // 用户在浏览器里点了"拒绝"
+                                if let Some(err) = query_pairs.get("error") {
+                                    let desc = query_pairs
+                                        .get("error_description")
+                                        .map(|s| s.as_str())
+                                        .unwrap_or("");
+                                    let _ = code_tx.send(format!("__error__:{}:{}", err, desc));
+                                    let body =
+                                        "<html><body><h1>已拒绝授权，请回到启动器重试</h1></body></html>";
+                                    let response = format!(
+                                        "HTTP/1.1 400 Bad Request\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                                        body.len(),
+                                        body
+                                    );
+                                    let _ = stream.write_all(response.as_bytes());
+                                    let _ = stream.flush();
+                                    break;
+                                }
+                                if let Some(code) = query_pairs.get("code") {
                                     let _ = code_tx.send(code.clone());
                                     got_code = true;
-                                } else {
-                                    eprintln!("[LittleSkin OAuth] 收到 state 不匹配的回调，已忽略");
                                 }
                             }
                         }
@@ -354,7 +358,7 @@ impl LittleSkinClient {
                 let _ = handle.join();
                 return Err("[CANCELLED] 已取消 LittleSkin 登录".to_string());
             }
-            match code_rx.try_recv() {
+            match code_rx.recv_timeout(Duration::from_millis(200)) {
                 Ok(code) => {
                     // 用户在浏览器里拒绝了授权
                     if let Some(msg) = code.strip_prefix("__error__:") {
@@ -426,23 +430,21 @@ impl LittleSkinClient {
                     }
                     return Err("未找到有效的玩家信息".to_string());
                 }
-                Err(std::sync::mpsc::TryRecvError::Empty) => {
-                    // 未收到 code，继续轮询
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                    // 这 200ms 内没有 code
+                    if start_time.elapsed() >= OAUTH_TIMEOUT {
+                        stop.store(true, Ordering::SeqCst);
+                        let _ = handle.join();
+                        return Err(format!(
+                            "登录超时：{} 秒内未完成浏览器授权，请重试",
+                            OAUTH_TIMEOUT.as_secs()
+                        ));
+                    }
                 }
-                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                    // 监听线程退出了，而且没有待处理的 code
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
                     let _ = handle.join();
                     return Err("回调监听已停止，请重试".to_string());
                 }
-            }
-            thread::sleep(Duration::from_millis(200));
-            if start_time.elapsed() >= OAUTH_TIMEOUT {
-                stop.store(true, Ordering::SeqCst);
-                let _ = handle.join();
-                return Err(format!(
-                    "登录超时：{} 秒内未完成浏览器授权，请重试",
-                    OAUTH_TIMEOUT.as_secs()
-                ));
             }
         }
     }
