@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { detectLoaderKeyword, resolveDependencyTarget } from "./mod-dependency-target";
+import { dependencyInstanceArgs, detectLoaderKeyword, resolveDependencyTarget } from "./mod-dependency-target";
 
 describe("detectLoaderKeyword", () => {
   it("prefers neoforge over forge", () => {
@@ -40,5 +40,27 @@ describe("resolveDependencyTarget", () => {
 
   it("keeps the previous defaults when nothing is known", () => {
     expect(resolveDependencyTarget(null, {})).toEqual({ mcVersion: "1.20.1", loader: "forge" });
+  });
+});
+
+describe("dependencyInstanceArgs", () => {
+  it("passes the selected instance to the dependency lookup", () => {
+    expect(
+      dependencyInstanceArgs(
+        { minecraft_version: "1.21.1", loader: "Quilt" },
+        "/mc/versions/1.21.1-quilt",
+      ),
+    ).toEqual({
+      instanceDir: "/mc/versions/1.21.1-quilt",
+      instanceMcVersion: "1.21.1",
+      instanceLoader: "quilt",
+    });
+  });
+
+  it("falls back to the download cache without a usable selected instance", () => {
+    expect(dependencyInstanceArgs(null, "/mc/versions/1.21.1-fabric")).toEqual({});
+    expect(dependencyInstanceArgs({ minecraft_version: "1.21.1", loader: "Fabric" }, undefined)).toEqual({});
+    expect(dependencyInstanceArgs({ minecraft_version: "1.21.1", loader: "Vanilla" }, "/mc/versions/1.21.1")).toEqual({});
+    expect(dependencyInstanceArgs({ minecraft_version: "", loader: "Fabric" }, "/mc/versions/x")).toEqual({});
   });
 });

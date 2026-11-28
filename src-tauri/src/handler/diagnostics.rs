@@ -425,8 +425,14 @@ fn json_strings(value: &serde_json::Value, key: &str) -> Vec<String> {
 
 fn modrinth_search_url(query: &str, mc_version: &str, loader: &str) -> String {
     let mut facets = Vec::new();
-    if let Some(loader) = mod_links::canonical_mod_loader(loader) {
-        facets.push(serde_json::json!([format!("categories:{}", loader)]));
+    // Values inside one facet array are OR-ed: a Quilt instance also finds
+    // Fabric-only projects.
+    let loaders: Vec<String> = mod_links::accepted_mod_loaders(loader)
+        .into_iter()
+        .map(|loader| format!("categories:{}", loader))
+        .collect();
+    if !loaders.is_empty() {
+        facets.push(serde_json::json!(loaders));
     }
     facets.push(serde_json::json!([format!("versions:{}", mc_version)]));
     facets.push(serde_json::json!(["project_type:mod"]));
@@ -508,12 +514,14 @@ async fn search_modrinth(query: &str, mc_version: &str, loader: &str) -> Option<
         .map(|(result, _)| result)
 }
 
+/// `modLoaderType` for the CurseForge search. Quilt is left unfiltered: Quilt
+/// instances also accept Fabric-only files, and the file is picked locally by
+/// `select_curseforge_compatible_file`.
 fn curseforge_loader_type(loader: &str) -> &'static str {
     match mod_links::canonical_mod_loader(loader) {
         Some("forge") => "1",
         Some("liteloader") => "3",
         Some("fabric") => "4",
-        Some("quilt") => "5",
         Some("neoforge") => "6",
         _ => "",
     }
@@ -803,7 +811,7 @@ pub async fn auto_download_missing_dependency(
     }
 
     // 完整检查：provides / quilt.mod.json / 文件哈希 / Modrinth 项目
-    let mut index = mod_links::load_installed_mod_index(mods_dir.clone()).await;
+    let mut index = mod_links::load_installed_mod_index(vec![mods_dir.clone()]).await;
     let requested = ModCandidateIdentity {
         names: vec![mod_id.clone()],
         ..Default::default()
@@ -1232,7 +1240,7 @@ pub async fn auto_download_with_dependencies(
 
     // Everything already in mods/ (hash, mod id, Modrinth project) is treated as
     // installed: a second copy of a mod crashes Forge / NeoForge on startup.
-    let mut index = mod_links::load_installed_mod_index(mods_dir.clone()).await;
+    let mut index = mod_links::load_installed_mod_index(vec![mods_dir.clone()]).await;
     let mut results = Vec::new();
     let mut visited: HashSet<String> = HashSet::new();
     let mut queue: VecDeque<DependencyTarget> = VecDeque::from([DependencyTarget::root(mod_id)]);
@@ -1275,7 +1283,7 @@ pub async fn auto_download_with_dependencies(
                         file_path: Some(path),
                     });
                     for dep in &candidate.dependencies {
-                        if dep.dependency_type == "required" && !is_platform_dep(&dep.mod_id) {
+                        if dep.dependency_type == "required" && !blocks_auto_install(&dep.mod_id) {
                             queue.push_back(DependencyTarget::required_by(dep, target.depth + 1));
                         }
                     }
@@ -1327,6 +1335,15 @@ pub struct LoaderLogReport {
     pub has_crash: bool,
     pub errors: Vec<LoaderDependencyError>,
     pub summary: String,
+}
+
+/// Dependencies `auto_download_with_dependencies` never installs on its own:
+/// loaders, the game, Fabric API modules and library platforms such as
+/// Architectury. Fabric API itself is installed like any other mod, unless a
+/// jar already provides it (e.g. Quilted Fabric API), which the installed-mod
+/// index catches.
+fn blocks_auto_install(mod_id: &str) -> bool {
+    is_platform_dep(mod_id) && mod_links::normalize_mod_key(mod_id) != "fabricapi"
 }
 
 fn is_platform_dep(mod_id: &str) -> bool {
@@ -1812,10 +1829,14 @@ mod dependency_install_tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     fn jar_bytes(fabric_mod_json: &str) -> Vec<u8> {
+        jar_entry_bytes("fabric.mod.json", fabric_mod_json)
+    }
+
+    fn jar_entry_bytes(entry: &str, content: &str) -> Vec<u8> {
         let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
         let options = FileOptions::default().compression_method(CompressionMethod::Stored);
-        writer.start_file("fabric.mod.json", options).unwrap();
-        writer.write_all(fabric_mod_json.as_bytes()).unwrap();
+        writer.start_file(entry, options).unwrap();
+        writer.write_all(content.as_bytes()).unwrap();
         writer.finish().unwrap().into_inner()
     }
 
@@ -2023,5 +2044,98 @@ mod dependency_install_tests {
         };
         assert!(target.query_is_id());
         assert!(!DependencyTarget::root("sodium".to_string()).query_is_id());
+    }
+
+    #[test]
+    fn only_fabric_api_is_unblocked_for_auto_install() {
+        assert!(!blocks_auto_install("fabric-api"));
+        assert!(!blocks_auto_install("Fabric-API"));
+        assert!(!blocks_auto_install("sodium"));
+        // Library platforms, loaders and single Fabric API modules stay blocked.
+        for mod_id in ["architectury", "fabric-api-base", "fabric-networking-api-v1", "fabricloader", "minecraft", "quilt_loader", "kotlinforforge"] {
+            assert!(blocks_auto_install(mod_id), "{} should stay blocked", mod_id);
+        }
+        // Log parsing and deep analysis still treat fabric-api as a platform mod.
+        assert!(is_platform_dep("fabric-api"));
+    }
+
+    #[test]
+    fn quilt_search_also_finds_fabric_projects() {
+        let facets = |loader: &str| -> serde_json::Value {
+            let url = modrinth_search_url("sodium", "1.21.1", loader);
+            let encoded = url.split("facets=").nth(1).unwrap().split('&').next().unwrap();
+            serde_json::from_str(&urlencoding::decode(encoded).unwrap()).unwrap()
+        };
+        assert_eq!(facets("Quilt")[0], json!(["categories:quilt", "categories:fabric"]));
+        // A Fabric instance never searches Quilt-only projects.
+        assert_eq!(facets("fabric")[0], json!(["categories:fabric"]));
+        assert_eq!(facets("vanilla")[0], json!(["versions:1.21.1"]));
+
+        // CurseForge cannot OR loader types in a search: Quilt is not filtered
+        // server-side and the file is chosen locally.
+        assert_eq!(curseforge_loader_type("quilt"), "");
+        assert_eq!(curseforge_loader_type("fabric"), "4");
+        assert_eq!(curseforge_loader_type("NeoForge"), "6");
+    }
+
+    #[tokio::test]
+    async fn quilted_fabric_api_counts_as_fabric_api() {
+        let (base, hits) = serve(vec![(
+            "/fabric-api.jar",
+            jar_bytes(r#"{"schemaVersion":1,"id":"fabric-api","version":"0.116.7+1.21.1"}"#),
+        )]);
+        let mods_dir = temp_mods_dir("qfapi");
+        std::fs::write(
+            mods_dir.join("qfapi-11.0.0+0.116.7-1.21.1.jar"),
+            jar_entry_bytes(
+                "quilt.mod.json",
+                r#"{"schema_version":1,"quilt_loader":{"group":"org.quiltmc.quilted-fabric-api","id":"quilted_fabric_api","version":"11.0.0","provides":[{"id":"fabric-api","version":"0.116.7"}]}}"#,
+            ),
+        )
+        .unwrap();
+        let mut index = InstalledModIndex::scan(&mods_dir);
+
+        // Required by a Fabric mod on a Quilt instance: already provided.
+        let fabric_api = DependencyTarget::required_by(
+            &ApiDependency {
+                mod_id: "fabric-api".to_string(),
+                slug: Some("fabric-api".to_string()),
+                dependency_type: "required".to_string(),
+                version_range: None,
+                modrinth_project_id: Some("P7dR8mSH".to_string()),
+                curseforge_mod_id: None,
+            },
+            1,
+        );
+        assert!(index.find(&fabric_api.identity()).is_some());
+
+        let candidate = search_result("fabric-api", format!("{}/fabric-api.jar", base), "fabric-api-0.116.7+1.21.1.jar");
+        assert!(matches!(
+            install_mod_candidate(&mods_dir, &mut index, &candidate).await,
+            InstallOutcome::AlreadyInstalled(_)
+        ));
+        assert_eq!(hits.load(Ordering::SeqCst), 0);
+
+        // Even under another slug the downloaded fabric-api jar is discarded.
+        let mirror = search_result("fapi-mirror", format!("{}/fabric-api.jar", base), "fapi-mirror.jar");
+        assert!(matches!(
+            install_mod_candidate(&mods_dir, &mut index, &mirror).await,
+            InstallOutcome::AlreadyInstalled(_)
+        ));
+        assert_eq!(hits.load(Ordering::SeqCst), 1);
+        assert_eq!(jar_names(&mods_dir), vec!["qfapi-11.0.0+0.116.7-1.21.1.jar"]);
+
+        // Without QFAPI, fabric-api is installed like any other dependency.
+        let fabric_dir = temp_mods_dir("fabric-api");
+        let mut fabric_index = InstalledModIndex::scan(&fabric_dir);
+        assert!(fabric_index.find(&fabric_api.identity()).is_none());
+        assert!(matches!(
+            install_mod_candidate(&fabric_dir, &mut fabric_index, &candidate).await,
+            InstallOutcome::Installed { .. }
+        ));
+        assert_eq!(jar_names(&fabric_dir), vec!["fabric-api-0.116.7+1.21.1.jar"]);
+
+        let _ = std::fs::remove_dir_all(&mods_dir);
+        let _ = std::fs::remove_dir_all(&fabric_dir);
     }
 }

@@ -411,6 +411,28 @@ pub(crate) fn canonical_mod_loader(raw: &str) -> Option<&'static str> {
     KNOWN_MOD_LOADERS.iter().copied().find(|loader| lower.contains(loader))
 }
 
+/// Loaders whose builds an instance of `mod_loader` can run, best first.
+/// Quilt runs Fabric mods, so a Quilt instance falls back to Fabric builds when
+/// a dependency has no Quilt build; a Fabric instance never takes Quilt-only
+/// builds. An unknown loader accepts nothing.
+pub(crate) fn accepted_mod_loaders(mod_loader: &str) -> Vec<&'static str> {
+    match canonical_mod_loader(mod_loader) {
+        Some("quilt") => vec!["quilt", "fabric"],
+        Some(loader) => vec![loader],
+        None => Vec::new(),
+    }
+}
+
+/// Position in `accepted` of the first loader listed in `available`
+/// (0 = preferred loader), or `None` when none of them is listed.
+fn loader_preference(accepted: &[&str], available: &[&str]) -> Option<usize> {
+    accepted.iter().position(|loader| {
+        available
+            .iter()
+            .any(|candidate| candidate.eq_ignore_ascii_case(loader))
+    })
+}
+
 pub(crate) fn primary_modrinth_file(version: &serde_json::Value) -> Option<&serde_json::Value> {
     let files = version.get("files")?.as_array()?;
     files
@@ -467,14 +489,16 @@ fn required_modrinth_dependencies(version: &serde_json::Value) -> Vec<serde_json
         .unwrap_or_default()
 }
 
-/// A Modrinth version is compatible only when it lists the exact Minecraft
-/// version and the instance's loader. An unknown loader matches nothing:
+/// How well a Modrinth version fits the instance: `None` unless it lists the
+/// exact Minecraft version and a loader the instance can run (see
+/// `accepted_mod_loaders`); otherwise 0 for the instance's own loader and 1 for
+/// the Fabric fallback of a Quilt instance. An unknown loader matches nothing:
 /// guessing one would install a jar the instance cannot load.
-fn version_is_compatible(
+fn modrinth_loader_rank(
     version: &serde_json::Value,
     mc_version: &str,
     mod_loader: &str,
-) -> bool {
+) -> Option<usize> {
     let mc_version = mc_version.trim();
     let supports_game_version = !mc_version.is_empty()
         && version
@@ -483,24 +507,24 @@ fn version_is_compatible(
             .map(|versions| versions.iter().any(|version| version.as_str() == Some(mc_version)))
             .unwrap_or(false);
     if !supports_game_version {
-        return false;
+        return None;
     }
 
-    let Some(loader) = canonical_mod_loader(mod_loader) else {
-        return false;
-    };
-    version
+    let loaders: Vec<&str> = version
         .get("loaders")
-        .and_then(|loaders| loaders.as_array())
-        .map(|loaders| {
-            loaders.iter().any(|candidate| {
-                candidate
-                    .as_str()
-                    .map(|candidate| candidate.eq_ignore_ascii_case(loader))
-                    .unwrap_or(false)
-            })
-        })
-        .unwrap_or(false)
+        .and_then(|loaders| loaders.as_array())?
+        .iter()
+        .filter_map(|loader| loader.as_str())
+        .collect();
+    loader_preference(&accepted_mod_loaders(mod_loader), &loaders)
+}
+
+fn version_is_compatible(
+    version: &serde_json::Value,
+    mc_version: &str,
+    mod_loader: &str,
+) -> bool {
+    modrinth_loader_rank(version, mc_version, mod_loader).is_some()
 }
 
 fn modrinth_channel_rank(version: &serde_json::Value) -> u8 {
@@ -513,8 +537,10 @@ fn modrinth_channel_rank(version: &serde_json::Value) -> u8 {
 }
 
 /// Chooses the version to install for a dependency: among versions that match
-/// the Minecraft version and loader, a release always beats a beta, which beats
-/// an alpha. Within a channel the newest `date_published` wins, then API order.
+/// the Minecraft version and loader, a build for the instance's own loader beats
+/// the Fabric fallback of a Quilt instance; then a release beats a beta, which
+/// beats an alpha. Within a channel the newest `date_published` wins, then API
+/// order.
 pub(crate) fn select_modrinth_version<'a>(
     versions: &'a [serde_json::Value],
     mc_version: &str,
@@ -530,17 +556,18 @@ pub(crate) fn select_modrinth_version<'a>(
     versions
         .iter()
         .enumerate()
-        .filter(|(_, version)| {
-            version_is_compatible(version, mc_version, mod_loader)
-                && primary_modrinth_file_url(version).is_some()
+        .filter(|(_, version)| primary_modrinth_file_url(version).is_some())
+        .filter_map(|(index, version)| {
+            modrinth_loader_rank(version, mc_version, mod_loader).map(|rank| (rank, index, version))
         })
-        .min_by(|(left_index, left), (right_index, right)| {
-            modrinth_channel_rank(left)
-                .cmp(&modrinth_channel_rank(right))
+        .min_by(|(left_rank, left_index, left), (right_rank, right_index, right)| {
+            left_rank
+                .cmp(right_rank)
+                .then_with(|| modrinth_channel_rank(left).cmp(&modrinth_channel_rank(right)))
                 .then_with(|| published(right).cmp(&published(left)))
                 .then_with(|| left_index.cmp(right_index))
         })
-        .map(|(_, version)| version)
+        .map(|(_, _, version)| version)
 }
 
 async fn get_modrinth_json(
@@ -578,10 +605,12 @@ pub(crate) async fn fetch_modrinth_project_versions(
             urlencoding(&serde_json::json!([mc_version]).to_string()),
         ));
     }
-    if let Some(loader) = canonical_mod_loader(mod_loader) {
+    let loaders = accepted_mod_loaders(mod_loader);
+    if !loaders.is_empty() {
+        // Modrinth matches versions listing any of these loaders.
         params.push(format!(
             "loaders={}",
-            urlencoding(&serde_json::json!([loader]).to_string()),
+            urlencoding(&serde_json::json!(loaders).to_string()),
         ));
     }
     let mut url = format!("https://api.modrinth.com/v2/project/{}/version", urlencoding(project));
@@ -718,6 +747,23 @@ impl InstalledModIndex {
             index.add_jar(&file_name, sha1.as_deref(), &mod_ids);
         }
         index
+    }
+
+    /// Indexes several directories as one: a mod present in any of them counts
+    /// as installed. Missing directories are skipped.
+    pub(crate) fn scan_all(dirs: &[PathBuf]) -> Self {
+        let mut index = Self::default();
+        for dir in dirs {
+            index.merge(Self::scan(dir));
+        }
+        index
+    }
+
+    fn merge(&mut self, other: Self) {
+        self.sha1.extend(other.sha1);
+        self.file_names.extend(other.file_names);
+        self.mod_keys.extend(other.mod_keys);
+        self.modrinth_project_ids.extend(other.modrinth_project_ids);
     }
 
     pub(crate) fn add_jar(&mut self, file_name: &str, sha1: Option<&str>, mod_ids: &[String]) {
@@ -1010,9 +1056,10 @@ pub(crate) async fn enrich_installed_index_with_modrinth(
     }
 }
 
-/// Scans `dir` off the async runtime and enriches it with Modrinth projects.
-pub(crate) async fn load_installed_mod_index(dir: PathBuf) -> InstalledModIndex {
-    let mut index = tokio::task::spawn_blocking(move || InstalledModIndex::scan(&dir))
+/// Scans `dirs` off the async runtime and enriches the result with Modrinth
+/// projects.
+pub(crate) async fn load_installed_mod_index(dirs: Vec<PathBuf>) -> InstalledModIndex {
+    let mut index = tokio::task::spawn_blocking(move || InstalledModIndex::scan_all(&dirs))
         .await
         .unwrap_or_default();
     let client = modrinth_client().await;
@@ -1020,16 +1067,87 @@ pub(crate) async fn load_installed_mod_index(dir: PathBuf) -> InstalledModIndex 
     index
 }
 
-/// Index of the directory `download_resource_file` saves mods into for this
-/// Minecraft version and loader, i.e. where the dependencies will land.
-async fn installed_index_for_download_target(mc_version: &str, mod_loader: &str) -> InstalledModIndex {
-    match get_resource_download_dir("mod", mc_version, mod_loader) {
-        Ok(dir) => load_installed_mod_index(dir).await,
-        Err(error) => {
-            eprintln!("[ModDeps] 无法定位 Mod 下载目录，跳过已安装检查: {}", error);
-            InstalledModIndex::default()
-        }
+/// Whether the selected instance can run mods downloaded for `target_mc` /
+/// `target_loader`: same Minecraft version, and a loader that accepts builds
+/// for the target loader (a Quilt instance also runs Fabric downloads). Only
+/// then do its mods count as installed for the download page.
+pub(crate) fn instance_matches_download_target(
+    instance_mc: &str,
+    instance_loader: &str,
+    target_mc: &str,
+    target_loader: &str,
+) -> bool {
+    let target_mc = target_mc.trim();
+    if target_mc.is_empty() || instance_mc.trim() != target_mc {
+        return false;
     }
+    match canonical_mod_loader(target_loader) {
+        Some(target) => accepted_mod_loaders(instance_loader).contains(&target),
+        None => false,
+    }
+}
+
+/// Directories checked for already installed dependencies on the download
+/// page: the shared download cache for this Minecraft version and loader, plus
+/// `<instance>/mods` of the selected instance when it matches the download.
+fn dependency_index_dirs(
+    cache_dir: Option<PathBuf>,
+    instance_dir: Option<&str>,
+    instance_mc_version: Option<&str>,
+    instance_loader: Option<&str>,
+    mc_version: &str,
+    mod_loader: &str,
+) -> Vec<PathBuf> {
+    let mut dirs: Vec<PathBuf> = cache_dir.into_iter().collect();
+    let Some(instance_dir) = instance_dir.map(str::trim).filter(|dir| !dir.is_empty()) else {
+        return dirs;
+    };
+    let matches = instance_matches_download_target(
+        instance_mc_version.unwrap_or(""),
+        instance_loader.unwrap_or(""),
+        mc_version,
+        mod_loader,
+    );
+    if matches {
+        dirs.push(Path::new(instance_dir).join("mods"));
+    } else {
+        println!(
+            "[ModDeps] 选中实例 ({} / {}) 与下载目标 ({} / {}) 不匹配，不参与已安装检查",
+            instance_mc_version.unwrap_or("?"),
+            instance_loader.unwrap_or("?"),
+            mc_version,
+            mod_loader
+        );
+    }
+    dirs
+}
+
+/// Mods already present where the download page's dependencies would end up:
+/// the download cache `download_resource_file` saves into and, when it
+/// matches, the selected instance.
+async fn installed_index_for_download_target(
+    mc_version: &str,
+    mod_loader: &str,
+    instance_dir: Option<&str>,
+    instance_mc_version: Option<&str>,
+    instance_loader: Option<&str>,
+) -> InstalledModIndex {
+    let cache_dir = match get_resource_download_dir("mod", mc_version, mod_loader) {
+        Ok(dir) => Some(dir),
+        Err(error) => {
+            eprintln!("[ModDeps] 无法定位 Mod 下载目录，跳过缓存目录的已安装检查: {}", error);
+            None
+        }
+    };
+    let dirs = dependency_index_dirs(
+        cache_dir,
+        instance_dir,
+        instance_mc_version,
+        instance_loader,
+        mc_version,
+        mod_loader,
+    );
+    load_installed_mod_index(dirs).await
 }
 
 // ---------------------------------------------------------------------------
@@ -1140,9 +1258,10 @@ async fn resolve_modrinth_dependency_node(
 /// Resolve the selected Modrinth file's transitive `required` dependencies.
 ///
 /// Dependencies already present in the download directory for this Minecraft
-/// version and loader are left out. A URL that does not belong to Modrinth
-/// deliberately returns an empty list: the selected CurseForge file cannot be
-/// safely matched without its file ID.
+/// version and loader, or in the selected instance (`instance_dir`, used only
+/// when its version and loader match the download), are left out. A URL that
+/// does not belong to Modrinth deliberately returns an empty list: the selected
+/// CurseForge file cannot be safely matched without its file ID.
 #[allow(dependency_on_unit_never_type_fallback)]
 #[tauri::command]
 pub async fn get_modrinth_required_dependencies(
@@ -1150,6 +1269,9 @@ pub async fn get_modrinth_required_dependencies(
     mc_version: String,
     mod_loader: String,
     download_url: String,
+    instance_dir: Option<String>,
+    instance_mc_version: Option<String>,
+    instance_loader: Option<String>,
 ) -> Result<Vec<ResolvedModDependency>, String> {
     let project_slug = project_slug.trim();
     if project_slug.is_empty() || download_url.trim().is_empty() {
@@ -1178,7 +1300,14 @@ pub async fn get_modrinth_required_dependencies(
         return Ok(Vec::new());
     };
 
-    let mut installed = installed_index_for_download_target(&mc_version, &mod_loader).await;
+    let mut installed = installed_index_for_download_target(
+        &mc_version,
+        &mod_loader,
+        instance_dir.as_deref(),
+        instance_mc_version.as_deref(),
+        instance_loader.as_deref(),
+    )
+    .await;
     let walk_client = client.clone();
     walk_required_dependencies(
         required_modrinth_dependencies(root_version),
@@ -1245,17 +1374,21 @@ pub(crate) fn curseforge_file_sha1s(file: &serde_json::Value) -> Vec<String> {
         .unwrap_or_default()
 }
 
-fn curseforge_file_supports(
+/// How well a CurseForge file fits the instance, like `modrinth_loader_rank`:
+/// `None` unless the file lists the exact Minecraft version and fits the loader.
+/// Files without a loader tag are legacy (mostly pre-1.14 Forge) or
+/// loader-agnostic libraries and fit any loader at the best rank; with an
+/// unknown loader only those fit. A Quilt instance takes Fabric-tagged files at
+/// a lower rank.
+fn curseforge_loader_rank(
     file: &serde_json::Value,
     mc_version: &str,
     mod_loader: &str,
-) -> bool {
-    let Some(game_versions) = file.get("gameVersions").and_then(|versions| versions.as_array()) else {
-        return false;
-    };
+) -> Option<usize> {
+    let game_versions = file.get("gameVersions").and_then(|versions| versions.as_array())?;
     let mc_version = mc_version.trim();
     if mc_version.is_empty() || !game_versions.iter().any(|version| version.as_str() == Some(mc_version)) {
-        return false;
+        return None;
     }
 
     let tagged_loaders: Vec<String> = game_versions
@@ -1264,44 +1397,48 @@ fn curseforge_file_supports(
         .map(|version| version.to_ascii_lowercase())
         .filter(|version| KNOWN_MOD_LOADERS.contains(&version.as_str()))
         .collect();
-
-    // Files without a loader tag are legacy (mostly pre-1.14 Forge) or
-    // loader-agnostic libraries, so they fit any loader. A tagged file must
-    // carry the instance's loader; with an unknown loader only untagged files fit.
-    match canonical_mod_loader(mod_loader) {
-        Some(loader) => tagged_loaders.is_empty() || tagged_loaders.iter().any(|tag| tag == loader),
-        None => tagged_loaders.is_empty(),
+    if tagged_loaders.is_empty() {
+        return Some(0);
     }
+    let tagged: Vec<&str> = tagged_loaders.iter().map(String::as_str).collect();
+    loader_preference(&accepted_mod_loaders(mod_loader), &tagged)
 }
 
 /// Chooses the CurseForge file for a dependency: compatible with the Minecraft
-/// version and loader, release before beta before alpha, newest `fileDate`
-/// within a channel. Server packs and unavailable files are never picked.
+/// version and loader, the instance's own loader before the Quilt-to-Fabric
+/// fallback, then release before beta before alpha, newest `fileDate` within a
+/// channel. Server packs and unavailable files are never picked.
 pub(crate) fn select_curseforge_compatible_file(
     files: &[serde_json::Value],
     mc_version: &str,
     mod_loader: &str,
 ) -> Option<serde_json::Value> {
-    for release_type in [1_i64, 2, 3] {
-        let best = files
-            .iter()
-            .filter(|file| {
-                file.get("releaseType").and_then(|kind| kind.as_i64()) == Some(release_type)
-                    && !file.get("isServerPack").and_then(|flag| flag.as_bool()).unwrap_or(false)
-                    && file.get("isAvailable").and_then(|flag| flag.as_bool()).unwrap_or(true)
-                    && curseforge_file_supports(file, mc_version, mod_loader)
-                    && curseforge_file_download_url(file).is_some()
-            })
-            .max_by(|left, right| {
-                let date = |file: &serde_json::Value| json_string(file, "fileDate").unwrap_or_default();
-                let id = |file: &serde_json::Value| file.get("id").and_then(|id| id.as_i64()).unwrap_or(0);
-                date(left).cmp(&date(right)).then_with(|| id(left).cmp(&id(right)))
-            });
-        if let Some(file) = best {
-            return Some(file.clone());
-        }
-    }
-    None
+    let date = |file: &serde_json::Value| json_string(file, "fileDate").unwrap_or_default();
+    let id = |file: &serde_json::Value| file.get("id").and_then(|id| id.as_i64()).unwrap_or(0);
+    files
+        .iter()
+        .filter(|file| {
+            !file.get("isServerPack").and_then(|flag| flag.as_bool()).unwrap_or(false)
+                && file.get("isAvailable").and_then(|flag| flag.as_bool()).unwrap_or(true)
+                && curseforge_file_download_url(file).is_some()
+        })
+        .filter_map(|file| {
+            // CurseForge releaseType: 1 release, 2 beta, 3 alpha.
+            let release_type = file
+                .get("releaseType")
+                .and_then(|kind| kind.as_i64())
+                .filter(|kind| (1..=3).contains(kind))?;
+            let rank = curseforge_loader_rank(file, mc_version, mod_loader)?;
+            Some((rank, release_type, file))
+        })
+        .min_by(|(left_rank, left_type, left), (right_rank, right_type, right)| {
+            left_rank
+                .cmp(right_rank)
+                .then_with(|| left_type.cmp(right_type))
+                .then_with(|| date(right).cmp(&date(left)))
+                .then_with(|| id(right).cmp(&id(left)))
+        })
+        .map(|(_, _, file)| file.clone())
 }
 
 async fn get_curseforge_json(
@@ -1438,7 +1575,8 @@ async fn resolve_curseforge_dependency_node(
 /// CurseForge identifies required files by project rather than file ID, so the
 /// best compatible file (release first) is selected for each dependency
 /// project. Dependencies already present in the download directory for this
-/// Minecraft version and loader are left out.
+/// Minecraft version and loader, or in the matching selected instance, are left
+/// out.
 #[allow(dependency_on_unit_never_type_fallback)]
 #[tauri::command]
 pub async fn get_curseforge_required_dependencies(
@@ -1446,6 +1584,9 @@ pub async fn get_curseforge_required_dependencies(
     mc_version: String,
     mod_loader: String,
     download_url: String,
+    instance_dir: Option<String>,
+    instance_mc_version: Option<String>,
+    instance_loader: Option<String>,
 ) -> Result<Vec<ResolvedModDependency>, String> {
     let project_slug = project_slug.trim();
     if project_slug.is_empty() || download_url.trim().is_empty() {
@@ -1475,7 +1616,14 @@ pub async fn get_curseforge_required_dependencies(
         return Ok(Vec::new());
     };
 
-    let mut installed = installed_index_for_download_target(&mc_version, &mod_loader).await;
+    let mut installed = installed_index_for_download_target(
+        &mc_version,
+        &mod_loader,
+        instance_dir.as_deref(),
+        instance_mc_version.as_deref(),
+        instance_loader.as_deref(),
+    )
+    .await;
     let walk_client = client.clone();
     walk_required_dependencies(
         curseforge_required_dependency_ids(&root_file),
@@ -2455,5 +2603,162 @@ mod dependency_resolution_tests {
         // "ver:A" is resolved once to learn its project, then dropped.
         assert_eq!(resolve_calls, vec!["A", "B", "ver:C", "ver:A", "D"]);
         assert!(installed.find(&graph_node("B").unwrap().identity).is_some());
+    }
+
+    #[test]
+    fn quilt_prefers_quilt_builds_and_falls_back_to_fabric() {
+        assert_eq!(accepted_mod_loaders("Quilt"), vec!["quilt", "fabric"]);
+        assert_eq!(accepted_mod_loaders("fabric"), vec!["fabric"]);
+        assert!(accepted_mod_loaders("vanilla").is_empty());
+
+        let versions = vec![
+            modrinth_version("fabric-new", "release", &["1.21.1"], &["fabric"], "2025-06-01T00:00:00Z"),
+            modrinth_version("quilt-old", "release", &["1.21.1"], &["quilt"], "2025-01-01T00:00:00Z"),
+            modrinth_version("both", "release", &["1.20.1"], &["fabric", "quilt"], "2025-07-01T00:00:00Z"),
+        ];
+        // A Quilt build wins over a newer Fabric build.
+        assert_eq!(selected_number(&versions, "1.21.1", "quilt").as_deref(), Some("quilt-old"));
+        // A Fabric instance never takes the Quilt-only build.
+        assert_eq!(selected_number(&versions, "1.21.1", "fabric").as_deref(), Some("fabric-new"));
+        // A build listing both loaders is a Quilt build.
+        assert_eq!(selected_number(&versions, "1.20.1", "quilt").as_deref(), Some("both"));
+
+        // Sodium on Quilt has only Fabric builds: the Fabric release is used,
+        // still release before beta.
+        let fabric_only = vec![
+            modrinth_version("0.8.14-beta.2", "beta", &["1.21.1"], &["fabric"], "2025-11-20T00:00:00Z"),
+            modrinth_version("0.8.13", "release", &["1.21.1"], &["fabric"], "2025-11-01T00:00:00Z"),
+        ];
+        assert_eq!(selected_number(&fabric_only, "1.21.1", "quilt").as_deref(), Some("0.8.13"));
+
+        let quilt_only = vec![
+            modrinth_version("qsl", "release", &["1.21.1"], &["quilt"], "2025-01-01T00:00:00Z"),
+        ];
+        assert_eq!(selected_number(&quilt_only, "1.21.1", "fabric"), None);
+        // Forge and NeoForge do not borrow builds from each other.
+        let forge_only = vec![
+            modrinth_version("forge", "release", &["1.20.1"], &["forge"], "2025-01-01T00:00:00Z"),
+        ];
+        assert_eq!(selected_number(&forge_only, "1.20.1", "neoforge"), None);
+    }
+
+    #[test]
+    fn curseforge_quilt_falls_back_to_fabric_files() {
+        let files = vec![
+            curseforge_file(1, 1, &["1.21.1", "Fabric"], "2025-06-01T00:00:00Z"),
+            curseforge_file(2, 1, &["1.21.1", "Quilt"], "2025-01-01T00:00:00Z"),
+            curseforge_file(3, 1, &["1.21.1", "Forge"], "2025-07-01T00:00:00Z"),
+        ];
+        assert_eq!(select_curseforge_compatible_file(&files, "1.21.1", "quilt").unwrap()["id"], 2);
+        assert_eq!(select_curseforge_compatible_file(&files, "1.21.1", "fabric").unwrap()["id"], 1);
+
+        let fabric_files = vec![
+            curseforge_file(4, 2, &["1.21.1", "Fabric"], "2025-06-01T00:00:00Z"),
+            curseforge_file(5, 1, &["1.21.1", "Fabric"], "2025-05-01T00:00:00Z"),
+        ];
+        assert_eq!(select_curseforge_compatible_file(&fabric_files, "1.21.1", "Quilt").unwrap()["id"], 5);
+
+        let quilt_files = vec![curseforge_file(6, 1, &["1.21.1", "Quilt"], "2025-01-01T00:00:00Z")];
+        assert!(select_curseforge_compatible_file(&quilt_files, "1.21.1", "fabric").is_none());
+    }
+
+    #[test]
+    fn selected_instance_is_checked_only_when_it_matches_the_download() {
+        assert!(instance_matches_download_target("1.21.1", "Fabric", "1.21.1", "fabric"));
+        // Fabric downloads also run on a Quilt instance, not the other way round.
+        assert!(instance_matches_download_target("1.21.1", "quilt", "1.21.1", "Fabric"));
+        assert!(!instance_matches_download_target("1.21.1", "fabric", "1.21.1", "quilt"));
+        assert!(!instance_matches_download_target("1.21.4", "fabric", "1.21.1", "fabric"));
+        assert!(!instance_matches_download_target("1.21.1", "neoforge", "1.21.1", "forge"));
+        assert!(!instance_matches_download_target("1.21.1", "", "1.21.1", "fabric"));
+        assert!(!instance_matches_download_target("", "fabric", "", "fabric"));
+
+        let cache = unique_temp_dir("cache");
+        let instance = unique_temp_dir("instance");
+        fs::create_dir_all(instance.join("mods")).unwrap();
+        write_jar(&cache, "sodium.jar", &[("fabric.mod.json", r#"{"id":"sodium"}"#)]);
+        write_jar(&instance.join("mods"), "qfapi.jar", &[(
+            "quilt.mod.json",
+            r#"{"quilt_loader":{"id":"quilted_fabric_api","provides":[{"id":"fabric-api","version":"0.116.7"}]}}"#,
+        )]);
+        let instance_dir = instance.to_string_lossy().to_string();
+
+        // No selected instance: only the download cache.
+        let dirs = dependency_index_dirs(Some(cache.clone()), None, None, None, "1.21.1", "fabric");
+        assert_eq!(dirs, vec![cache.clone()]);
+        let index = InstalledModIndex::scan_all(&dirs);
+        assert!(index.has_mod_key("sodium"));
+        assert!(!index.has_mod_key("fabric-api"));
+
+        // Matching instance: a mod in either directory counts as installed.
+        let dirs = dependency_index_dirs(
+            Some(cache.clone()),
+            Some(&instance_dir),
+            Some("1.21.1"),
+            Some("Quilt"),
+            "1.21.1",
+            "fabric",
+        );
+        assert_eq!(dirs, vec![cache.clone(), instance.join("mods")]);
+        let index = InstalledModIndex::scan_all(&dirs);
+        assert!(index.has_mod_key("sodium"));
+        assert!(index.has_mod_key("fabric-api"));
+
+        // Another Minecraft version or loader: the instance is ignored.
+        for (mc, loader) in [("1.20.1", "quilt"), ("1.21.1", "neoforge")] {
+            let dirs = dependency_index_dirs(Some(cache.clone()), Some(&instance_dir), Some(mc), Some(loader), "1.21.1", "fabric");
+            assert_eq!(dirs, vec![cache.clone()]);
+        }
+        // No cache directory: the matching instance alone is still checked.
+        let dirs = dependency_index_dirs(None, Some(&instance_dir), Some("1.21.1"), Some("fabric"), "1.21.1", "fabric");
+        assert_eq!(dirs, vec![instance.join("mods")]);
+
+        let _ = fs::remove_dir_all(&cache);
+        let _ = fs::remove_dir_all(&instance);
+    }
+
+    #[test]
+    fn walk_skips_fabric_api_provided_by_quilted_fabric_api() {
+        let dir = unique_temp_dir("qfapi");
+        write_jar(&dir, "qfapi.jar", &[(
+            "quilt.mod.json",
+            r#"{"quilt_loader":{"id":"quilted_fabric_api","provides":[{"id":"fabric-api","version":"0.116.7"}]}}"#,
+        )]);
+        let mut installed = InstalledModIndex::scan_all(&[dir.clone()]);
+        let node = |project: &str, slug: &str, requires: &[&str]| ResolvedDependencyNode {
+            key: format!("modrinth:{}", project),
+            identity: ModCandidateIdentity {
+                modrinth_project_id: Some(project.to_string()),
+                names: vec![slug.to_string()],
+                ..Default::default()
+            },
+            dependency: ResolvedModDependency {
+                project_id: project.to_string(),
+                project_slug: slug.to_string(),
+                project_name: slug.to_string(),
+                download_url: format!("https://example.invalid/{}.jar", slug),
+            },
+            requires: requires.iter().map(|r| r.to_string()).collect(),
+        };
+
+        // sodium-extra -> sodium (missing) and fabric-api (provided by QFAPI).
+        let resolved = futures::executor::block_on(walk_required_dependencies(
+            vec!["AANobbMI".to_string(), "P7dR8mSH".to_string()],
+            Some("modrinth:PtjYWJkn".to_string()),
+            &mut installed,
+            |reference: &String| Some(format!("modrinth:{}", reference)),
+            |reference: String| {
+                let resolved = match reference.as_str() {
+                    "AANobbMI" => Some(node("AANobbMI", "sodium", &["P7dR8mSH"])),
+                    "P7dR8mSH" => Some(node("P7dR8mSH", "fabric-api", &[])),
+                    _ => None,
+                };
+                std::future::ready(Ok(resolved))
+            },
+        ))
+        .unwrap();
+        let slugs: Vec<&str> = resolved.iter().map(|dep| dep.project_slug.as_str()).collect();
+        assert_eq!(slugs, vec!["sodium"]);
+        let _ = fs::remove_dir_all(&dir);
     }
 }

@@ -52,8 +52,11 @@ interface LoaderLogReport {
   summary: string;
 }
 
+// Platform mods the panel never offers to download. fabric-api is not listed:
+// it is installed like any other mod, and the backend skips it when a jar such
+// as Quilted Fabric API already provides it.
 const PLATFORM_DEPS = new Set([
-  "minecraft", "forge", "neoforge", "fabricloader", "fabric", "fabric-api",
+  "minecraft", "forge", "neoforge", "fabricloader", "fabric",
   "quilt_loader", "java", "liteloader", "minecraftforge", "fabric-api-base",
   "fabric-api-lookup-api-v1", "fabric-biome-api-v1", "fabric-block-api-v1",
   "fabric-blockrenderlayer-v1", "fabric-command-api-v1", "fabric-command-api-v2",

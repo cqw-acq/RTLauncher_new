@@ -44,3 +44,27 @@ export function resolveDependencyTarget(
     "forge";
   return { mcVersion, loader };
 }
+
+/** Optional selected-instance arguments of the `get_*_required_dependencies` commands. */
+export interface DependencyInstanceArgs {
+  instanceDir?: string;
+  instanceMcVersion?: string;
+  instanceLoader?: string;
+}
+
+/**
+ * Lets the download page skip dependencies already installed in the selected
+ * instance. Empty without a selected instance (or one whose version or loader is
+ * unknown), so only the download cache is checked. The backend still ignores the
+ * instance when its Minecraft version or loader does not fit the download.
+ */
+export function dependencyInstanceArgs(
+  instance: Pick<InstanceData, "minecraft_version" | "loader"> | null | undefined,
+  instanceDir: string | null | undefined,
+): DependencyInstanceArgs {
+  const dir = instanceDir?.trim();
+  const mcVersion = instance?.minecraft_version?.trim();
+  const loader = detectLoaderKeyword(instance?.loader);
+  if (!dir || !mcVersion || !loader) return {};
+  return { instanceDir: dir, instanceMcVersion: mcVersion, instanceLoader: loader };
+}
