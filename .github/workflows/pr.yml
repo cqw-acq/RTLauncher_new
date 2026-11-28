@@ -31,6 +31,10 @@ jobs:
             args: '--bundles deb'
             name: 'Linux'
             artifact_name: 'linux_amd64'
+          - platform: 'ubuntu-22.04'
+            args: '--config src-tauri/tauri.portable.conf.json'
+            name: 'Linux Portable'
+            artifact_name: 'linuxx64-portable'
           - platform: 'windows-latest'
             args: '--bundles nsis'
             name: 'Windows'
@@ -123,13 +127,25 @@ jobs:
           retention-days: 90
 
       - name: Upload Linux bundles
-        if: matrix.platform == 'ubuntu-22.04'
+        if: matrix.platform == 'ubuntu-22.04' && matrix.name == 'Linux'
         uses: actions/upload-artifact@v7
         with:
           name: RTLauncher_${{ env.APP_VERSION }}_${{ matrix.artifact_name }}
           path: |
             src-tauri/target/release/bundle/**/*.AppImage
             src-tauri/target/release/bundle/**/*.deb
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Upload Linux portable
+        if: matrix.platform == 'ubuntu-22.04' && matrix.name == 'Linux Portable'
+        uses: actions/upload-artifact@v7
+        with:
+          name: RTLauncher_${{ env.APP_VERSION }}_${{ matrix.artifact_name }}
+          path: |
+            src-tauri/target/release/rtlauncher
+            src-tauri/install-deps.sh
+            src-tauri/PORTABLE_README.md
           if-no-files-found: error
           retention-days: 90
 

@@ -17,7 +17,6 @@ const nextConfig: NextConfig = {
     optimizePackageImports: [
       "lucide-react",
       "@tauri-apps/api",
-      "@tauri-apps/plugin-updater",
       "@tauri-apps/plugin-dialog",
       "class-variance-authority",
     ],

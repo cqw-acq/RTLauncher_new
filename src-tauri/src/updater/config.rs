@@ -12,12 +12,15 @@ const LIGHTING_TEAM_UPDATE_ENDPOINT: &str =
 const GITHUB_UPDATE_ENDPOINT: &str = "https://api.github.com/repos/cqw-acq/RTLauncher_new/releases";
 const LIGHTING_TEAM_ASSET_HOST: &str =
     "7463-tcb-charcaius-d0gpaxdu6e2408df8-1306022435.tcb.qcloud.la";
+/// 测试/模拟分发桶（腾讯云 COS），与正式桶结构一致。
+const MOCK_LIGHTING_TEAM_ASSET_HOST: &str = "mock-rtl-1306022435.cos.ap-nanjing.myqcloud.com";
 
 /// 允许的更新下载域名白名单。release URL 或重定向目标必须落在这些域名上。
 pub const TRUSTED_DOWNLOAD_HOSTS: &[&str] = &[
     "github.com",
     "githubusercontent.com",
     LIGHTING_TEAM_ASSET_HOST,
+    MOCK_LIGHTING_TEAM_ASSET_HOST,
 ];
 
 /// 发布 Release 时，可选地在 Release body 里放一个 SHA-256 清单，匹配格式：
@@ -131,6 +134,7 @@ pub fn is_trusted_release_asset_url(url: &str) -> bool {
             .path()
             .starts_with("/cqw-acq/RTLauncher_new/releases/download/"),
         LIGHTING_TEAM_ASSET_HOST => parsed.path().starts_with("/RTL/releases/"),
+        MOCK_LIGHTING_TEAM_ASSET_HOST => parsed.path().starts_with("/RTL/releases/"),
         _ => false,
     }
 }
@@ -165,8 +169,23 @@ fn get_current_timestamp() -> i64 {
         .as_secs() as i64
 }
 
-pub fn get_update_endpoints() -> [&'static str; 2] {
-    [LIGHTING_TEAM_UPDATE_ENDPOINT, GITHUB_UPDATE_ENDPOINT]
+/// 更新检查端点。默认双源：LightingTeam 服务 + GitHub Releases。
+/// 可用环境变量 `RTL_UPDATE_ENDPOINTS` 覆盖（逗号分隔多个源），便于对接测试/模拟服务。
+pub fn get_update_endpoints() -> Vec<String> {
+    if let Ok(raw) = std::env::var("RTL_UPDATE_ENDPOINTS") {
+        let endpoints: Vec<String> = raw
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+        if !endpoints.is_empty() {
+            return endpoints;
+        }
+    }
+    vec![
+        LIGHTING_TEAM_UPDATE_ENDPOINT.to_string(),
+        GITHUB_UPDATE_ENDPOINT.to_string(),
+    ]
 }
 
 pub fn get_update_config() -> UpdateConfig {
