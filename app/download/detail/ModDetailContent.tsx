@@ -7,6 +7,8 @@ import { Badge } from "@/components/ui/badge";
 import { invoke } from "@tauri-apps/api/core";
 import { useDownloadManager } from "@/components/download/download-provider";
 import { useSettings } from "@/components/settings/settings-provider";
+import { useInstancePath } from "@/hooks/use-instance-path";
+import { dependencyInstanceArgs } from "@/components/launch/mod-dependency-target";
 import { useRouter } from "next/navigation";
 import { useModFavorites } from "@/hooks/use-mod-favorites";
 import type { ModFavorite } from "@/lib/mod-favorites";
@@ -380,6 +382,7 @@ export default function ModDetailContent({ modId }: { modId: string }) {
   const { startModDownload, startResourceDownload, tasks } = useDownloadManager();
   const { settings } = useSettings();
   const { favorites, toggleFavorite } = useModFavorites();
+  const { instanceDir, selectedInstance } = useInstancePath();
 
   const urlParams = typeof window !== "undefined" ? new URLSearchParams(window.location.search) : null;
   const forceType = urlParams?.get("forceType") || null;
@@ -901,6 +904,8 @@ export default function ModDetailContent({ modId }: { modId: string }) {
         mcVersion,
         modLoader,
         downloadUrl: file.url,
+        // Dependencies already in the selected instance are skipped as well.
+        ...dependencyInstanceArgs(selectedInstance, instanceDir),
       })
         .then(async (dependencies) => {
           await Promise.all(
