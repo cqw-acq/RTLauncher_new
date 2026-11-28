@@ -18,6 +18,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { useLaunchContext } from "@/components/launch/launch-provider";
 import { useI18n } from "@/components/i18n/use-i18n";
 import { useInstancePath } from "@/hooks/use-instance-path";
+import { resolveDependencyTarget } from "@/components/launch/mod-dependency-target";
 import { cn } from "@/lib/utils";
 
 interface ModDependencyIssue {
@@ -79,7 +80,7 @@ function is_platform_dep(mod_id: string): boolean {
 export function ModDependencyPanel() {
   const { t } = useI18n();
   const { config, logs } = useLaunchContext();
-  const { instanceDir, loading: instanceLoading } = useInstancePath();
+  const { instanceDir, selectedInstance, loading: instanceLoading } = useInstancePath();
 
   const [analysis, setAnalysis] = useState<ModDependencyAnalysis | null>(null);
   const [loaderReport, setLoaderReport] = useState<LoaderLogReport | null>(null);
@@ -98,8 +99,7 @@ export function ModDependencyPanel() {
       if (useDeep) {
         const result = await invoke<any>("deep_analyze_with_api", {
           instanceDir,
-          mcVersion: config.minecraftVersion || config.versionName || "1.20.1",
-          loader: (config.loadName || "forge").toLowerCase().replace(/[^a-z]/g, ""),
+          ...resolveDependencyTarget(selectedInstance, config),
         });
         setAnalysis(result);
         setIsDeepAnalysis(true);
@@ -114,7 +114,7 @@ export function ModDependencyPanel() {
       setLoading(false);
       setDeepAnalyzing(false);
     }
-  }, [instanceDir, config]);
+  }, [instanceDir, selectedInstance, config]);
 
   const refreshLoaderReport = useCallback(async () => {
     if (!instanceDir) return;
@@ -140,10 +140,12 @@ export function ModDependencyPanel() {
 
   const totalLoaderIssues = loaderReport?.errors.length || 0;
 
-  const mcParams = useMemo(() => ({
-    mcVersion: config.minecraftVersion || config.versionName || "1.20.1",
-    loader: (config.loadName || "forge").toLowerCase().replace(/[^a-z]/g, ""),
-  }), [config]);
+  // The backend only installs files built for this exact Minecraft version and
+  // loader, so take both from the scanned instance rather than its folder name.
+  const mcParams = useMemo(
+    () => resolveDependencyTarget(selectedInstance, config),
+    [selectedInstance, config],
+  );
 
   const markImmediatePass = useCallback((key: string, modId: string, extra: Record<string, { success: boolean; message: string; source: string }> = {}) => {
     setDownloadResults((prev) => ({
