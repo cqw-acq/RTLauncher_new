@@ -273,6 +273,17 @@ async fn fetch_liteloader_info(mc_version: &str, lite_version: &str) -> Result<L
     })
 }
 
+/// 拼接仓库地址与相对路径，保证两者之间恰好一个 `/`。
+/// 以前直接 `trim_end_matches('/')` 后拼接，丢了分隔符，写进 version.json 的
+/// 地址变成 `https://libraries.minecraft.netnet/minecraft/...`。
+fn join_url(base: &str, relative: &str) -> String {
+    format!(
+        "{}/{}",
+        base.trim_end_matches('/'),
+        relative.trim_start_matches('/')
+    )
+}
+
 /// 将 maven 坐标 (group:artifact:version) 解析为文件路径和 jar 名
 fn parse_maven_coords(name: &str) -> Result<(String, String, String, String)> {
     let parts: Vec<&str> = name.split(':').collect();
@@ -453,13 +464,9 @@ async fn resolve_all_library_filenames(
         };
 
         // 构造完整下载 URL（repo_url + maven 路径 + 文件名）
-        let jar_url = format!(
-            "{}{}/{}/{}/{}",
-            repo_url.trim_end_matches('/'),
-            group.replace('.', "/"),
-            artifact,
-            version,
-            jar_file_name
+        let jar_url = join_url(
+            &repo_url,
+            &format!("{}/{}/{}/{}", group, artifact, version, jar_file_name),
         );
 
         resolved.push(ResolvedLibrary {
@@ -479,7 +486,7 @@ async fn resolve_all_library_filenames(
         );
         // LiteLoader 的 file 字段已经是实际文件名
         let jar_file_name = info.file.clone();
-        let jar_url = format!("{}{}", lite_repo_url.trim_end_matches('/'), jar_file_name);
+        let jar_url = join_url(&lite_repo_url, &jar_file_name);
         resolved.push(ResolvedLibrary {
             name,
             repo_url: lite_repo_url,
@@ -717,4 +724,75 @@ pub async fn install_liteloader(
 
     println!("[LiteLoader] 安装完成: {}", version_id);
     Ok(version_id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn join_url_keeps_exactly_one_separator() {
+        assert_eq!(
+            join_url("https://libraries.minecraft.net/", "net/minecraft/a.jar"),
+            "https://libraries.minecraft.net/net/minecraft/a.jar"
+        );
+        assert_eq!(
+            join_url("https://libraries.minecraft.net", "net/minecraft/a.jar"),
+            "https://libraries.minecraft.net/net/minecraft/a.jar"
+        );
+        assert_eq!(
+            join_url("https://repo.example/maven//", "/org/a.jar"),
+            "https://repo.example/maven/org/a.jar"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn resolved_library_urls_have_a_separator_between_repo_and_path() {
+        // 本地 E2E 装出来的 json 里 url 是 https://libraries.minecraft.netnet/minecraft/...、
+        // .../build/libsliteloader-1.12.2-SNAPSHOT.jar 这种少了一个斜杠的地址。
+        // 这里只用非 SNAPSHOT 依赖，避免测试访问网络。
+        let info = LiteLoaderInfo {
+            file: "liteloader-1.12.2-SNAPSHOT.jar".to_string(),
+            version: "1.12.2-SNAPSHOT".to_string(),
+            tweak_class: "com.mumfrey.liteloader.launch.LiteLoaderTweaker".to_string(),
+            libraries: vec![
+                LibraryDef {
+                    name: "net.minecraft:launchwrapper:1.12".to_string(),
+                    repo_url: Some("https://libraries.minecraft.net/".to_string()),
+                },
+                LibraryDef {
+                    name: "org.ow2.asm:asm-all:5.2".to_string(),
+                    repo_url: None,
+                },
+            ],
+            repo_url: "http://dl.liteloader.com/versions/".to_string(),
+        };
+
+        let resolved = resolve_all_library_filenames(&info, "1.12.2")
+            .await
+            .unwrap();
+        let urls: Vec<&str> = resolved.iter().map(|r| r.jar_url.as_str()).collect();
+        assert_eq!(
+            urls,
+            vec![
+                "https://libraries.minecraft.net/net/minecraft/launchwrapper/1.12/launchwrapper-1.12.jar",
+                "https://maven.aliyun.com/repository/public/org/ow2/asm/asm-all/5.2/asm-all-5.2.jar",
+                "https://jenkins.liteloader.com/job/LiteLoader%201.12.2/lastSuccessfulBuild/artifact/build/libs/liteloader-1.12.2-SNAPSHOT.jar",
+            ]
+        );
+
+        let json = build_version_json("1.12.2", "1.12.2-SNAPSHOT", &info, &resolved);
+        let libs = json["libraries"].as_array().unwrap();
+        assert_eq!(libs.len(), urls.len());
+        for (lib, expected) in libs.iter().zip(&urls) {
+            assert_eq!(
+                lib["downloads"]["artifact"]["url"].as_str(),
+                Some(*expected)
+            );
+        }
+        assert_eq!(
+            libs[2]["downloads"]["artifact"]["path"].as_str(),
+            Some("com/mumfrey/liteloader/1.12.2-SNAPSHOT/liteloader-1.12.2-SNAPSHOT.jar")
+        );
+    }
 }
