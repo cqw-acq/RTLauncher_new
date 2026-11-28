@@ -433,6 +433,34 @@ fn loader_preference(accepted: &[&str], available: &[&str]) -> Option<usize> {
     })
 }
 
+/// Sort key of a compatible dependency candidate (a Modrinth version or a
+/// CurseForge file).
+#[derive(Debug, Clone, Copy)]
+struct DependencyCandidateRank<'a> {
+    /// 0 release, 1 beta, 2 alpha.
+    channel: u8,
+    /// Position of the candidate's loader in `accepted_mod_loaders`: 0 for the
+    /// instance's own loader, 1 for the Fabric fallback of a Quilt instance.
+    loader: usize,
+    /// RFC 3339 publish date; compares chronologically as a string.
+    published: &'a str,
+}
+
+/// The one ordering used for every dependency candidate, on the download page
+/// and in launch diagnostics alike: release before beta before alpha; within a
+/// channel a build for the instance's own loader before the Fabric fallback of a
+/// Quilt instance (a Fabric release beats a Quilt beta, a Quilt release beats a
+/// Fabric release); then the newest. `Less` means `left` is preferred.
+fn compare_dependency_candidates(
+    left: &DependencyCandidateRank,
+    right: &DependencyCandidateRank,
+) -> std::cmp::Ordering {
+    left.channel
+        .cmp(&right.channel)
+        .then_with(|| left.loader.cmp(&right.loader))
+        .then_with(|| right.published.cmp(left.published))
+}
+
 pub(crate) fn primary_modrinth_file(version: &serde_json::Value) -> Option<&serde_json::Value> {
     let files = version.get("files")?.as_array()?;
     files
@@ -489,10 +517,11 @@ fn required_modrinth_dependencies(version: &serde_json::Value) -> Vec<serde_json
         .unwrap_or_default()
 }
 
-/// How well a Modrinth version fits the instance: `None` unless it lists the
-/// exact Minecraft version and a loader the instance can run (see
+/// How well a Modrinth version's loader fits the instance: `None` unless it
+/// lists the exact Minecraft version and a loader the instance can run (see
 /// `accepted_mod_loaders`); otherwise 0 for the instance's own loader and 1 for
-/// the Fabric fallback of a Quilt instance. An unknown loader matches nothing:
+/// the Fabric fallback of a Quilt instance, which only matters between
+/// candidates of the same channel (`compare_dependency_candidates`). An unknown loader matches nothing:
 /// guessing one would install a jar the instance cannot load.
 fn modrinth_loader_rank(
     version: &serde_json::Value,
@@ -536,38 +565,34 @@ fn modrinth_channel_rank(version: &serde_json::Value) -> u8 {
     }
 }
 
-/// Chooses the version to install for a dependency: among versions that match
-/// the Minecraft version and loader, a build for the instance's own loader beats
-/// the Fabric fallback of a Quilt instance; then a release beats a beta, which
-/// beats an alpha. Within a channel the newest `date_published` wins, then API
-/// order.
+/// Chooses the version to install for a dependency among versions that match
+/// the Minecraft version and loader, ordered by `compare_dependency_candidates`;
+/// API order breaks remaining ties.
 pub(crate) fn select_modrinth_version<'a>(
     versions: &'a [serde_json::Value],
     mc_version: &str,
     mod_loader: &str,
 ) -> Option<&'a serde_json::Value> {
-    let published = |version: &serde_json::Value| {
-        version
-            .get("date_published")
-            .and_then(|date| date.as_str())
-            .unwrap_or("")
-            .to_owned()
-    };
     versions
         .iter()
+        .filter(|version| primary_modrinth_file_url(version).is_some())
+        .filter_map(|version| {
+            let loader = modrinth_loader_rank(version, mc_version, mod_loader)?;
+            let rank = DependencyCandidateRank {
+                channel: modrinth_channel_rank(version),
+                loader,
+                published: version
+                    .get("date_published")
+                    .and_then(|date| date.as_str())
+                    .unwrap_or(""),
+            };
+            Some((rank, version))
+        })
         .enumerate()
-        .filter(|(_, version)| primary_modrinth_file_url(version).is_some())
-        .filter_map(|(index, version)| {
-            modrinth_loader_rank(version, mc_version, mod_loader).map(|rank| (rank, index, version))
+        .min_by(|(left_index, (left, _)), (right_index, (right, _))| {
+            compare_dependency_candidates(left, right).then_with(|| left_index.cmp(right_index))
         })
-        .min_by(|(left_rank, left_index, left), (right_rank, right_index, right)| {
-            left_rank
-                .cmp(right_rank)
-                .then_with(|| modrinth_channel_rank(left).cmp(&modrinth_channel_rank(right)))
-                .then_with(|| published(right).cmp(&published(left)))
-                .then_with(|| left_index.cmp(right_index))
-        })
-        .map(|(_, _, version)| version)
+        .map(|(_, (_, version))| version)
 }
 
 async fn get_modrinth_json(
@@ -1404,16 +1429,15 @@ fn curseforge_loader_rank(
     loader_preference(&accepted_mod_loaders(mod_loader), &tagged)
 }
 
-/// Chooses the CurseForge file for a dependency: compatible with the Minecraft
-/// version and loader, the instance's own loader before the Quilt-to-Fabric
-/// fallback, then release before beta before alpha, newest `fileDate` within a
-/// channel. Server packs and unavailable files are never picked.
+/// Chooses the CurseForge file for a dependency among files compatible with the
+/// Minecraft version and loader, ordered by `compare_dependency_candidates`
+/// (`releaseType` 1 release, 2 beta, 3 alpha; `fileDate`); the higher file id
+/// breaks remaining ties. Server packs and unavailable files are never picked.
 pub(crate) fn select_curseforge_compatible_file(
     files: &[serde_json::Value],
     mc_version: &str,
     mod_loader: &str,
 ) -> Option<serde_json::Value> {
-    let date = |file: &serde_json::Value| json_string(file, "fileDate").unwrap_or_default();
     let id = |file: &serde_json::Value| file.get("id").and_then(|id| id.as_i64()).unwrap_or(0);
     files
         .iter()
@@ -1423,22 +1447,21 @@ pub(crate) fn select_curseforge_compatible_file(
                 && curseforge_file_download_url(file).is_some()
         })
         .filter_map(|file| {
-            // CurseForge releaseType: 1 release, 2 beta, 3 alpha.
             let release_type = file
                 .get("releaseType")
                 .and_then(|kind| kind.as_i64())
                 .filter(|kind| (1..=3).contains(kind))?;
-            let rank = curseforge_loader_rank(file, mc_version, mod_loader)?;
-            Some((rank, release_type, file))
+            let rank = DependencyCandidateRank {
+                channel: (release_type - 1) as u8,
+                loader: curseforge_loader_rank(file, mc_version, mod_loader)?,
+                published: file.get("fileDate").and_then(|date| date.as_str()).unwrap_or(""),
+            };
+            Some((rank, file))
         })
-        .min_by(|(left_rank, left_type, left), (right_rank, right_type, right)| {
-            left_rank
-                .cmp(right_rank)
-                .then_with(|| left_type.cmp(right_type))
-                .then_with(|| date(right).cmp(&date(left)))
-                .then_with(|| id(right).cmp(&id(left)))
+        .min_by(|(left, left_file), (right, right_file)| {
+            compare_dependency_candidates(left, right).then_with(|| id(right_file).cmp(&id(left_file)))
         })
-        .map(|(_, _, file)| file.clone())
+        .map(|(_, file)| file.clone())
 }
 
 async fn get_curseforge_json(
@@ -2616,7 +2639,7 @@ mod dependency_resolution_tests {
             modrinth_version("quilt-old", "release", &["1.21.1"], &["quilt"], "2025-01-01T00:00:00Z"),
             modrinth_version("both", "release", &["1.20.1"], &["fabric", "quilt"], "2025-07-01T00:00:00Z"),
         ];
-        // A Quilt build wins over a newer Fabric build.
+        // Same channel: a Quilt build wins over a newer Fabric build.
         assert_eq!(selected_number(&versions, "1.21.1", "quilt").as_deref(), Some("quilt-old"));
         // A Fabric instance never takes the Quilt-only build.
         assert_eq!(selected_number(&versions, "1.21.1", "fabric").as_deref(), Some("fabric-new"));
@@ -2640,6 +2663,54 @@ mod dependency_resolution_tests {
             modrinth_version("forge", "release", &["1.20.1"], &["forge"], "2025-01-01T00:00:00Z"),
         ];
         assert_eq!(selected_number(&forge_only, "1.20.1", "neoforge"), None);
+    }
+
+    #[test]
+    fn modrinth_quilt_compares_channel_before_loader() {
+        // Quilt has only a beta, Fabric has a release: the Fabric release wins.
+        let versions = vec![
+            modrinth_version("quilt-beta", "beta", &["1.21.1"], &["quilt"], "2025-09-01T00:00:00Z"),
+            modrinth_version("fabric-release", "release", &["1.21.1"], &["fabric"], "2025-03-01T00:00:00Z"),
+            modrinth_version("fabric-alpha", "alpha", &["1.21.1"], &["fabric"], "2025-10-01T00:00:00Z"),
+        ];
+        assert_eq!(selected_number(&versions, "1.21.1", "quilt").as_deref(), Some("fabric-release"));
+
+        // Both have a release: the Quilt release wins, even though older.
+        let mut both = versions.clone();
+        both.push(modrinth_version("quilt-release", "release", &["1.21.1"], &["quilt"], "2025-01-01T00:00:00Z"));
+        assert_eq!(selected_number(&both, "1.21.1", "quilt").as_deref(), Some("quilt-release"));
+
+        // Only betas: still the Quilt one first, the newest Fabric beta otherwise.
+        let betas = vec![
+            modrinth_version("fabric-beta-new", "beta", &["1.21.1"], &["fabric"], "2025-12-01T00:00:00Z"),
+            modrinth_version("quilt-beta", "beta", &["1.21.1"], &["quilt"], "2025-01-01T00:00:00Z"),
+            modrinth_version("fabric-beta-old", "beta", &["1.21.1"], &["fabric"], "2025-06-01T00:00:00Z"),
+        ];
+        assert_eq!(selected_number(&betas, "1.21.1", "quilt").as_deref(), Some("quilt-beta"));
+        assert_eq!(selected_number(&betas[..1], "1.21.1", "quilt").as_deref(), Some("fabric-beta-new"));
+        assert_eq!(selected_number(&[betas[2].clone(), betas[0].clone()], "1.21.1", "quilt").as_deref(), Some("fabric-beta-new"));
+
+        // Non-Quilt instances are unchanged: Fabric ignores the Quilt release.
+        assert_eq!(selected_number(&both, "1.21.1", "fabric").as_deref(), Some("fabric-release"));
+    }
+
+    #[test]
+    fn curseforge_quilt_compares_channel_before_loader() {
+        // Quilt has only a beta, Fabric has a release: the Fabric release wins.
+        let files = vec![
+            curseforge_file(1, 2, &["1.21.1", "Quilt"], "2025-09-01T00:00:00Z"),
+            curseforge_file(2, 1, &["1.21.1", "Fabric"], "2025-03-01T00:00:00Z"),
+            curseforge_file(3, 3, &["1.21.1", "Fabric"], "2025-10-01T00:00:00Z"),
+        ];
+        assert_eq!(select_curseforge_compatible_file(&files, "1.21.1", "quilt").unwrap()["id"], 2);
+
+        // Both have a release: the Quilt release wins, even though older.
+        let mut both = files.clone();
+        both.push(curseforge_file(4, 1, &["1.21.1", "Quilt"], "2025-01-01T00:00:00Z"));
+        assert_eq!(select_curseforge_compatible_file(&both, "1.21.1", "Quilt").unwrap()["id"], 4);
+
+        // Non-Quilt instances are unchanged.
+        assert_eq!(select_curseforge_compatible_file(&both, "1.21.1", "fabric").unwrap()["id"], 2);
     }
 
     #[test]
