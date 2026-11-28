@@ -36,6 +36,18 @@ export const DEFAULT_INITIAL_JVM_ARGS = `-XX:+UnlockExperimentalVMOptions
 -Dfml.readTimeout=180
 -Dio.netty.allocator.type=unpooled`;
 
+/**
+ * 启动准备阶段（检测/下载 Java、构建参数）被 kill_game_process 取消时，
+ * launch_game 以此文案拒绝。须与 src-tauri/src/handler/launcher/process.rs
+ * 的 LAUNCH_CANCELLED_MESSAGE 保持一致。
+ */
+export const LAUNCH_CANCELLED_MESSAGE = "启动已取消";
+
+/** 判断 launch_game 的错误是否为用户主动取消，而非启动失败。按前缀匹配，后端追加说明也能识别。 */
+export function isLaunchCancelledError(message: string): boolean {
+  return message.trim().startsWith(LAUNCH_CANCELLED_MESSAGE);
+}
+
 const DEFAULT_LAUNCH_CONFIG: LaunchConfig = {
   minecraftPath: "",
   javaPath: "",
@@ -419,6 +431,11 @@ export function LaunchProvider({ children }: { children: React.ReactNode }) {
         addLog("info", t("launch.provider.gameLaunched"));
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
+        if (isLaunchCancelledError(msg)) {
+          // 用户在准备阶段取消：cancelLaunch 已把状态设为 idle 并记录了取消日志，
+          // 这里不再覆盖为启动失败。
+          return;
+        }
         const endedAt = Date.now();
         setLaunchEndedAt(endedAt);
         setStatus("error");

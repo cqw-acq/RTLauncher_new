@@ -43,6 +43,9 @@ fn lock_launch_state() -> MutexGuard<'static, LaunchState> {
         .unwrap_or_else(PoisonError::into_inner)
 }
 
+/// 准备阶段被终止命令取消时 `launch_game` 返回的错误文案。
+/// 前端 `components/launch/launch-provider.tsx` 的 `LAUNCH_CANCELLED_MESSAGE`
+/// 按此前缀识别取消、不显示为启动失败，修改时两边须同步。
 pub(super) const LAUNCH_CANCELLED_MESSAGE: &str = "启动已取消";
 
 fn register_preparation(state: &mut LaunchState) -> u64 {
@@ -554,6 +557,7 @@ mod tests {
         clear_process_if_pid, finish_preparation, insert_process_if_empty, is_game_fully_started,
         is_launch_cancelled, parse_log_level, register_preparation,
         reset_termination_request_if_pid, GameProcess, KillAction, LaunchState,
+        LAUNCH_CANCELLED_MESSAGE,
     };
     use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -738,6 +742,12 @@ mod tests {
 
         assert!(claim_kill_action(&mut state).is_err());
         assert_eq!(state.cancel_generation, 0);
+    }
+
+    #[test]
+    fn keeps_the_cancellation_message_shared_with_the_frontend() {
+        // launch-provider.tsx 按这个前缀把取消与启动失败区分开。
+        assert_eq!(LAUNCH_CANCELLED_MESSAGE, "启动已取消");
     }
 
     #[test]
