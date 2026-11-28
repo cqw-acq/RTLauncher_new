@@ -3,7 +3,7 @@ use std::{
     io::{BufRead, BufReader},
     path::PathBuf,
     process::{Command, Stdio},
-    sync::{Mutex, OnceLock},
+    sync::{Mutex, MutexGuard, OnceLock, PoisonError},
     thread,
 };
 use tauri::Emitter;
@@ -16,9 +16,81 @@ struct GameProcess {
     termination_requested: bool,
 }
 
-fn game_process_store() -> &'static Mutex<Option<GameProcess>> {
-    static STORE: OnceLock<Mutex<Option<GameProcess>>> = OnceLock::new();
-    STORE.get_or_init(|| Mutex::new(None))
+/// 全局启动状态：已拉起的游戏进程，以及仍在准备阶段（检测/下载 Java、
+/// 构建参数）、尚未拉起进程的启动请求。
+///
+/// `launch_game` 改为 async 后，准备阶段不再占住主线程，终止命令可能在
+/// 进程拉起之前到达；准备中的启动登记在这里，终止命令才能取消它。
+#[derive(Default)]
+struct LaunchState {
+    process: Option<GameProcess>,
+    /// 处于准备阶段的启动请求数量
+    preparing: usize,
+    /// 每次终止命令取消准备中的启动时递增。启动请求记录登记时的值，
+    /// 值发生变化即表示它已被取消。
+    cancel_generation: u64,
+}
+
+fn game_process_store() -> &'static Mutex<LaunchState> {
+    static STORE: OnceLock<Mutex<LaunchState>> = OnceLock::new();
+    STORE.get_or_init(|| Mutex::new(LaunchState::default()))
+}
+
+/// 登记/注销准备阶段只做计数，状态被毒化时仍继续，避免注销失败导致计数泄漏。
+fn lock_launch_state() -> MutexGuard<'static, LaunchState> {
+    game_process_store()
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+}
+
+/// 准备阶段被终止命令取消时 `launch_game` 返回的错误文案。
+/// 前端 `components/launch/launch-provider.tsx` 的 `LAUNCH_CANCELLED_MESSAGE`
+/// 按此前缀识别取消、不显示为启动失败，修改时两边须同步。
+pub(super) const LAUNCH_CANCELLED_MESSAGE: &str = "启动已取消";
+
+fn register_preparation(state: &mut LaunchState) -> u64 {
+    state.preparing += 1;
+    state.cancel_generation
+}
+
+fn finish_preparation(state: &mut LaunchState) {
+    state.preparing = state.preparing.saturating_sub(1);
+}
+
+fn is_launch_cancelled(state: &LaunchState, generation: u64) -> bool {
+    state.cancel_generation != generation
+}
+
+/// 一次处于准备阶段的启动请求。存活期间终止命令可以取消它，drop 时自动注销。
+pub(super) struct LaunchTicket {
+    generation: u64,
+}
+
+impl LaunchTicket {
+    pub(super) fn register() -> Self {
+        let generation = register_preparation(&mut lock_launch_state());
+        Self { generation }
+    }
+
+    /// 准备阶段的检查点：已收到终止命令时返回错误，不再继续启动。
+    pub(super) fn ensure_not_cancelled(&self) -> Result<(), String> {
+        if is_launch_cancelled(&lock_launch_state(), self.generation) {
+            Err(LAUNCH_CANCELLED_MESSAGE.to_string())
+        } else {
+            Ok(())
+        }
+    }
+
+    /// 交给 `run_command`，在拉起进程的同一把锁内做最后一次取消检查。
+    pub(super) fn generation(&self) -> u64 {
+        self.generation
+    }
+}
+
+impl Drop for LaunchTicket {
+    fn drop(&mut self) {
+        finish_preparation(&mut lock_launch_state());
+    }
 }
 
 fn insert_process_if_empty(
@@ -59,25 +131,70 @@ fn reset_termination_request_if_pid(store: &mut Option<GameProcess>, pid: u32) {
     }
 }
 
-/// 检测游戏是否完全启动（JVM 启动、加载完资源、主窗口就绪）
-/// 通过 Minecraft 日志中的标志性字符串判断
+#[derive(Debug, PartialEq, Eq)]
+enum KillAction {
+    /// 终止已拉起的游戏进程
+    Terminate { pid: u32, started: bool },
+    /// 游戏进程尚未拉起，只取消准备中的启动
+    CancelPreparation,
+}
+
+/// 决定终止命令要做什么。准备中的启动（含排队等待的）一律取消，
+/// 避免用户点了终止后游戏仍在准备结束时被拉起。
+fn claim_kill_action(state: &mut LaunchState) -> Result<KillAction, String> {
+    let has_preparing_launch = state.preparing > 0;
+    if state.process.is_some() {
+        // 先取消准备中的启动，再认领终止请求：进程已在终止中时认领会失败，
+        // 但在第一次终止之后才登记的启动仍须被这次终止命令取消。
+        if has_preparing_launch {
+            state.cancel_generation += 1;
+        }
+        let (pid, started) = claim_termination_request(&mut state.process)?;
+        return Ok(KillAction::Terminate { pid, started });
+    }
+    if has_preparing_launch {
+        state.cancel_generation += 1;
+        return Ok(KillAction::CancelPreparation);
+    }
+    Err("当前没有运行中的游戏进程".to_string())
+}
+
+/// 游戏客户端已经打开窗口、进入首次资源加载（随后显示主菜单）时才会输出的日志。
+/// 均来自本地 E2E 实测日志（1.20.1 Forge/Quilt、1.21.1 原版/Fabric/NeoForge），
+/// 大小写不敏感匹配。
+const CLIENT_READY_MARKERS: &[&str] = &[
+    // 1.12.2 起 SoundManager/SoundEngine 初始化完成
+    "sound engine started",
+    // 新版 LWJGL3 音频库：OpenAL initialized on device ...
+    "openal initialized",
+];
+
+/// 旧有标记：原版/加载器的启动完成文案，以及进入世界、连接服务器等更晚的阶段。
+const LEGACY_READY_MARKERS: &[&str] = &[
+    "minecraft client started",
+    "minecraft is ready to start",
+    "preparing spawn area",
+    "minecraft initialized",
+    "launching game",
+    "minecraft client has started",
+    "title screen",
+    "connecting to ",
+    "joined the game",
+];
+
+/// 检测游戏是否完全启动（JVM 启动、主窗口就绪、开始加载资源/显示主菜单）
+/// 通过 Minecraft 日志中的标志性字符串判断，大小写不敏感。
 fn is_game_fully_started(line: &str) -> bool {
-    // 原版 Minecraft: "Minecraft client started" / "Preparing spawn area" / "Minecraft initialized"
-    // 常见 Mod 加载器: "mod loading complete" / "Minecraft is ready to start" / "Launching game"
     let lower = line.to_lowercase();
-    lower.contains("minecraft client started")
-        || lower.contains("minecraft is ready to start")
-        || lower.contains("preparing spawn area")
-        || lower.contains("minecraft initialized")
-        || lower.contains("launching game")
-        || lower.contains("loading complete") && lower.contains("mod")
-        || lower.contains("minecraft client has started")
-        // 对于新版 Fabric/原版，未必输出上述固定文案；一旦已经进入世界、
-        // 显示主菜单或开始连接服务器，就说明客户端已经成功运行。
-        || lower.contains("title screen")
-        || lower.contains("connecting to ")
-        || lower.contains("joined the game")
-        || lower.contains("joined ") && lower.contains("server")
+    CLIENT_READY_MARKERS
+        .iter()
+        .chain(LEGACY_READY_MARKERS)
+        .any(|marker| lower.contains(marker))
+        // 纹理图集创建：1.12.2 为 "Created: 1024x512 textures-atlas"，
+        // 1.13+ 为 "Created: 1024x512x4 minecraft:textures/atlas/blocks.png-atlas"
+        || (lower.contains("created:") && lower.contains("atlas"))
+        || (lower.contains("loading complete") && lower.contains("mod"))
+        || (lower.contains("joined ") && lower.contains("server"))
 }
 
 /// 将进程结束状态转换为可展示的退出码。
@@ -179,6 +296,7 @@ pub fn run_command(
     javaPath: PathBuf,
     MCPath: PathBuf,
     app_handle: tauri::AppHandle,
+    launch_generation: u64,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // 检查 Java 路径是否存在
     if !javaPath.exists() {
@@ -225,11 +343,15 @@ pub fn run_command(
     command.stdout(Stdio::piped());
     command.stderr(Stdio::piped());
 
-    // 持有同一个锁完成“检查 + 启动 + 登记”。这样两个并发请求不能覆盖彼此。
+    // 持有同一个锁完成“检查 + 启动 + 登记”。这样两个并发请求不能覆盖彼此，
+    // 终止命令也只能落在“取消启动”或“终止已登记进程”之一，不会漏杀。
     let mut store = game_process_store()
         .lock()
         .map_err(|e| format!("无法读取游戏进程状态: {}", e))?;
-    if let Some(current) = store.as_ref() {
+    if is_launch_cancelled(&store, launch_generation) {
+        return Err(LAUNCH_CANCELLED_MESSAGE.into());
+    }
+    if let Some(current) = store.process.as_ref() {
         return Err(format!("已有游戏进程正在运行 (PID {})", current.pid).into());
     }
 
@@ -244,7 +366,7 @@ pub fn run_command(
 
             // 存储到全局进程表（启动中，尚未完成初始化）。
             insert_process_if_empty(
-                &mut store,
+                &mut store.process,
                 GameProcess {
                     pid,
                     fully_started: false,
@@ -277,7 +399,9 @@ pub fn run_command(
                             if is_game_fully_started(&line) && claim_startup_transition(&flag) {
                                 let is_current_process = {
                                     let mut store = game_process_store().lock().unwrap();
-                                    if let Some(gp) = store.as_mut().filter(|gp| gp.pid == pid) {
+                                    if let Some(gp) =
+                                        store.process.as_mut().filter(|gp| gp.pid == pid)
+                                    {
                                         gp.fully_started = true;
                                         true
                                     } else {
@@ -314,7 +438,9 @@ pub fn run_command(
                             if is_game_fully_started(&line) && claim_startup_transition(&flag) {
                                 let is_current_process = {
                                     let mut store = game_process_store().lock().unwrap();
-                                    if let Some(gp) = store.as_mut().filter(|gp| gp.pid == pid) {
+                                    if let Some(gp) =
+                                        store.process.as_mut().filter(|gp| gp.pid == pid)
+                                    {
                                         gp.fully_started = true;
                                         true
                                     } else {
@@ -345,7 +471,7 @@ pub fn run_command(
                 // 仅清除此等待线程对应的进程。旧线程不能清除或上报新进程。
                 let should_emit = game_process_store()
                     .lock()
-                    .map(|mut store| clear_process_if_pid(&mut store, pid))
+                    .map(|mut store| clear_process_if_pid(&mut store.process, pid))
                     .unwrap_or(false);
                 if should_emit {
                     let _ = app_handle.emit("game-exited", exit_code);
@@ -393,18 +519,26 @@ fn terminate_process(pid: u32) -> Result<(), String> {
     }
 }
 
-/// 终止当前游戏进程（在游戏未完全启动前可调用）
+/// 终止当前游戏进程（在游戏未完全启动前可调用）。
+/// 游戏进程尚未拉起（仍在检测/下载 Java、构建参数）时，取消这次启动。
 #[tauri::command]
 pub fn kill_game_process() -> Result<String, String> {
     // 先在锁内登记终止请求，再释放锁运行外部命令。
-    let (pid, started) = {
+    let action = {
         let mut store = game_process_store().lock().map_err(|e| e.to_string())?;
-        claim_termination_request(&mut store)?
+        claim_kill_action(&mut store)?
+    };
+    let (pid, started) = match action {
+        KillAction::CancelPreparation => {
+            info!("游戏进程尚未拉起，已取消准备中的启动");
+            return Ok("已取消正在准备的游戏启动".to_string());
+        }
+        KillAction::Terminate { pid, started } => (pid, started),
     };
 
     if let Err(error) = terminate_process(pid) {
         if let Ok(mut store) = game_process_store().lock() {
-            reset_termination_request_if_pid(&mut store, pid);
+            reset_termination_request_if_pid(&mut store.process, pid);
         }
         return Err(error);
     }
@@ -419,10 +553,202 @@ pub fn kill_game_process() -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        claim_startup_transition, claim_termination_request, clear_process_if_pid,
-        insert_process_if_empty, parse_log_level, reset_termination_request_if_pid, GameProcess,
+        claim_kill_action, claim_startup_transition, claim_termination_request,
+        clear_process_if_pid, finish_preparation, insert_process_if_empty, is_game_fully_started,
+        is_launch_cancelled, parse_log_level, register_preparation,
+        reset_termination_request_if_pid, GameProcess, KillAction, LaunchState,
+        LAUNCH_CANCELLED_MESSAGE,
     };
     use std::sync::atomic::{AtomicBool, Ordering};
+
+    #[test]
+    fn detects_startup_from_real_1_21_1_logs() {
+        // 摘自本地 E2E：1.21.1 原版 / Fabric 0.20.1 / NeoForge 21.1.267 进入主菜单的日志
+        for line in [
+            "[16:37:28] [Render thread/INFO]: OpenAL initialized on device MacBook Pro扬声器",
+            "[16:37:28] [Render thread/INFO]: Sound engine started",
+            "[16:37:28] [Render thread/INFO]: Created: 1024x512x4 minecraft:textures/atlas/blocks.png-atlas",
+            "[16:38:01] [Render thread/INFO]: Created: 1024x512x0 minecraft:textures/atlas/gui.png-atlas",
+            "[16:55:02] [Render thread/INFO] [minecraft/SoundEngine]: Sound engine started",
+            "[16:55:02] [Render thread/INFO] [minecraft/TextureAtlas]: Created: 1024x512x4 minecraft:textures/atlas/blocks.png-atlas",
+        ] {
+            assert!(is_game_fully_started(line), "{line}");
+        }
+    }
+
+    #[test]
+    fn detects_startup_from_real_1_20_1_logs() {
+        // 摘自本地 E2E：1.20.1 Forge 47.4.29 / Quilt 0.30.2 进入主菜单的日志
+        for line in [
+            "[16:53:57] [Render thread/INFO] [mojang/Library]: OpenAL initialized on device CoreAudio Default",
+            "[16:53:57] [Render thread/INFO] [minecraft/SoundEngine]: Sound engine started",
+            "[16:53:57] [Render thread/INFO] [minecraft/TextureAtlas]: Created: 1024x512x4 minecraft:textures/atlas/blocks.png-atlas",
+            "[16:54:26] [Render thread/INFO]: OpenAL initialized on device CoreAudio Default",
+            "[16:54:26] [Render thread/INFO]: Created: 256x256x4 minecraft:textures/atlas/signs.png-atlas",
+        ] {
+            assert!(is_game_fully_started(line), "{line}");
+        }
+    }
+
+    #[test]
+    fn detects_startup_from_1_12_2_log_format() {
+        // 本次 E2E 的 1.12.2 在 arm64 上因 LWJGL2 原生库缺失未能进入主菜单，
+        // 这里是 1.12.2 原版 / Forge 主菜单前的标准日志格式样本。
+        for line in [
+            "[12:00:00] [Sound Library Loader/INFO]: Sound engine started",
+            "[12:00:00] [Client thread/INFO]: Created: 1024x512 textures-atlas",
+            "[12:00:00] [Sound Library Loader/INFO] [minecraft/SoundManager]: Sound engine started",
+            "[12:00:00] [Client thread/INFO] [minecraft/TextureMap]: Created: 512x512 textures-atlas",
+        ] {
+            assert!(is_game_fully_started(line), "{line}");
+        }
+    }
+
+    #[test]
+    fn matches_startup_markers_case_insensitively() {
+        assert!(is_game_fully_started(
+            "[Render thread/INFO]: SOUND ENGINE STARTED"
+        ));
+        assert!(is_game_fully_started(
+            "[Render thread/INFO]: openal Initialized."
+        ));
+    }
+
+    #[test]
+    fn does_not_detect_startup_from_early_log_lines() {
+        // 摘自同一批 E2E 日志中 JVM/加载器启动、早期窗口、模组加载阶段的行，
+        // 以及 1.12.2 启动失败时的行；这些都不能让启动页提前结束。
+        for line in [
+            "\u{1b}[32m[16:54:52.859] [main/INFO] [Launcher/MODLAUNCHER]: ModLauncher running: args [--fml.neoForgeVersion, 21.1.267, --fml.fmlVersion, 4.0.45, --fml.mcVersion, 1.21.1, --launchTarget, forgeclient]",
+            "\u{1b}[m\u{1b}[32m[16:54:53.712] [main/INFO] [EARLYDISPLAY/]: Requested GL version 4.1 got version 4.1 ",
+            "[16:53:50] [main/INFO] [cp.mo.mo.LaunchServiceHandler/MODLAUNCHER]: Launching target 'forgeclient' with arguments [--version, e2e-forge-1.20.1]",
+            "[16:53:53] [modloading-worker-0/INFO] [ne.mi.co.ForgeMod/FORGEMOD]: Forge mod loading, version 47.4.29, for MC 1.20.1 with MCP 20230612.114412",
+            "[16:54:59] [modloading-worker-0/INFO] [ne.ne.ne.co.NeoForgeMod/NEOFORGE-MOD]: NeoForge mod loading, version 21.1.267, for MC 1.21.1",
+            "[16:37:49] [main/INFO]: Loading Minecraft 1.21.1 with Fabric Loader 0.20.1",
+            "[16:37:49] [main/INFO]: Loading 57 mods:",
+            "[16:54:16] [main/INFO]: Loading Minecraft 1.20.1 with Quilt Loader 0.30.2",
+            "[16:37:20] [Datafixer Bootstrap/INFO]: 226 Datafixer optimizations took 99 milliseconds",
+            "[16:37:23] [Render thread/INFO]: Setting user: RTLTest",
+            "[16:37:23] [Render thread/INFO]: Backend library: LWJGL version 3.3.3+5",
+            "[16:53:55] [Render thread/INFO] [minecraft/ReloadableResourceManager]: Reloading ResourceManager: vanilla, mod_resources",
+            "[16:37:28] [Render thread/WARN]: Missing sound for event: minecraft:item.goat_horn.play",
+            "[16:38:52] [main/INFO] [FML]: Found valid fingerprint for Minecraft. Certificate fingerprint cd99959656f753dc28d863b46769f7f8fbaefcfc",
+            "[16:38:52] [main/INFO] [LaunchWrapper]: Launching wrapped minecraft {net.minecraft.client.main.Main}",
+            "Exception in thread \"main\" java.lang.UnsatisfiedLinkError: no lwjgl in java.library.path",
+        ] {
+            assert!(!is_game_fully_started(line), "{line}");
+        }
+    }
+
+    #[test]
+    fn cancels_a_launch_that_is_still_preparing() {
+        let mut state = LaunchState::default();
+        let generation = register_preparation(&mut state);
+        assert!(!is_launch_cancelled(&state, generation));
+
+        assert_eq!(
+            claim_kill_action(&mut state),
+            Ok(KillAction::CancelPreparation)
+        );
+        assert!(is_launch_cancelled(&state, generation));
+
+        // 取消之后登记的新启动不受之前的终止命令影响。
+        finish_preparation(&mut state);
+        let next = register_preparation(&mut state);
+        assert!(!is_launch_cancelled(&state, next));
+    }
+
+    #[test]
+    fn reports_nothing_to_kill_when_no_launch_is_active() {
+        let mut state = LaunchState::default();
+
+        assert!(claim_kill_action(&mut state).is_err());
+        assert_eq!(state.cancel_generation, 0);
+
+        // 准备阶段结束后计数归零，不会因重复注销下溢。
+        let _ = register_preparation(&mut state);
+        finish_preparation(&mut state);
+        finish_preparation(&mut state);
+        assert_eq!(state.preparing, 0);
+        assert!(claim_kill_action(&mut state).is_err());
+    }
+
+    #[test]
+    fn terminating_a_game_also_cancels_queued_launches() {
+        let mut state = LaunchState {
+            process: Some(GameProcess {
+                pid: 100,
+                fully_started: true,
+                termination_requested: false,
+            }),
+            ..LaunchState::default()
+        };
+        let untouched = state.cancel_generation;
+        assert_eq!(
+            claim_kill_action(&mut state),
+            Ok(KillAction::Terminate {
+                pid: 100,
+                started: true
+            })
+        );
+        // 没有排队中的启动时不改变取消代数。
+        assert_eq!(state.cancel_generation, untouched);
+
+        reset_termination_request_if_pid(&mut state.process, 100);
+        let queued = register_preparation(&mut state);
+        assert_eq!(
+            claim_kill_action(&mut state),
+            Ok(KillAction::Terminate {
+                pid: 100,
+                started: true
+            })
+        );
+        assert!(is_launch_cancelled(&state, queued));
+    }
+
+    #[test]
+    fn repeated_termination_still_cancels_launches_queued_after_the_first() {
+        let mut state = LaunchState {
+            process: Some(GameProcess {
+                pid: 100,
+                fully_started: true,
+                termination_requested: false,
+            }),
+            ..LaunchState::default()
+        };
+        assert!(claim_kill_action(&mut state).is_ok());
+
+        // 第一次终止之后才登记的启动，持有当时的取消代数。
+        let queued = register_preparation(&mut state);
+        let before = state.cancel_generation;
+
+        // 进程仍在终止中：重复终止照旧报错，但必须已取消这个启动，
+        // 否则旧进程清理后它能通过 run_command 的检查把游戏拉起来。
+        assert!(claim_kill_action(&mut state).is_err());
+        assert_eq!(state.cancel_generation, before + 1);
+        assert!(is_launch_cancelled(&state, queued));
+    }
+
+    #[test]
+    fn repeated_termination_without_preparing_launch_keeps_generation() {
+        let mut state = LaunchState {
+            process: Some(GameProcess {
+                pid: 100,
+                fully_started: false,
+                termination_requested: true,
+            }),
+            ..LaunchState::default()
+        };
+
+        assert!(claim_kill_action(&mut state).is_err());
+        assert_eq!(state.cancel_generation, 0);
+    }
+
+    #[test]
+    fn keeps_the_cancellation_message_shared_with_the_frontend() {
+        // launch-provider.tsx 按这个前缀把取消与启动失败区分开。
+        assert_eq!(LAUNCH_CANCELLED_MESSAGE, "启动已取消");
+    }
 
     #[test]
     fn reads_the_level_from_the_thread_tag_after_a_timestamp() {

@@ -17,30 +17,131 @@ pub use arguments::build_jvm_arguments;
 pub use process::kill_game_process;
 
 /// 启动游戏（构建参数并执行 Java 进程）
+///
+/// 必须是 async 命令：同步命令在主线程执行，既没有 Tokio 运行时上下文（自动下载
+/// Java 时 `Handle::current()` 会 panic），也会在检测/下载 Java、构建参数期间卡住界面。
+/// 阻塞步骤放到 `spawn_blocking`，Java 下载直接 `.await`。
 #[tauri::command]
-pub fn launch_game(
+pub async fn launch_game(
     app: tauri::AppHandle,
-    minecraft_path: &str,
-    java_path: &str,
-    wrapper_path: &str,
-    max_memory: &str,
-    version_name: &str,
-    minecraft_version: &str,
-    player_name: &str,
-    auth_token: &str,
-    uuid: &str,
-    authlib_injector_path: &str,
-    yggdrasil_api: &str,
-    prefetched_data: &str,
-    loadType: &str,
-    loadName: &str,
-    window_width: &str,
-    window_height: &str,
-    custom_jvm_args: &str,
+    minecraft_path: String,
+    java_path: String,
+    wrapper_path: String,
+    max_memory: String,
+    version_name: String,
+    minecraft_version: String,
+    player_name: String,
+    auth_token: String,
+    uuid: String,
+    authlib_injector_path: String,
+    yggdrasil_api: String,
+    prefetched_data: String,
+    loadType: String,
+    loadName: String,
+    window_width: String,
+    window_height: String,
+    custom_jvm_args: String,
 ) -> Result<String, String> {
     crate::handler::system::schedule_launcher_profiles_check();
 
-    let mut resolved_java_path = java_path.to_string();
+    // 先登记再排队：排队等待期间收到的终止命令同样会取消这次启动。
+    let ticket = process::LaunchTicket::register();
+    // 同步命令时代由主线程天然串行；改为 async 后用这把锁保持同一时刻只有一个
+    // 启动在检测/下载 Java、构建参数，避免并发下载同一个 Java 运行时。
+    let _serial_guard = launch_serial_lock().lock().await;
+    ticket.ensure_not_cancelled()?;
+
+    // 读取游戏 JAR、执行 java -version、扫描本机 Java 都会阻塞。
+    let selection = {
+        let minecraft_path = minecraft_path.clone();
+        let version_name = version_name.clone();
+        let java_path = java_path.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            select_java_for_launch(&minecraft_path, &version_name, &java_path)
+        })
+        .await
+        .map_err(|e| format!("检测 Java 失败: {}", e))?
+    };
+    ticket.ensure_not_cancelled()?;
+
+    let resolved_java_path = match selection {
+        JavaSelection::Ready(path) => path,
+        JavaSelection::NeedsDownload {
+            major,
+            runtime_name,
+        } => {
+            let path = download_java_for_launch(&app, major, runtime_name, &java_path).await?;
+            ticket.ensure_not_cancelled()?;
+            path
+        }
+    };
+
+    // 构建参数与拉起进程同样是阻塞 I/O。run_command 会在登记进程的同一把锁内
+    // 再检查一次取消，保证终止命令不会落在“已拉起但未登记”的空档里。
+    let launch_generation = ticket.generation();
+    let args = tauri::async_runtime::spawn_blocking(move || -> Result<Vec<String>, String> {
+        let args = build_jvm_arguments_inner(
+            app.clone(),
+            &minecraft_path,
+            &resolved_java_path,
+            &wrapper_path,
+            &max_memory,
+            &version_name,
+            &minecraft_version,
+            &player_name,
+            &auth_token,
+            &uuid,
+            &authlib_injector_path,
+            &yggdrasil_api,
+            &prefetched_data,
+            &loadType,
+            &loadName,
+            &window_width,
+            &window_height,
+            &custom_jvm_args,
+        )
+        .map_err(|e| e.to_string())?;
+
+        run_command(
+            args.clone(),
+            PathBuf::from(&resolved_java_path),
+            PathBuf::from(&minecraft_path),
+            app,
+            launch_generation,
+        )
+        .map_err(|e| e.to_string())?;
+
+        Ok(args)
+    })
+    .await
+    .map_err(|e| format!("启动游戏失败: {}", e))??;
+
+    Ok(args.join(" "))
+}
+
+fn launch_serial_lock() -> &'static tokio::sync::Mutex<()> {
+    static LOCK: std::sync::OnceLock<tokio::sync::Mutex<()>> = std::sync::OnceLock::new();
+    LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
+}
+
+/// 启动前选择 Java 的结果
+enum JavaSelection {
+    /// 直接使用该 Java（原路径，或自动切换到的已安装 Java）
+    Ready(String),
+    /// 本机没有匹配的 Java，需要自动下载该运行时
+    NeedsDownload {
+        major: u32,
+        runtime_name: &'static str,
+    },
+}
+
+/// 根据版本 JSON 与游戏 JAR 推断所需 Java，并在本机查找匹配的安装。
+/// 包含磁盘与子进程操作，只能在阻塞线程中调用。
+fn select_java_for_launch(
+    minecraft_path: &str,
+    version_name: &str,
+    java_path: &str,
+) -> JavaSelection {
     let version_json_path = PathBuf::from(minecraft_path)
         .join("versions")
         .join(version_name)
@@ -69,86 +170,7 @@ pub fn launch_game(
         (None, actual) => actual,
     };
 
-    if let Some(major) = target_major {
-        println!(
-            "[启动器] 版本 {} 的 javaVersion.majorVersion = {}",
-            version_name, major
-        );
-
-        let current_major = crate::handler::java_scanner::validate_java_path(java_path.to_string())
-            .ok()
-            .map(|inst| inst.major_version);
-
-        let needs_swap = match current_major {
-            Some(m) => {
-                println!("[启动器] 当前 Java 路径 {} 的大版本号 = {}", java_path, m);
-                m != major as i32
-            }
-            None => {
-                println!("[启动器] 当前 Java 路径 {} 无效或无法获取版本号", java_path);
-                true
-            }
-        };
-
-        if needs_swap {
-            println!(
-                "[启动器] Java 版本不匹配（需要 {}），正在搜索匹配的 Java 安装...",
-                major
-            );
-            if let Some(matched) = crate::handler::java_scanner::find_java_by_major_version(major) {
-                println!(
-                    "[启动器] 已自动切换到匹配的 Java: {} (版本 {})",
-                    matched.path, matched.version
-                );
-                resolved_java_path = matched.path;
-            } else {
-                let runtime_name = major_version_to_runtime_name(major);
-                if let Some(rt_name) = runtime_name {
-                    println!(
-                        "[启动器] 未找到匹配的 Java {}，开始自动下载 {}...",
-                        major, rt_name
-                    );
-                    let java_download_dir = crate::handler::config::get_java_download_dir()
-                        .unwrap_or_else(|_| "./RTL/java".to_string());
-                    let task_id = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .map(|d| d.as_secs())
-                        .unwrap_or(0);
-                    let window = app
-                        .get_webview_window("main")
-                        .ok_or_else(|| "无法获取主窗口".to_string())?;
-                    let rt_name_owned = rt_name.to_string();
-                    let base_path = java_download_dir.clone();
-                    let download_result = tokio::runtime::Handle::current().block_on(async move {
-                        crate::handler::java_downloader::download_java_runtime(
-                            rt_name_owned,
-                            base_path,
-                            task_id,
-                            window,
-                        )
-                        .await
-                    });
-                    match download_result {
-                        Ok(result) => {
-                            println!("[启动器] Java 下载成功: {}", result.message);
-                            resolved_java_path = result.java_path;
-                        }
-                        Err(e) => {
-                            eprintln!(
-                                "[启动器] Java 下载失败: {}，将继续使用当前路径 {}",
-                                e, java_path
-                            );
-                        }
-                    }
-                } else {
-                    println!(
-                        "[启动器] Java {} 无对应运行时名称映射，将继续使用当前路径 {}",
-                        major, java_path
-                    );
-                }
-            }
-        }
-    } else {
+    let Some(major) = target_major else {
         println!(
             "[启动器] 版本 {} 的版本 json 中未找到 javaVersion 字段",
             version_name
@@ -158,41 +180,102 @@ pub fn launch_game(
             "[启动器] Java 路径 {} 的大版本号 = {}",
             java_path, java_major
         );
+        return JavaSelection::Ready(java_path.to_string());
+    };
+
+    println!(
+        "[启动器] 版本 {} 的 javaVersion.majorVersion = {}",
+        version_name, major
+    );
+
+    let current_major = crate::handler::java_scanner::validate_java_path(java_path.to_string())
+        .ok()
+        .map(|inst| inst.major_version);
+
+    let needs_swap = match current_major {
+        Some(m) => {
+            println!("[启动器] 当前 Java 路径 {} 的大版本号 = {}", java_path, m);
+            m != major as i32
+        }
+        None => {
+            println!("[启动器] 当前 Java 路径 {} 无效或无法获取版本号", java_path);
+            true
+        }
+    };
+
+    if !needs_swap {
+        return JavaSelection::Ready(java_path.to_string());
     }
 
-    // 先构建参数
-    let args = build_jvm_arguments_inner(
-        app.clone(),
-        minecraft_path,
-        &resolved_java_path,
-        wrapper_path,
-        max_memory,
-        version_name,
-        minecraft_version,
-        player_name,
-        auth_token,
-        uuid,
-        authlib_injector_path,
-        yggdrasil_api,
-        prefetched_data,
-        loadType,
-        loadName,
-        window_width,
-        window_height,
-        custom_jvm_args,
-    )
-    .map_err(|e| e.to_string())?;
+    println!(
+        "[启动器] Java 版本不匹配（需要 {}），正在搜索匹配的 Java 安装...",
+        major
+    );
+    if let Some(matched) = crate::handler::java_scanner::find_java_by_major_version(major) {
+        println!(
+            "[启动器] 已自动切换到匹配的 Java: {} (版本 {})",
+            matched.path, matched.version
+        );
+        return JavaSelection::Ready(matched.path);
+    }
 
-    // 再启动游戏
-    run_command(
-        args.clone(),
-        PathBuf::from(&resolved_java_path),
-        PathBuf::from(minecraft_path),
-        app,
-    )
-    .map_err(|e| e.to_string())?;
+    match major_version_to_runtime_name(major) {
+        Some(runtime_name) => JavaSelection::NeedsDownload {
+            major,
+            runtime_name,
+        },
+        None => {
+            println!(
+                "[启动器] Java {} 无对应运行时名称映射，将继续使用当前路径 {}",
+                major, java_path
+            );
+            JavaSelection::Ready(java_path.to_string())
+        }
+    }
+}
 
-    Ok(args.join(" "))
+/// 自动下载缺失的 Java 运行时。下载失败时沿用当前 Java 路径（与原行为一致），
+/// 由后续启动步骤给出具体错误。
+async fn download_java_for_launch(
+    app: &tauri::AppHandle,
+    major: u32,
+    runtime_name: &str,
+    java_path: &str,
+) -> Result<String, String> {
+    println!(
+        "[启动器] 未找到匹配的 Java {}，开始自动下载 {}...",
+        major, runtime_name
+    );
+    let java_download_dir = crate::handler::config::get_java_download_dir()
+        .unwrap_or_else(|_| "./RTL/java".to_string());
+    let task_id = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let window = app
+        .get_webview_window("main")
+        .ok_or_else(|| "无法获取主窗口".to_string())?;
+
+    match crate::handler::java_downloader::download_java_runtime(
+        runtime_name.to_string(),
+        java_download_dir,
+        task_id,
+        window,
+    )
+    .await
+    {
+        Ok(result) => {
+            println!("[启动器] Java 下载成功: {}", result.message);
+            Ok(result.java_path)
+        }
+        Err(e) => {
+            eprintln!(
+                "[启动器] Java 下载失败: {}，将继续使用当前路径 {}",
+                e, java_path
+            );
+            Ok(java_path.to_string())
+        }
+    }
 }
 
 #[cfg(test)]
