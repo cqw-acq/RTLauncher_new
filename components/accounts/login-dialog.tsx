@@ -10,6 +10,7 @@ import { useAccountContext } from "@/components/accounts/account-provider";
 import { X, Globe, User, Loader2, Shield, Check, Copy, AlertCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { overlayFade, scaleIn, fadeSlideUp } from "@/lib/motion";
+import { cancelLittleSkinLogin } from "@/lib/auth";
 import type { ThirdPartyProfile, LittleSkinAccount, DeviceCodeInfo } from "@/lib/auth";
 
 type LoginTab = "microsoft" | "littleskin" | "third_party" | "offline";
@@ -53,6 +54,7 @@ export function LoginDialog({
   const handleClose = () => {
     if (forcedMode) return; // <-- 强制登录：不允许关闭！
     cancelMicrosoftLogin();
+    void cancelLittleSkinLogin().catch(() => {});
     onForcedDeviceCodeConsumed?.();
     clearForcedMicrosoftDeviceCode?.();
     onClose();
@@ -71,6 +73,7 @@ export function LoginDialog({
   const [lsUsername, setLsUsername] = useState("");
   const [lsPassword, setLsPassword] = useState("");
   const [lsProfiles, setLsProfiles] = useState<LittleSkinAccount[] | null>(null);
+  const [lsOauthWaiting, setLsOauthWaiting] = useState(false);
 
   // 第三方登录表单
   const [tpUrl, setTpUrl] = useState("");
@@ -148,10 +151,16 @@ export function LoginDialog({
 
   // LittleSkin OAuth 登录（浏览器方式）
   const handleLittleSkin = async () => {
-    await loginWithLittleSkin();
-    if (loginState !== "error") handleClose();
+    setLsOauthWaiting(true);
+    try {
+      const ok = await loginWithLittleSkin();
+      if (ok) handleClose();   // 只有成功才关闭弹窗
+    } catch {
+      // 失败则不关闭弹窗，使用 loginError 显示原因
+    } finally {
+      setLsOauthWaiting(false);
+    }
   };
-
   // LittleSkin 账号密码登录（PCL2 风格，无需浏览器）
   const handleLittleSkinCredentials = async () => {
     try {
@@ -498,6 +507,23 @@ export function LoginDialog({
                             改为使用 OAuth 浏览器登录
                           </Button>
                         </div>
+                        {lsOauthWaiting && (
+                          <div className="space-y-1.5 rounded-lg border border-border p-3">
+                            <p className="text-xs text-muted-foreground">
+                              请在浏览器中完成授权。
+                            </p>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="w-full"
+                              onClick={() => {
+                                void cancelLittleSkinLogin().catch(() => {});
+                              }}
+                            >
+                              取消登录
+                            </Button>
+                          </div>
+                        )}
                       </div>
                     )}
 

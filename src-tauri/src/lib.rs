@@ -12,7 +12,7 @@ mod multiplayer;
 mod themes;
 mod updater;
 mod version_management;
-use auth::littleskinLoader::{useMethod, use_method_with_credentials};
+use auth::littleskinLoader::{littleskin_cancel_login, useMethod, use_method_with_credentials};
 use auth::official::{
     delete_cached_skin, fetch_texture_image_base64, get_skin_base64, ms_activate_skin,
     ms_cancel_login, ms_delete_skin, ms_get_skins_and_capes, ms_has_account_in_db,
@@ -143,6 +143,7 @@ pub fn run() {
             classify_minecraft_versions,
             extract_library_paths,
             useMethod,
+            littleskin_cancel_login,
             use_method_with_credentials,
             thirdPartyLogin,
             getAccountList,
