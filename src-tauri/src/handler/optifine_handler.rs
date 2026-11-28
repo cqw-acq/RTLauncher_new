@@ -99,7 +99,8 @@ pub async fn install_optifine(
     let version_folder = if optifine_version.starts_with("http://")
         || optifine_version.starts_with("https://")
     {
-        let fallback = optifine_fallback_url.unwrap_or_else(|| optifine_version.clone());
+        // 备用链接可为空：安装器总会在最后回退到 optifine.net 官网
+        let fallback = optifine_fallback_url.unwrap_or_default();
         optifine_installer::install_optifine_from_bmcl_with_fallback(
             &mc_version,
             &optifine_version,
@@ -228,7 +229,8 @@ pub async fn download_and_install_optifine(
                 let rt = tokio::runtime::Handle::current();
                 rt.block_on(async {
                     if of_ver.starts_with("http://") || of_ver.starts_with("https://") {
-                        let fallback = of_fallback.unwrap_or_else(|| of_ver.clone());
+                        // 备用链接可为空：安装器总会在最后回退到 optifine.net 官网
+                        let fallback = of_fallback.unwrap_or_default();
                         optifine_installer::install_optifine_from_bmcl_with_fallback(
                             &v,
                             &of_ver,
