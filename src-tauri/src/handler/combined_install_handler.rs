@@ -291,11 +291,12 @@ async fn run_combined_install(
                 .await
             }
             "fabric" => {
+                // 镜像优先，镜像不可用时自动回退到 Fabric 官方源
                 crate::downloader::fabric_installer::install_fabric_loader(
                     mc_version,
                     &sel.version,
                     &mc_path_str,
-                    true,
+                    crate::downloader::fabric_installer::PREFER_MIRROR,
                 )
                 .await
             }
@@ -348,12 +349,10 @@ async fn run_combined_install(
             return Err("已取消".to_string());
         }
         send_progress(78.0);
-        let url = sel.version.clone();
-        let fallback = url.clone();
-        let installed = crate::downloader::optifine_installer::install_optifine_from_bmcl_with_fallback(
+        // sel.version 是 BMCLAPI 下载链接；镜像不可用时安装器会自动回退到 optifine.net 官网
+        let installed = crate::downloader::optifine_installer::install_optifine_from_bmcl(
             mc_version,
-            &url,
-            &fallback,
+            &sel.version,
             minecraft_path,
         )
         .await

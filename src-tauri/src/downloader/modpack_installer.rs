@@ -767,11 +767,12 @@ pub async fn install_parsed_modpack(
                         }
                     }
                     println!("[Modpack] [并行] 安装 Fabric Loader {}...", fabric_ver);
+                    // 镜像优先，镜像不可用时自动回退到 Fabric 官方源
                     let version_id = crate::downloader::fabric_installer::install_fabric_loader(
                         &parsed_mc,
                         &fabric_ver,
                         &mc_dir_str,
-                        true,
+                        crate::downloader::fabric_installer::PREFER_MIRROR,
                     )
                     .await
                     .map_err(|e| anyhow!("Fabric 安装失败: {}", e))?;

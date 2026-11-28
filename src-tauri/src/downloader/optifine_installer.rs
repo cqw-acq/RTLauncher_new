@@ -68,14 +68,6 @@ fn lookup_version_normalize(version: &str) -> String {
     }
 }
 
-fn lookup_version_denormalize(version: &str) -> String {
-    match version {
-        "1.8.0" => "1.8".to_string(),
-        "1.9.0" => "1.9".to_string(),
-        v => v.to_string(),
-    }
-}
-
 fn compare_versions(a: &str, b: &str) -> std::cmp::Ordering {
     let parse = |v: &str| -> Vec<i32> {
         v.split(|c: char| !c.is_ascii_digit())
@@ -86,70 +78,249 @@ fn compare_versions(a: &str, b: &str) -> std::cmp::Ordering {
     parse(a).cmp(&parse(b))
 }
 
-pub async fn get_optifine_versions(mc_version: &str) -> Result<Vec<OptiFineVersionInfo>> {
-    let client = shared_client().await;
-    let url = format!("{}/optifine/versionlist", BMCL_API_ROOT);
+/// OptiFine 官网。官网的 adloadx 页面里带有 downloadx 直链（含 token），HMCL、PCL 也是这样解析的。
+const OPTIFINE_OFFICIAL_ROOT: &str = "https://optifine.net";
+/// 版本列表 / 官网页面请求的单次超时，避免源挂起时等满共享客户端的 600 秒总超时
+const OPTIFINE_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+/// 小于这个大小的"安装器"一定不完整（正常的 OptiFine 安装器在 1MB 以上）
+const OPTIFINE_INSTALLER_MIN_SIZE: u64 = 100_000;
 
-    let text = client
-        .get(&url)
-        .send()
-        .await
-        .with_context(|| format!("请求 BMCLAPI OptiFine 版本列表失败: {}", url))?
-        .text()
-        .await
-        .context("读取 BMCLAPI OptiFine 版本列表失败")?;
+/// 一个 OptiFine 构建。mcversion / type / patch 的含义与 BMCLAPI 一致：
+/// 正式版是 `HD_U` + `G5`，预览版是 `HD_U_J1` + `pre13`。
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct OptiFineBuild {
+    mcversion: String,
+    type_: String,
+    patch: String,
+}
 
-    let list: Vec<OptiFineBmclEntry> = serde_json::from_str(&text)
-        .with_context(|| format!("解析 BMCLAPI OptiFine 版本列表失败:\n{}", text))?;
+/// 只允许出现在版本号 / 文件名里的字符，防止拼进 URL 时混入 `&`、`/` 等
+fn is_safe_optifine_token(s: &str) -> bool {
+    !s.is_empty()
+        && s
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-')
+}
 
-    let mut seen = std::collections::HashSet::new();
-    let mut results = Vec::new();
-    let denorm_mc = lookup_version_denormalize(mc_version);
-
-    for entry in list {
-        if entry.mcversion.is_empty() {
-            continue;
+impl OptiFineBuild {
+    fn new_checked(mcversion: &str, type_: &str, patch: &str) -> Option<Self> {
+        if [mcversion, type_, patch].iter().all(|s| is_safe_optifine_token(s)) {
+            Some(Self {
+                mcversion: mcversion.to_string(),
+                type_: type_.to_string(),
+                patch: patch.to_string(),
+            })
+        } else {
+            None
         }
-        let entry_game = lookup_version_normalize(&entry.mcversion);
-        if entry_game != denorm_mc && entry.mcversion != mc_version {
-            continue;
-        }
+    }
 
-        let self_version = format!("{}_{}", entry.type_, entry.patch);
-        let mirror_url = format!(
+    fn is_pre(&self) -> bool {
+        self.patch.starts_with("pre") || self.patch.starts_with("alpha")
+    }
+
+    fn self_version(&self) -> String {
+        format!("{}_{}", self.type_, self.patch)
+    }
+
+    fn bmcl_url(&self) -> String {
+        format!(
             "{}/optifine/{}/{}/{}",
             BMCL_API_ROOT,
-            lookup_version_normalize(&entry.mcversion),
-            entry.type_,
-            entry.patch
-        );
+            lookup_version_normalize(&self.mcversion),
+            self.type_,
+            self.patch
+        )
+    }
 
-        if !seen.insert(mirror_url.clone()) {
+    /// optifine.net 上的文件名：正式版 `OptiFine_1.12.2_HD_U_G5.jar`，
+    /// 预览版 `preview_OptiFine_1.21.1_HD_U_J1_pre13.jar`（与 BMCLAPI 列表里的 filename 一致）
+    fn official_filename(&self) -> String {
+        format!(
+            "{}OptiFine_{}_{}_{}.jar",
+            if self.is_pre() { "preview_" } else { "" },
+            lookup_version_normalize(&self.mcversion),
+            self.type_,
+            self.patch
+        )
+    }
+
+    fn official_page_url(&self) -> String {
+        format!(
+            "{}/adloadx?f={}",
+            OPTIFINE_OFFICIAL_ROOT,
+            self.official_filename()
+        )
+    }
+
+    /// 从 BMCLAPI 下载链接 `.../optifine/{mc}/{type}/{patch}` 解析
+    fn from_bmcl_url(url: &str) -> Option<Self> {
+        let path = url.split(|c| c == '?' || c == '#').next()?;
+        let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+        let idx = segments.iter().position(|s| *s == "optifine")?;
+        match &segments[idx + 1..] {
+            [mc, type_, patch, ..] => Self::new_checked(mc, type_, patch),
+            _ => None,
+        }
+    }
+
+    /// 从官网文件名 `(preview_)OptiFine_{mc}_{type}_{patch}.jar` 解析
+    fn from_official_filename(name: &str) -> Option<Self> {
+        let stem = name.strip_prefix("preview_").unwrap_or(name);
+        let stem = stem.strip_prefix("OptiFine_")?.strip_suffix(".jar")?;
+        let (mc, rest) = stem.split_once('_')?;
+        let (type_, patch) = rest.rsplit_once('_')?;
+        if !mc.starts_with(|c: char| c.is_ascii_digit()) {
+            return None;
+        }
+        Self::new_checked(mc, type_, patch)
+    }
+}
+
+/// OptiFine 版本排序键：`HD_U_G5` → (G, 5, 正式版, 0)，`HD_U_J1_pre13` → (J, 1, 预览版, 13)。
+/// 只比较数字会把 `HD_U_C9` 排到 `HD_U_G5` 前面、把 `J1_pre15` 排到正式版 `J1` 前面。
+fn optifine_release_key(self_version: &str) -> (char, u32, bool, u32) {
+    let mut letter = '\0';
+    let mut number = 0u32;
+    let mut pre: Option<u32> = None;
+    for token in self_version.split('_') {
+        if let Some(n) = token.strip_prefix("pre").or_else(|| token.strip_prefix("alpha")) {
+            pre = Some(n.parse().unwrap_or(0));
             continue;
         }
+        let mut chars = token.chars();
+        if let Some(first) = chars.next() {
+            let rest = chars.as_str();
+            if first.is_ascii_uppercase()
+                && !rest.is_empty()
+                && rest.chars().all(|c| c.is_ascii_digit())
+            {
+                letter = first;
+                number = rest.parse().unwrap_or(0);
+            }
+        }
+    }
+    (letter, number, pre.is_none(), pre.unwrap_or(0))
+}
 
-        let is_pre = entry.patch.starts_with("pre") || entry.patch.starts_with("alpha");
-        let game_version_norm = lookup_version_normalize(&entry.mcversion);
-        let full = format!("{}_{}", game_version_norm, self_version);
+fn compare_optifine_self_versions(a: &str, b: &str) -> std::cmp::Ordering {
+    optifine_release_key(a)
+        .cmp(&optifine_release_key(b))
+        .then_with(|| compare_versions(a, b))
+}
 
-        let official_url = if entry.dl.is_empty() {
-            mirror_url.clone()
-        } else {
-            entry.dl.clone()
-        };
+/// 把构建列表转换成指定 MC 版本的 OptiFineVersionInfo（新版本在前）
+fn build_optifine_version_infos(
+    builds: Vec<OptiFineBuild>,
+    mc_version: &str,
+) -> Vec<OptiFineVersionInfo> {
+    // BMCLAPI 与官网都把 1.8 / 1.9 写成 1.8.0 / 1.9.0，两边都规范化后再比较
+    let target_mc = lookup_version_normalize(mc_version);
+    let mut seen = std::collections::HashSet::new();
+    let mut results = Vec::new();
 
+    for build in builds {
+        let game_version = lookup_version_normalize(&build.mcversion);
+        if game_version != target_mc {
+            continue;
+        }
+        let download_url = build.bmcl_url();
+        if !seen.insert(download_url.clone()) {
+            continue;
+        }
+        let self_version = build.self_version();
         results.push(OptiFineVersionInfo {
-            game_version: game_version_norm,
-            self_version: self_version.clone(),
-            full_version: full,
-            download_url: mirror_url,
-            official_url,
-            is_pre,
+            full_version: format!("{}_{}", game_version, self_version),
+            game_version,
+            self_version,
+            download_url,
+            official_url: build.official_page_url(),
+            is_pre: build.is_pre(),
         });
     }
 
-    results.sort_by(|a, b| compare_versions(&b.self_version, &a.self_version));
-    Ok(results)
+    results.sort_by(|a, b| compare_optifine_self_versions(&b.self_version, &a.self_version));
+    results
+}
+
+async fn fetch_optifine_text(url: &str) -> Result<String> {
+    let client = shared_client().await;
+    let resp = client
+        .get(url)
+        .timeout(OPTIFINE_REQUEST_TIMEOUT)
+        .send()
+        .await
+        .map_err(|e| anyhow!("请求 {} 失败: {}", url, e))?;
+    let status = resp.status();
+    if !status.is_success() {
+        bail!("请求 {} 失败, HTTP 状态码: {}", url, status);
+    }
+    resp.text()
+        .await
+        .map_err(|e| anyhow!("读取 {} 失败: {}", url, e))
+}
+
+async fn fetch_bmcl_optifine_builds() -> Result<Vec<OptiFineBuild>> {
+    let url = format!("{}/optifine/versionlist", BMCL_API_ROOT);
+    let text = fetch_optifine_text(&url).await?;
+    let list: Vec<OptiFineBmclEntry> = serde_json::from_str(&text).map_err(|e| {
+        let preview: String = text.chars().take(200).collect();
+        anyhow!("解析 BMCLAPI OptiFine 版本列表失败: {} (内容开头: {})", e, preview)
+    })?;
+    Ok(list
+        .into_iter()
+        .filter_map(|e| OptiFineBuild::new_checked(&e.mcversion, &e.type_, &e.patch))
+        .collect())
+}
+
+/// 从 optifine.net/downloads 页面里的 `adloadx?f=<文件名>` 链接解析出所有构建
+fn parse_official_downloads_page(html: &str) -> Vec<OptiFineBuild> {
+    let re = regex::Regex::new(r"adloadx\?f=((?:preview_)?OptiFine_[A-Za-z0-9._\-]+?\.jar)")
+        .expect("OptiFine 官网文件名正则无效");
+    let mut seen = std::collections::HashSet::new();
+    re.captures_iter(html)
+        .filter_map(|cap| {
+            let filename = cap.get(1)?.as_str();
+            if !seen.insert(filename.to_string()) {
+                return None;
+            }
+            OptiFineBuild::from_official_filename(filename)
+        })
+        .collect()
+}
+
+async fn fetch_official_optifine_builds() -> Result<Vec<OptiFineBuild>> {
+    let url = format!("{}/downloads", OPTIFINE_OFFICIAL_ROOT);
+    let html = fetch_optifine_text(&url).await?;
+    let builds = parse_official_downloads_page(&html);
+    if builds.is_empty() {
+        bail!("未能从 OptiFine 官网下载页解析出任何版本");
+    }
+    Ok(builds)
+}
+
+/// 获取 OptiFine 版本列表：优先 BMCLAPI，BMCLAPI 不可用时回退到 optifine.net 下载页。
+/// `download_url` 始终是 BMCLAPI 格式（安装时据此解析版本号），`official_url` 是官网下载页。
+pub async fn get_optifine_versions(mc_version: &str) -> Result<Vec<OptiFineVersionInfo>> {
+    let builds = match fetch_bmcl_optifine_builds().await {
+        Ok(builds) => builds,
+        Err(bmcl_err) => {
+            eprintln!(
+                "[OptiFine] BMCLAPI 版本列表不可用，回退到 OptiFine 官网: {}",
+                bmcl_err
+            );
+            let builds = fetch_official_optifine_builds().await.map_err(|official_err| {
+                anyhow!(
+                    "BMCLAPI 镜像与 OptiFine 官网均不可用（BMCLAPI 镜像: {}；OptiFine 官网: {}）",
+                    bmcl_err,
+                    official_err
+                )
+            })?;
+            println!("[OptiFine] 已从 OptiFine 官网获取 {} 个构建", builds.len());
+            builds
+        }
+    };
+    Ok(build_optifine_version_infos(builds, mc_version))
 }
 
 fn derive_filename_from_url(url: &str) -> String {
@@ -193,6 +364,159 @@ pub async fn download_optifine_installer(
     download_optifine_installer_with_fallback(download_url, download_url, mc_dir).await
 }
 
+/// OptiFine 安装器的一个候选下载源
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum InstallerSource {
+    /// 可以直接下载的链接（BMCLAPI 等）
+    Direct(String),
+    /// optifine.net 的 adloadx 页面，需要先从页面里解析出带 token 的 downloadx 直链
+    OfficialPage { page_url: String, filename: String },
+}
+
+impl InstallerSource {
+    fn from_url(url: &str) -> Option<Self> {
+        let url = url.trim();
+        if url.is_empty() {
+            return None;
+        }
+        Some(match official_page_filename(url) {
+            Some(filename) => InstallerSource::OfficialPage {
+                page_url: url.to_string(),
+                filename,
+            },
+            None => InstallerSource::Direct(url.to_string()),
+        })
+    }
+
+    fn official_for(build: &OptiFineBuild) -> Self {
+        InstallerSource::OfficialPage {
+            page_url: build.official_page_url(),
+            filename: build.official_filename(),
+        }
+    }
+
+    fn label(&self) -> String {
+        match self {
+            InstallerSource::Direct(url) if url.contains("bmclapi") => {
+                format!("BMCLAPI 镜像 ({})", url)
+            }
+            InstallerSource::Direct(url) => format!("备用源 ({})", url),
+            InstallerSource::OfficialPage { page_url, .. } => {
+                format!("OptiFine 官网 ({})", page_url)
+            }
+        }
+    }
+}
+
+/// 若 `url` 是 optifine.net 的 adloadx 页面，返回其中的安装器文件名
+fn official_page_filename(url: &str) -> Option<String> {
+    let parsed = url::Url::parse(url).ok()?;
+    let host = parsed.host_str()?;
+    if host != "optifine.net" && host != "www.optifine.net" {
+        return None;
+    }
+    if parsed.path() != "/adloadx" {
+        return None;
+    }
+    let filename = parsed
+        .query_pairs()
+        .find(|(k, _)| k == "f")
+        .map(|(_, v)| v.into_owned())?;
+    OptiFineBuild::from_official_filename(&filename)?;
+    Some(filename)
+}
+
+/// 安装器下载源的尝试顺序：调用方给的主链接 → 调用方给的备用链接（为空或与主链接相同则忽略）
+/// → 由 BMCLAPI 链接推导出的 optifine.net 官网下载页。
+fn installer_sources(download_url: &str, fallback_url: &str) -> Vec<InstallerSource> {
+    let derived_official =
+        OptiFineBuild::from_bmcl_url(download_url).map(|b| InstallerSource::official_for(&b));
+    let mut sources: Vec<InstallerSource> = Vec::new();
+    for source in [
+        InstallerSource::from_url(download_url),
+        InstallerSource::from_url(fallback_url),
+        derived_official,
+    ]
+    .into_iter()
+    .flatten()
+    {
+        if !sources.contains(&source) {
+            sources.push(source);
+        }
+    }
+    sources
+}
+
+/// 从 adloadx 页面里找出指定文件的 downloadx 直链
+fn extract_official_download_link(html: &str, filename: &str) -> Option<String> {
+    let re = regex::Regex::new(r"downloadx\?f=([A-Za-z0-9._\-]+)(?:&amp;|&)x=([0-9A-Za-z]+)")
+        .expect("OptiFine downloadx 正则无效");
+    let link = re
+        .captures_iter(html)
+        .find(|cap| &cap[1] == filename)
+        .map(|cap| {
+            format!(
+                "{}/downloadx?f={}&x={}",
+                OPTIFINE_OFFICIAL_ROOT, &cap[1], &cap[2]
+            )
+        });
+    link
+}
+
+async fn resolve_official_download_url(page_url: &str, filename: &str) -> Result<String> {
+    let html = fetch_optifine_text(page_url).await?;
+    extract_official_download_link(&html, filename)
+        .ok_or_else(|| anyhow!("OptiFine 官网页面中没有找到 {} 的下载链接", filename))
+}
+
+/// 下载内容是否像一个完整的 OptiFine 安装器（能作为 zip 打开）。
+/// optifine.net 对不存在的文件会返回 200 + "File not found." 的 HTML，必须靠这一步识别。
+fn is_valid_installer_jar(path: &Path) -> bool {
+    let big_enough = fs::metadata(path)
+        .map(|m| m.len() >= OPTIFINE_INSTALLER_MIN_SIZE)
+        .unwrap_or(false);
+    big_enough
+        && fs::File::open(path)
+            .ok()
+            .and_then(|f| ZipArchive::new(f).ok())
+            .map(|zip| zip.len() > 0)
+            .unwrap_or(false)
+}
+
+async fn download_installer_from(
+    source: &InstallerSource,
+    target: &Path,
+) -> Result<PathBuf> {
+    let url = match source {
+        InstallerSource::Direct(url) => url.clone(),
+        InstallerSource::OfficialPage { page_url, filename } => {
+            resolve_official_download_url(page_url, filename).await?
+        }
+    };
+    let file_name = target
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .ok_or_else(|| anyhow!("无效的安装器缓存路径: {}", target.display()))?;
+    let target_dir = target
+        .parent()
+        .map(|p| p.to_path_buf())
+        .ok_or_else(|| anyhow!("无效的安装器缓存路径: {}", target.display()))?;
+    let task = concurrent_download::DownloadTask {
+        file_name,
+        target_dir,
+        urls: vec![url],
+        sha1: None,
+    };
+    let path = concurrent_download::download_one(task).await?;
+    if !is_valid_installer_jar(&path) {
+        let _ = fs::remove_file(&path);
+        bail!("下载到的文件不是有效的 OptiFine 安装器（可能是错误页面）");
+    }
+    Ok(path)
+}
+
+/// 下载 OptiFine 安装器。依次尝试 `download_url`、`fallback_url`（可为空，或与主链接相同）
+/// 和 optifine.net 官网，每个源下载完都会校验是不是有效的 jar。
 pub async fn download_optifine_installer_with_fallback(
     download_url: &str,
     fallback_url: &str,
@@ -204,39 +528,238 @@ pub async fn download_optifine_installer_with_fallback(
     let filename = derive_filename_from_url(download_url);
     let target = cache_dir.join(&filename);
 
-    if target.exists() && fs::metadata(&target).map(|m| m.len() > 100_000).unwrap_or(false) {
-        println!("[OptiFine] 使用缓存安装器: {}", target.display());
-        return Ok(target);
+    if target.exists() {
+        if is_valid_installer_jar(&target) {
+            println!("[OptiFine] 使用缓存安装器: {}", target.display());
+            return Ok(target);
+        }
+        // 下载器看到目标文件已存在会直接当作成功，残缺的缓存必须先删掉
+        println!(
+            "[OptiFine] 缓存的安装器不完整或已损坏，删除后重新下载: {}",
+            target.display()
+        );
+        let _ = fs::remove_file(&target);
     }
 
-    let mut urls = Vec::new();
-    if download_url != fallback_url {
-        urls.push(download_url.to_string());
-        urls.push(fallback_url.to_string());
-    } else {
-        urls.push(download_url.to_string());
+    let sources = installer_sources(download_url, fallback_url);
+    let mut errors: Vec<String> = Vec::new();
+    for source in &sources {
+        let label = source.label();
+        println!("[OptiFine] 下载安装器: {}", label);
+        match download_installer_from(source, &target).await {
+            Ok(path) => {
+                if !errors.is_empty() {
+                    println!("[OptiFine] 已回退到 {} 并下载成功", label);
+                }
+                return Ok(path);
+            }
+            Err(e) => {
+                eprintln!("[OptiFine] {} 下载失败: {}", label, e);
+                errors.push(format!("{}: {}", label, e));
+                let _ = fs::remove_file(&target);
+            }
+        }
     }
 
-    println!(
-        "[OptiFine] 下载安装器: {} (备用源: {})",
-        download_url,
-        if download_url != fallback_url { fallback_url } else { "无" }
-    );
+    if errors.is_empty() {
+        bail!("下载 OptiFine 安装器失败: 无效的下载链接 {}", download_url);
+    }
+    bail!(
+        "下载 OptiFine 安装器失败，所有下载源均不可用（{}）。请检查网络连接后重试。",
+        errors.join("；")
+    )
+}
 
-    let target_dir = target.parent().map(|p| p.to_path_buf())
-        .unwrap_or_else(|| cache_dir.clone());
+#[cfg(test)]
+mod download_source_tests {
+    // 放在下载相关函数旁边，而不是文件末尾，避免和同文件其他部分的改动冲突
+    use super::*;
 
-    let task = concurrent_download::DownloadTask {
-        file_name: filename,
-        target_dir,
-        urls,
-        sha1: None,
-    };
+    fn build(mc: &str, type_: &str, patch: &str) -> OptiFineBuild {
+        OptiFineBuild::new_checked(mc, type_, patch).unwrap()
+    }
 
-    let result = concurrent_download::download_one(task).await
-        .with_context(|| format!("下载 OptiFine 安装器失败: {} (备用源: {})", download_url, fallback_url))?;
+    #[test]
+    fn official_filename_matches_bmcl_naming() {
+        assert_eq!(
+            build("1.12.2", "HD_U", "G5").official_filename(),
+            "OptiFine_1.12.2_HD_U_G5.jar"
+        );
+        assert_eq!(
+            build("1.21.1", "HD_U_J1", "pre13").official_filename(),
+            "preview_OptiFine_1.21.1_HD_U_J1_pre13.jar"
+        );
+        assert_eq!(
+            build("1.8", "HD_U", "I7").official_filename(),
+            "OptiFine_1.8.0_HD_U_I7.jar"
+        );
+    }
 
-    Ok(result)
+    #[test]
+    fn official_filename_round_trips() {
+        for name in [
+            "OptiFine_1.12.2_HD_U_G5.jar",
+            "preview_OptiFine_1.21.1_HD_U_J1_pre13.jar",
+            "OptiFine_1.9.0_HD_U_E7.jar",
+            "preview_OptiFine_1.12.2_HD_U_G6_pre1.jar",
+        ] {
+            let b = OptiFineBuild::from_official_filename(name).unwrap();
+            assert_eq!(b.official_filename(), name);
+        }
+        assert!(OptiFineBuild::from_official_filename("OptiFine_x.jar").is_none());
+        assert!(OptiFineBuild::from_official_filename("readme.txt").is_none());
+    }
+
+    #[test]
+    fn bmcl_url_round_trips() {
+        let url = "https://bmclapi2.bangbang93.com/optifine/1.20.1/HD_U/I5";
+        let b = OptiFineBuild::from_bmcl_url(url).unwrap();
+        assert_eq!(b, build("1.20.1", "HD_U", "I5"));
+        assert_eq!(b.bmcl_url(), url);
+        assert!(OptiFineBuild::from_bmcl_url("https://bmclapi2.bangbang93.com/optifine/1.20.1").is_none());
+        assert!(OptiFineBuild::from_bmcl_url("https://example.com/x.jar").is_none());
+    }
+
+    #[test]
+    fn sources_do_not_repeat_the_same_url_and_end_with_official_site() {
+        let url = "https://bmclapi2.bangbang93.com/optifine/1.20.1/HD_U/I5";
+        let official = InstallerSource::OfficialPage {
+            page_url: "https://optifine.net/adloadx?f=OptiFine_1.20.1_HD_U_I5.jar".to_string(),
+            filename: "OptiFine_1.20.1_HD_U_I5.jar".to_string(),
+        };
+        let expected = vec![InstallerSource::Direct(url.to_string()), official.clone()];
+
+        // 以前组合安装把主链接当"备用源"再传一遍，等于没有备用源
+        assert_eq!(installer_sources(url, url), expected);
+        assert_eq!(installer_sources(url, ""), expected);
+        // 前端传 get_optifine_versions 返回的 official_url 时也不会重复
+        assert_eq!(
+            installer_sources(url, "https://optifine.net/adloadx?f=OptiFine_1.20.1_HD_U_I5.jar"),
+            expected
+        );
+        let custom = "https://example.com/OptiFine_1.20.1_HD_U_I5.jar";
+        assert_eq!(
+            installer_sources(url, custom),
+            vec![
+                InstallerSource::Direct(url.to_string()),
+                InstallerSource::Direct(custom.to_string()),
+                official,
+            ]
+        );
+    }
+
+    #[test]
+    fn official_page_filename_only_accepts_optifine_net() {
+        assert_eq!(
+            official_page_filename("https://optifine.net/adloadx?f=OptiFine_1.12.2_HD_U_G5.jar"),
+            Some("OptiFine_1.12.2_HD_U_G5.jar".to_string())
+        );
+        assert_eq!(
+            official_page_filename("https://evil.example/adloadx?f=OptiFine_1.12.2_HD_U_G5.jar"),
+            None
+        );
+        assert_eq!(
+            official_page_filename("https://optifine.net/adloadx?f=OptiFine_1.12.2_HD_U_G5.jar%26x%3D1"),
+            None
+        );
+    }
+
+    #[test]
+    fn extracts_downloadx_link_for_the_requested_file() {
+        let html = r#"
+            <a href='downloadx?f=OptiFine_1.12.2_HD_U_G5.jar&x=568d98ea1e45db75bca79de45b65a0b4' onclick='onDownload()'>OptiFine 1.12.2 HD U G5</a>
+            <a href="downloadx?f=OptiFine_1.12.1_HD_U_G5.jar&amp;x=abc123">other</a>
+        "#;
+        assert_eq!(
+            extract_official_download_link(html, "OptiFine_1.12.2_HD_U_G5.jar").as_deref(),
+            Some("https://optifine.net/downloadx?f=OptiFine_1.12.2_HD_U_G5.jar&x=568d98ea1e45db75bca79de45b65a0b4")
+        );
+        assert_eq!(
+            extract_official_download_link(html, "OptiFine_1.12.1_HD_U_G5.jar").as_deref(),
+            Some("https://optifine.net/downloadx?f=OptiFine_1.12.1_HD_U_G5.jar&x=abc123")
+        );
+        assert_eq!(extract_official_download_link(html, "OptiFine_1.20.1_HD_U_I5.jar"), None);
+    }
+
+    #[test]
+    fn rejects_error_pages_as_installer() {
+        let dir = std::env::temp_dir().join(format!("rtl-of-test-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let html = dir.join("not-found.jar");
+        fs::write(&html, b"File not found.\n").unwrap();
+        assert!(!is_valid_installer_jar(&html));
+        let big_html = dir.join("big.jar");
+        fs::write(&big_html, vec![b'<'; (OPTIFINE_INSTALLER_MIN_SIZE + 1) as usize]).unwrap();
+        assert!(!is_valid_installer_jar(&big_html));
+        assert!(!is_valid_installer_jar(&dir.join("missing.jar")));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn parses_official_downloads_page() {
+        let html = r#"
+            <td class='colMirror'><a href="http://optifine.net/adloadx?f=OptiFine_1.21.1_HD_U_J1.jar&x=ed92">(Mirror)</a></td>
+            <td class='colDownload'><a href="https://optifine.net/adloadx?f=OptiFine_1.21.1_HD_U_J1.jar">Download</a></td>
+            <a href="adloadx?f=preview_OptiFine_1.12.2_HD_U_G6_pre1.jar&x=ed92">Mirror</a>
+            <a href="adloadx?f=OptiFine_1.12.2_HD_U_G5.jar">Download</a>
+        "#;
+        assert_eq!(
+            parse_official_downloads_page(html),
+            vec![
+                build("1.21.1", "HD_U", "J1"),
+                build("1.12.2", "HD_U_G6", "pre1"),
+                build("1.12.2", "HD_U", "G5"),
+            ]
+        );
+    }
+
+    #[test]
+    fn version_infos_are_sorted_newest_first_and_link_to_official_page() {
+        let builds = vec![
+            build("1.12.2", "HD_U", "C9"),
+            build("1.12.2", "HD_U", "E3"),
+            build("1.12.2", "HD_U", "G5"),
+            build("1.12.2", "HD_U_G5", "pre1"),
+            build("1.12.2", "HD_U_F6", "pre1"),
+            build("1.12.2", "HD_U", "F5"),
+            build("1.20.1", "HD_U", "I5"),
+            build("1.12.2", "HD_U", "G5"),
+        ];
+        let infos = build_optifine_version_infos(builds, "1.12.2");
+        let order: Vec<&str> = infos.iter().map(|i| i.self_version.as_str()).collect();
+        assert_eq!(
+            order,
+            vec!["HD_U_G5", "HD_U_G5_pre1", "HD_U_F6_pre1", "HD_U_F5", "HD_U_E3", "HD_U_C9"]
+        );
+        let top = &infos[0];
+        assert_eq!(top.download_url, "https://bmclapi2.bangbang93.com/optifine/1.12.2/HD_U/G5");
+        assert_eq!(top.official_url, "https://optifine.net/adloadx?f=OptiFine_1.12.2_HD_U_G5.jar");
+        assert_eq!(top.full_version, "1.12.2_HD_U_G5");
+        assert!(!top.is_pre);
+        assert!(infos[1].is_pre);
+    }
+
+    #[test]
+    fn release_sorts_above_its_previews() {
+        let builds = vec![
+            build("1.21.1", "HD_U_J1", "pre9"),
+            build("1.21.1", "HD_U_J1", "pre15"),
+            build("1.21.1", "HD_U", "J1"),
+            build("1.21.1", "HD_U_J1", "pre10"),
+        ];
+        let order: Vec<String> = build_optifine_version_infos(builds, "1.21.1")
+            .into_iter()
+            .map(|i| i.self_version)
+            .collect();
+        assert_eq!(order, vec!["HD_U_J1", "HD_U_J1_pre15", "HD_U_J1_pre10", "HD_U_J1_pre9"]);
+    }
+
+    #[test]
+    fn legacy_mc_versions_match_normalized_names() {
+        let infos = build_optifine_version_infos(vec![build("1.8.0", "HD_U", "I7")], "1.8");
+        assert_eq!(infos.len(), 1);
+        assert_eq!(infos[0].download_url, "https://bmclapi2.bangbang93.com/optifine/1.8.0/HD_U/I7");
+    }
 }
 
 fn get_library_file(mc_dir: &Path, library_name: &str) -> Result<PathBuf> {
